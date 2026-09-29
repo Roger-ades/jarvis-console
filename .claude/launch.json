@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "console-demo",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["tests/demo_server.py"],
+      "port": 8790
+    }
+  ]
+}

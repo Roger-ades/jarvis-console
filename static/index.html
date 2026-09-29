@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr" data-theme="sombre">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS · Console d'agents</title>
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/img/icon-192.png">
+<meta name="theme-color" content="#06080c">
+<meta name="application-name" content="JARVIS">
+<link rel="stylesheet" href="/static/css/app.css">
+<script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <img src="/static/img/favicon.svg" alt="" class="brand-mark">
+      <span class="brand-name">JARVIS</span>
+      <span class="brand-sep"></span>
+      <span class="brand-sub">Console d'agents</span>
+    </div>
+    <div id="counters" class="counters" aria-live="polite"></div>
+    <div id="profile-pills" class="profile-pills"></div>
+    <div class="top-actions">
+      <button class="btn ghost" id="btn-install" hidden title="Installer JARVIS comme application (fenêtre séparée, menu Démarrer)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span class="lbl">Installer</span>
+      </button>
+      <button class="btn ghost" id="btn-sessions" title="Sessions Claude Code existantes (Claude Desktop, CLI, console)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Sessions</span>
+      </button>
+      <button class="btn ghost" id="btn-routines" title="Routines : tâches planifiées">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M12 13v3l2 1.5"/></svg><span class="lbl">Routines</span>
+      </button>
+      <div class="menu-wrap">
+        <button class="btn ghost" id="btn-claudeai" title="Ouvrir claude.ai (conversations, projets, partage)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg><span class="lbl">claude.ai</span>
+        </button>
+        <div class="menu" id="menu-claudeai" hidden>
+          <div class="menu-title">Dans ton navigateur</div>
+          <a href="https://claude.ai/recents" target="_blank" rel="noopener noreferrer">Conversations</a>
+          <a href="https://claude.ai/projects" target="_blank" rel="noopener noreferrer">Projets et partage</a>
+          <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code sur le web</a>
+          <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Usage et crédits</a>
+          <a href="https://claude.ai/admin-settings/organization" target="_blank" rel="noopener noreferrer">Administration (Team)</a>
+          <hr>
+          <div class="menu-note">Conversations, projets, Cowork et partage restent sur claude.ai : aucune API ne permet de les lire depuis la console.</div>
+        </div>
+      </div>
+      <button class="btn ghost" id="btn-history" title="Historique des tâches">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Historique</span>
+      </button>
+      <div class="menu-wrap">
+        <button class="btn ghost" id="btn-arrange" title="Ranger les fenêtres">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbl">Ranger</span>
+        </button>
+        <div class="menu" id="menu-arrange" hidden>
+          <button data-arrange="cascade">Cascade</button>
+          <button data-arrange="mosaique">Mosaïque</button>
+          <hr>
+          <button data-arrange="minimize">Tout réduire</button>
+          <button data-arrange="restore">Tout restaurer</button>
+        </div>
+      </div>
+      <button class="btn ghost" id="btn-config" title="Configuration (Ctrl+virgule)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="lbl">Configuration</span>
+      </button>
+      <button class="btn danger" id="btn-emergency" title="Stoppe toutes les tâches et bloque les nouvelles">Arrêt d'urgence</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="desktop">
+    <div id="empty-hint" class="empty-hint">
+      <img src="/static/img/favicon.svg" alt="" class="empty-mark">
+      <p class="empty-title">Prêt, monsieur.</p>
+      <p>Chaque demande ouvre sa fenêtre et tourne en parallèle, avec le compte et les autorisations choisis.</p>
+      <p class="empty-keys">
+        <span><kbd>@work</kbd><kbd>@perso</kbd> compte</span>
+        <span><kbd>/</kbd> skills</span>
+        <span><kbd>Alt</kbd><kbd>1</kbd> <kbd>2</kbd> profil</span>
+        <span><kbd>↑</kbd> rappel</span>
+        <span><kbd>Ctrl</kbd><kbd>,</kbd> configuration</span>
+      </p>
+    </div>
+  </main>
+
+  <div id="dock">
+    <nav id="taskbar" class="taskbar" hidden></nav>
+    <form id="commandbar" class="composer" autocomplete="off">
+      <div id="suggest" class="suggest" hidden></div>
+      <textarea id="cmd-input" rows="1" placeholder="Demande à Claude…" spellcheck="true"></textarea>
+      <div class="composer-bar">
+        <div id="cmd-profiles" class="seg" role="radiogroup" aria-label="Profil"></div>
+        <label class="chip-select" title="Modèle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>
+          <select id="opt-model" aria-label="Modèle"></select>
+        </label>
+        <button type="button" id="opt-team" class="chip-toggle" aria-pressed="false"
+                title="Mode équipe : le modèle choisi dirige, des sous-agents moins chers (ou un expert) font le travail">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M12 10v3M12 13l-5 2.5M12 13l5 2.5"/></svg>
+          <span>Équipe</span>
+        </button>
+        <label class="chip-select" title="Autorisations">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+          <select id="opt-preset" aria-label="Autorisations"></select>
+        </label>
+        <label class="chip-select" title="Effort">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18h3v-4H4zM10.5 18h3V10h-3zM17 18h3V6h-3z"/></svg>
+          <select id="opt-effort" aria-label="Effort">
+            <option value="">effort par défaut</option><option value="low">effort faible</option><option value="medium">effort moyen</option>
+            <option value="high">effort élevé</option><option value="xhigh">effort très élevé</option><option value="max">effort max</option>
+          </select>
+        </label>
+        <label class="chip-select grow" title="Dossier de travail">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <select id="opt-workdir" aria-label="Dossier de travail"></select>
+        </label>
+        <span class="composer-hint"><kbd>↵</kbd> envoyer <kbd>⇧↵</kbd> ligne</span>
+        <button type="submit" class="send-btn" id="cmd-send" title="Envoyer (Entrée)" aria-label="Envoyer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <aside id="history" class="drawer" hidden aria-label="Historique"></aside>
+  <aside id="sessions" class="drawer wide" hidden aria-label="Sessions Claude Code"></aside>
+  <aside id="routines" class="drawer wide" hidden aria-label="Routines"></aside>
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>
