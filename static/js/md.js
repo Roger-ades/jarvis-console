@@ -19,10 +19,19 @@ const EXT = "png|jpe?g|gif|webp|svg|bmp|pdf|html?|txt|md|csv|tsv|json|log|xml|xl
 const PATH_RX = new RegExp(`^(?:[A-Za-z]:[\\\\/]|~[\\\\/]|/(?:Users|home|Volumes|tmp)/)[^<>|*?\\n\\u0000]*?\\.(?:${EXT})$`, "i");
 // In running text, folder and file names may contain spaces ("Dev Projects") but never start or
 // end with one. \u0000 is excluded so a path or URL never swallows a rendered placeholder.
-const SEG = "[^<>|*?:\\n\\u0000,;\\\\/\\s](?:[^<>|*?:\\n\\u0000,;\\\\/]*?[^<>|*?:\\n\\u0000,;\\\\/\\s])?";
+// Shortest name first: "C:\a.png et b.png" is two files, not one named "a.png et b".
+const SEG = "[^<>|*?:\\n\\u0000,;\\\\/\\s](?:[^<>|*?:\\n\\u0000,;\\\\/]*?[^<>|*?:\\n\\u0000,;\\\\/\\s])??";
 const PATH_IN_TEXT = new RegExp(`(^|[\\s(«;*_\\[])((?:[A-Za-z]:[\\\\/]|~[\\\\/]|/(?:Users|home|Volumes)/)(?:${SEG}[\\\\/])*?${SEG}\\.(?:${EXT}))(?=$|[\\s.,;:!?)»*_\\]&])`, "gi");
 const LOCAL_LINK = /(!?)\[([^\]\n]*)\]\((?:&lt;)?((?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|Volumes|tmp)\/)[^)\n\u0000]*?)(?:&gt;)?\)/g;
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+// Relative to the discussion's folder ("images/logo.png", "logo.png", "récapitulatif.pdf"): names
+// with a known extension only; the console resolves them against the task's folder.
+const REL_RX = new RegExp(`^(?!.*:\\/\\/)(?:\\.{1,2}[\\\\/])*(?:[\\p{L}\\p{N}_ .()-]+[\\\\/])*[\\p{L}\\p{N}_.()-]*[\\p{L}\\p{N}]\\.(?:${EXT})$`, "iu");
+// Inside [texte](…) or ![alt](<…>) the file name itself may contain spaces.
+const REL_SPACED = new RegExp(`^(?!.*:\\/\\/)(?:\\.{1,2}[\\\\/])*(?:[\\p{L}\\p{N}_ .()-]+[\\\\/])*[\\p{L}\\p{N}_ .()-]*[\\p{L}\\p{N}]\\.(?:${EXT})$`, "iu");
+const REL_LINK = /(!?)\[([^\]\n]*)\]\((?:&lt;)?([^)<>\n\u0000]*?)(?:&gt;)?\)/g;
+const REL_IN_TEXT = new RegExp(`(^|[\\s(«;*_\\[])((?:\\.{1,2}[\\\\/])*[\\p{L}\\p{N}](?:[\\p{L}\\p{N}_.-]*[\\\\/])*[\\p{L}\\p{N}_.-]*\\.(?:${EXT}))(?=$|[\\s.,;:!?)»*_\\]&])`, "giu");
+const isFile = (p) => PATH_RX.test(p) || REL_RX.test(p);
 
 const fileRef = (path, label) => `<a href="#" class="fileref${IMG_EXT.test(path) ? " img" : ""}" data-path="${path}" title="Aperçu : ${path}">${label}</a>`;
 
@@ -34,22 +43,24 @@ function extImage(url, alt) {
 function inline(s) {
   const keep = [];
   const hold = (html) => { keep.push(html); return `\u0000${keep.length - 1}\u0000`; };
-  s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(PATH_RX.test(c.trim()) ? fileRef(c.trim(), `<code>${c}</code>`) : `<code>${c}</code>`));
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(isFile(c.trim()) ? fileRef(c.trim(), `<code>${c}</code>`) : `<code>${c}</code>`));
   s = s.replace(LOCAL_LINK, (m, bang, text, path) => (PATH_RX.test(path) ? hold(fileRef(path, text || path)) : m));
+  s = s.replace(REL_LINK, (m, bang, text, path) => (REL_SPACED.test(path.trim()) ? hold(fileRef(path.trim(), text || path.trim())) : m));
   s = s.replace(/!\[([^\]\n]*)\]\(([^)\s\u0000]+)\)/g, (m, alt, url) => {
     if (safeUrl(url) && /^https?:/i.test(url)) return hold(extImage(url, alt));
-    if (PATH_RX.test(url)) return hold(fileRef(url, alt || url));
+    if (isFile(url)) return hold(fileRef(url, alt || url));
     return m;
   });
   s = s.replace(/\[([^\]\n]+)\]\(([^)\s\u0000]+)(?:\s+&quot;[^\n]*?&quot;)?\)/g, (m, text, url) =>
     safeUrl(url) ? hold(`<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`)
-      : PATH_RX.test(url) ? hold(fileRef(url, text)) : m);
+      : isFile(url) ? hold(fileRef(url, text)) : m);
   s = s.replace(PATH_IN_TEXT, (m, pre, path) => `${pre}${hold(fileRef(path, path))}`);
   s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)\u0000]+)/g, (m, pre, url) => {
     const trail = url.match(/[.,;:!?]+$/)?.[0] || "";
     const u = trail ? url.slice(0, -trail.length) : url;
     return `${pre}${hold(`<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`)}${trail}`;
   });
+  s = s.replace(REL_IN_TEXT, (m, pre, path) => `${pre}${hold(fileRef(path, path))}`);
   s = s.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/__(?=\S)([\s\S]*?\S)__/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, "$1<em>$2</em>");

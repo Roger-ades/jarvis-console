@@ -56,8 +56,10 @@ def summary(profile: Profile) -> dict:
     return {"servers": rows, "error": err, "desktop_config": expand_path(profile.mcp.desktop_config)}
 
 
-def write_config(profile: Profile, runtime_dir: Path, name: str) -> str | None:
+def write_config(profile: Profile, runtime_dir: Path, name: str, extra: dict | None = None) -> str | None:
+    """extra: servers the console adds itself (its in-process "jarvis" server)."""
     servers, _ = profile_servers(profile)
+    servers = {**servers, **(extra or {})}
     if not servers:
         return None
     runtime_dir.mkdir(parents=True, exist_ok=True)

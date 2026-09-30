@@ -12,6 +12,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
@@ -145,6 +146,13 @@ class Guard:
 
         await self.app(scope, receive, send_headers)
 
+
+def preview_response(p: Path) -> FileResponse:
+    """A file for the preview. sandbox: even opened directly, an HTML/SVG file of the folder never
+    runs as the console. X-File-Path: where a name such as "logo.png" was found."""
+    media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
+                                                      "Content-Security-Policy": "sandbox", "X-File-Path": quote(str(p))})
 
 def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                extra_hosts: tuple[str, ...] = (), start_threads: bool = True) -> FastAPI:
@@ -461,10 +469,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.get("/api/workspace/file")
     def workspace_file(path: str, profile: str | None = None, folder: str | None = None):
-        p = engine.workspace_file(profile, folder, path)
-        media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-        return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
-                                                          "Content-Security-Policy": "sandbox"})
+        return preview_response(engine.workspace_file(profile, folder, path))
 
     @app.get("/api/limits")
     def limits():
@@ -502,11 +507,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.get("/api/tasks/{tid}/file")
     def task_file(tid: str, path: str):
-        p = engine.task_file(tid, path)
-        media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-        # sandbox: even opened directly, an HTML/SVG file of the folder never runs as the console
-        return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
-                                                          "Content-Security-Policy": "sandbox"})
+        return preview_response(engine.task_file(tid, path))
 
     @app.post("/api/tasks/{tid}/file/open")
     def task_file_open(tid: str, body: dict = Body(...)):

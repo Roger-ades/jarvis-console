@@ -77,6 +77,40 @@ def test_file_cited_by_the_task_is_allowed_elsewhere(client, task, tmp_path):  #
     assert get(client, task["id"], "../../ailleurs/autre.pdf").status_code == 403
 
 
+def test_bare_file_name_is_found_in_the_task_folders(client, task):  # noqa: F811
+    """Claude lists « photo.png » while the file sits in img/: the most recent match wins."""
+    import os
+    from urllib.parse import unquote
+    wd = Path(task["workdir"])
+    r = get(client, task["id"], "photo.png")
+    assert r.content == PNG
+    assert unquote(r.headers["x-file-path"]) == os.path.realpath(wd / "img" / "photo.png")  # shown in the preview
+    (wd / "ancien").mkdir()
+    (wd / "ancien" / "photo.png").write_bytes(b"ancien")
+    os.utime(wd / "ancien" / "photo.png", (1_000_000, 1_000_000))
+    assert get(client, task["id"], "photo.png").content == PNG
+    assert get(client, task["id"], "./img/photo.png").content == PNG
+    # hidden and tool folders are not searched, protected files stay refused
+    (wd / "node_modules").mkdir()
+    (wd / "node_modules" / "cache.png").write_bytes(PNG)
+    assert get(client, task["id"], "cache.png").status_code == 404
+    (wd / "img" / ".env").write_text("SECRET=2", encoding="utf-8")
+    assert get(client, task["id"], "img/.env").status_code == 403
+
+
+def test_bare_file_name_written_by_the_task_elsewhere(client, task, tmp_path):  # noqa: F811
+    """The image was written outside the task folder: its own tool call names it in full."""
+    eng = client.app.state.engine
+    out = tmp_path / "rendus" / "banniere.png"
+    out.parent.mkdir()
+    out.write_bytes(PNG)
+    assert get(client, task["id"], "banniere.png").status_code == 404
+    eng.store.add_event(task["id"], 9003, 0, "tool", {"name": "Write", "input": {"file_path": str(out), "content": "…"}})
+    assert get(client, task["id"], "banniere.png").content == PNG
+    assert get(client, task["id"], "rendus/banniere.png").content == PNG
+    assert get(client, task["id"], "autre/banniere.png").status_code == 404
+
+
 def test_profile_folder_is_allowed_for_a_task_run_elsewhere(client, tmp_path):  # noqa: F811
     h = {"X-Console-Token": client.token}
     wd = tmp_path / "projet"

@@ -8,6 +8,8 @@ The user message drives the scenario, one directive per line:
   ARGS                       report argv in the result
   FAIL                       finish the turn with an error result
   FILES                      create an image, a PDF and a CSV, then answer with previews
+  IMAGES                     write two images in images/, then name them without their folder
+  SHOW <path> | <path>…      call the console's own "afficher" tool (in-process MCP server)
 Anything else is echoed back.
 """
 import json
@@ -20,6 +22,7 @@ sys.stdout.reconfigure(encoding="utf-8")  # the real CLI (Node) speaks UTF-8 on 
 sys.stdin.reconfigure(encoding="utf-8")
 ARGS = sys.argv[1:]
 _pending: list[dict] = []
+SDK_SERVERS: dict[str, list[str]] = {}  # SDK-hosted MCP servers dialed at start -> tool names
 _n = 0
 
 
@@ -160,6 +163,18 @@ def files():
             "Page de référence : https://example.com")
 
 
+
+def images():
+    import shutil
+    folder = os.path.join(os.getcwd(), "images")
+    os.makedirs(folder, exist_ok=True)
+    for name, src in (("logo-jarvis.png", "icon-192.png"), ("banniere.png", "icon-maskable-512.png")):
+        dst = os.path.join(folder, name)
+        shutil.copy(os.path.join(os.path.dirname(__file__), "..", "static", "img", src), dst)
+        _call("Write", {"file_path": dst, "content": "(image)"})
+    return "J'ai généré deux images dans ton projet :\n\n- **logo-jarvis.png** (192 × 192)\n- `banniere.png` (512 × 512)"
+
+
 def demo():
     todo = {"todos": [{"content": "Lire le mail client", "status": "completed"},
                       {"content": "Préparer le devis", "status": "in_progress"},
@@ -215,12 +230,50 @@ def relay_turn(params: dict):
     out({"type": "result", "subtype": "success", "is_error": False, "result": "fait" if ok else "refusé"})
 
 
+def dial_sdk_servers(names):
+    """Like the real CLI: initialize each SDK-hosted server, then list its tools."""
+    for name in names or []:
+        init = request({"subtype": "mcp_message", "server_name": name, "message": {
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "fake", "version": "1"}}}})
+        if not (init.get("mcp_response") or {}).get("result"):
+            continue
+        request({"subtype": "mcp_message", "server_name": name,
+                 "message": {"jsonrpc": "2.0", "method": "notifications/initialized"}})
+        tools = request({"subtype": "mcp_message", "server_name": name,
+                         "message": {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}})
+        SDK_SERVERS[name] = [t["name"] for t in ((tools.get("mcp_response") or {}).get("result") or {}).get("tools") or []]
+
+
+def show(items):
+    """The model calls mcp__jarvis__afficher: PreToolUse hook, then tools/call to the in-process server."""
+    name, inp = "mcp__jarvis__afficher", {"fichiers": items}
+    tid = f"toolu_{uuid.uuid4().hex[:8]}"
+    out({"type": "assistant", "parent_tool_use_id": None,
+         "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+    if "afficher" not in SDK_SERVERS.get("jarvis", []):
+        text, err = f"No such tool available: {name}", True
+    else:
+        ok, text = use_tool(name, inp)
+        err = not ok
+        if ok:
+            r = request({"subtype": "mcp_message", "server_name": "jarvis", "message": {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "afficher", "arguments": inp}}})
+            res = (r.get("mcp_response") or {}).get("result") or {}
+            text = " ".join(c.get("text", "") for c in res.get("content") or [])
+            err = bool(res.get("isError"))
+    out({"type": "user", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": err, "content": text}]}})
+    return ("affichage refusé : " if err else "") + text
+
+
 def turn(text: str):
     if text.strip().startswith("{") and '"action"' in text:
         return relay_turn(json.loads(text))
     out({"type": "system", "subtype": "init", "session_id": SESSION, "model": "fake-model",
-         "tools": ["Read", "Write", "Bash"], "permissionMode": MODE,
-         "mcp_servers": [{"name": "odoo", "status": "connected"}]})
+         "tools": ["Read", "Write", "Bash", *(f"mcp__{s}__{t}" for s, ts in SDK_SERVERS.items() for t in ts)],
+         "permissionMode": MODE, "mcp_servers": [{"name": "odoo", "status": "connected"},
+                                                 *({"name": s, "status": "connected", "source": "sdk"} for s in SDK_SERVERS)]})
     # like the real CLI: the plan limits ride on every response
     out({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
         "status": "allowed", "resetsAt": int(time.time()) + 7200, "rateLimitType": "five_hour", "isUsingOverage": False,
@@ -275,6 +328,10 @@ def turn(text: str):
                 "utilization": float(parts[1]), "resetsAt": int(time.time()) + 600}})
         elif cmd == "FILES":
             lines.append(files())
+        elif cmd == "IMAGES":
+            lines.append(images())
+        elif cmd == "SHOW":
+            lines.append(show([x.strip() for x in raw.strip()[4:].split("|") if x.strip()]))
         elif cmd == "DEMO":
             demo()
             lines.append(DEMO_TEXT)
@@ -324,6 +381,7 @@ def main():
                 "agents": [{"name": "claude", "description": "généraliste"}],
                 "models": [{"value": "default", "displayName": "Défaut", "resolvedModel": "fake-model"}],
                 "account": {"tokenSource": "claude.ai", "email": "test@example.com"}}}})
+            dial_sdk_servers(m["request"].get("sdkMcpServers"))
         elif m.get("type") == "control_request" and m["request"].get("subtype") == "mcp_status":
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m["request_id"],
                  "response": {"mcpServers": [{"name": "odoo", "status": "connected", "config": {"type": "stdio", "command": "odoo-mcp", "env": {"SECRET": "x"}}}]}}})

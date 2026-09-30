@@ -315,6 +315,8 @@ def summarize_target(tool: str, inp: dict) -> str:
         return str(inp.get("skill") or inp.get("command") or "")
     if tool == "TodoWrite":
         return f"{len(inp.get('todos') or [])} élément(s)"
+    if tool == "mcp__jarvis__afficher":  # the console's own tool
+        return ", ".join(str(x) for x in inp.get("fichiers") or [])[:300]
     if is_mcp(tool):
         bits = [f"{k}={inp[k]}" for k in ("model", "record_id", "query", "q", "to", "subject", "name")
                 if k in inp and not isinstance(inp[k], (dict, list))]

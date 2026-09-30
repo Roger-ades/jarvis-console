@@ -68,10 +68,18 @@ export const ICONS = {
   book: S('<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/>'),
   clip: S('<path d="M20.5 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>'),
   eye: S('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>'),
+  download: S('<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>'),
+  max: S('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  image: S('<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 8"/>'),
+  external: S('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>'),
 };
+
+/** The console's own tool: Claude opens files in preview windows. */
+export const SHOW_TOOL = "mcp__jarvis__afficher";
 
 /** Icon of a tool call, by family. */
 export function toolIcon(name = "") {
+  if (name === SHOW_TOOL) return "eye";
   if (name.startsWith("mcp__")) return "plug";
   return ({
     Read: "file", NotebookRead: "file", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit",
@@ -191,6 +199,7 @@ export const TOOL_LABELS = {
 
 export function toolLabel(name) {
   if (!name) return "Outil";
+  if (name === SHOW_TOOL) return "Affichage";
   if (name.startsWith("mcp__")) {
     const [server, ...rest] = name.slice(5).split("__");
     return `${server.replace(/^claude_ai_/, "")} · ${rest.join("__")}`;

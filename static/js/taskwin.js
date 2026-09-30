@@ -360,7 +360,7 @@ export class TaskWindow {
         title: f.context ? `Contexte : transcription de « ${f.title} »` : `Aperçu : ${f.path}`,
       }, svg(f.context ? "link" : "clip"), h("span", {}, f.context ? f.title : f.name))));
       box.append(list);
-      list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id));
+      list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.task.color));
     }
     return box;
   }
@@ -372,7 +372,7 @@ export class TaskWindow {
   /** Markdown with previews: thumbnails for local images, web images on demand. */
   md(text, cls = "md") {
     const node = mdElement(text, cls);
-    node.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id));
+    node.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.task.color));
     if (this.ctx.autoImages?.()) node.querySelectorAll(".ext-img").forEach(revealImage);
     return node;
   }
@@ -456,6 +456,17 @@ export class TaskWindow {
       case "tool_result":
         this.toolDone(d, ev.ts);
         break;
+      case "show": {
+        // Claude opened files in preview windows (app.js opens them): they stay reachable from here.
+        const refs = [...(d.files || []).map((p) => h("a", { href: "#", class: `fileref${IMG_FILE.test(p) ? " img" : ""}`, "data-path": p, title: `Aperçu : ${p}` },
+          p.split(/[\\/]/).pop())),
+        ...(d.urls || []).map((u) => h("a", { href: "#", class: "showurl", title: u,
+          on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.task.color }); } } }, u.replace(/^https:\/\//, "")))];
+        const list = [];
+        refs.forEach((r, i) => list.push(...(i ? [", ", r] : [r])));
+        this.push(h("div", { class: "line shown" }, svg("eye"), h("span", {}, "Affiché : ", ...list)), parent);
+        break;
+      }
       case "policy":
         this.push(this.line(`Refusé : ${toolLabel(d.tool)}${d.target ? ` — ${d.target}` : ""}. ${d.reason || ""}`, "policy", "shield"), parent);
         break;
@@ -516,7 +527,7 @@ export class TaskWindow {
     const url = d.name === "WebFetch" && /^https:\/\//i.test(d.input?.url || "") ? d.input.url : "";
     const peek = path || url ? h("button", {
       type: "button", class: "pv-btn", title: path ? `Aperçu : ${path}` : `Aperçu : ${url}`, svg: "eye",
-      on: { click: (e) => { e.preventDefault(); e.stopPropagation(); openPreview(path ? { taskId: this.id, path } : { url, kind: "web" }); } },
+      on: { click: (e) => { e.preventDefault(); e.stopPropagation(); openPreview(path ? { taskId: this.id, path, color: this.task.color } : { url, kind: "web" }); } },
     }) : null;
     const row = h("details", { class: `tool${d.name?.startsWith("mcp__") ? " mcp" : ""}` },
       h("summary", {}, h("span", { class: "ti", svg: toolIcon(d.name) }), h("span", { class: "tn" }, label),
@@ -575,7 +586,7 @@ export class TaskWindow {
     if (!d.is_error && t.path && t.name !== "Read" && IMG_FILE.test(t.path)) {
       const ref = h("a", { href: "#", class: "fileref img", "data-path": t.path, title: `Aperçu : ${t.path}` }, t.path);
       this.push(h("div", { class: "md msg assistant created" }, h("p", {}, "Image créée : ", ref)), t.parent);
-      thumbnail(ref, this.id);
+      thumbnail(ref, this.id, this.task.color);
     }
     t.group._pending = Math.max(0, t.group._pending - 1);
     this.refreshGroup(t.group);

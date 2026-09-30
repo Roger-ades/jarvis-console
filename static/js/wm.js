@@ -52,9 +52,38 @@ function bounds() {
   return { w: Math.max(320, r.width), h: Math.max(200, r.height) };
 }
 
-function placeNew() {
+/** Height the floating command bar takes at the bottom, measured with its text field at rest so a
+    long prompt or a list of attachments overlays the windows instead of moving them. */
+let reservedH = 0;
+function measureDock() {
+  const dock = document.getElementById("dock");
+  if (!dock) return 0;
+  const bar = dock.querySelector(".composer-bar");
+  const tb = dock.querySelector(".taskbar");
+  const pad = parseFloat(getComputedStyle(dock).paddingBottom) || 0;
+  return Math.round(pad + 50 + (bar?.offsetHeight || 0) + (tb && !tb.hidden ? tb.offsetHeight : 0) + 10);
+}
+/** Where windows open, maximize and tile: above the command bar (they can still be dragged under it). */
+function usable() {
   const b = bounds();
-  const w = Math.min(settings.default_width, b.w - 24), hh = Math.min(settings.default_height, b.h - 24);
+  return { w: b.w, h: Math.max(200, b.h - reservedH) };
+}
+function watchDock() {
+  const dock = document.getElementById("dock");
+  if (!dock || typeof ResizeObserver === "undefined") return;
+  new ResizeObserver(() => {
+    const hh = measureDock();
+    if (hh === reservedH) return;
+    reservedH = hh;
+    document.documentElement.style.setProperty("--dock-h", `${hh}px`);
+    for (const w of wins.values()) { fit(w.st); apply(w); }
+  }).observe(dock);
+}
+watchDock();
+
+function placeNew(size = null) {
+  const b = usable();
+  const w = Math.min(size?.w || settings.default_width, b.w - 24), hh = Math.min(size?.h || settings.default_height, b.h - 24);
   const n = visibleCount();
   const spanX = Math.max(1, b.w - w - 40), spanY = Math.max(1, b.h - hh - 30);
   return { x: 20 + ((n * 36) % spanX), y: 14 + ((n * 30) % spanY), w, h: hh, z: ++topZ, min: false, pinned: false };
@@ -63,7 +92,7 @@ function placeNew() {
 function apply(w) {
   const { el, st } = w;
   if (st.max) {
-    const b = bounds();
+    const b = usable();
     Object.assign(el.style, { left: "0px", top: "0px", width: `${b.w}px`, height: `${b.h}px` });
   } else {
     Object.assign(el.style, { left: `${st.x}px`, top: `${st.y}px`, width: `${st.w}px`, height: `${st.h}px` });
@@ -74,20 +103,22 @@ function apply(w) {
 }
 
 function fit(st) {
-  const b = bounds();
+  const b = bounds(), u = usable();
   st.w = clamp(st.w || settings.default_width, 340, b.w);
   st.h = clamp(st.h || settings.default_height, 180, b.h);
   st.x = clamp(st.x ?? 20, -st.w + 120, b.w - 120);
-  st.y = clamp(st.y ?? 14, 0, b.h - 36);
+  st.y = clamp(st.y ?? 14, 0, u.h - 36);
 }
 
-export function register(id, el, { handle, onFocus, fresh = false } = {}) {
-  let st = ui.windows[id];
+/** ephemeral: a preview window, not remembered across reloads nor minimized with the others.
+    size: {w, h} for a new window. */
+export function register(id, el, { handle, onFocus, fresh = false, ephemeral = false, size = null } = {}) {
+  let st = ephemeral ? null : ui.windows[id];
   const isNew = !st;
-  if (!st) st = ui.windows[id] = placeNew();
+  if (!st) { st = placeNew(size); if (!ephemeral) ui.windows[id] = st; }
   if (fresh) st.min = false;
   fit(st);
-  const w = { el, st, onFocus };
+  const w = { el, st, onFocus, ephemeral };
   wins.set(id, w);
   for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
     const g = h("div", { class: `rz ${dir}` });
@@ -153,6 +184,20 @@ export function togglePin(id) {
   return w.st.pinned;
 }
 
+/** New size for a window (e.g. a preview fitted to its image), kept inside the desktop. */
+export function setSize(id, width, height) {
+  const w = wins.get(id);
+  if (!w) return;
+  const b = usable();
+  w.st.w = Math.min(width, b.w - 24);
+  w.st.h = Math.min(height, b.h - 24);
+  w.st.x = Math.min(w.st.x, Math.max(0, b.w - w.st.w - 12));
+  w.st.y = Math.min(w.st.y, Math.max(0, b.h - w.st.h - 12));
+  fit(w.st);
+  apply(w);
+  persist();
+}
+
 export function toggleMax(id) {
   const w = wins.get(id);
   if (!w) return;
@@ -168,12 +213,12 @@ function makeDraggable(id, handle) {
     if (!w || w.st.max) return;
     e.preventDefault();
     const sx = e.clientX, sy = e.clientY, ox = w.st.x, oy = w.st.y;
-    const b = bounds();
+    const b = bounds(), u = usable();
     document.body.classList.add("dragging");
     handle.setPointerCapture(e.pointerId);
     const move = (ev) => {
       w.st.x = clamp(ox + ev.clientX - sx, -w.st.w + 120, b.w - 120);
-      w.st.y = clamp(oy + ev.clientY - sy, 0, b.h - 36);
+      w.st.y = clamp(oy + ev.clientY - sy, 0, u.h - 36);
       apply(w);
     };
     const up = () => {
@@ -222,8 +267,8 @@ function startResize(e, id, dir) {
 }
 
 export function arrange(mode) {
-  const b = bounds();
-  if (mode === "minimize") { for (const id of wins.keys()) if (!isPinned(id)) minimize(id); return; }
+  const b = usable();
+  if (mode === "minimize") { for (const [id, w] of wins) if (!isPinned(id) && !w.ephemeral) minimize(id); return; }
   if (mode === "restore") { for (const id of minimizedIds()) restore(id); return; }
   const list = [...wins.values()].filter((w) => !w.st.min && !w.st.pinned).sort((a, c) => a.st.z - c.st.z);
   if (!list.length) return;

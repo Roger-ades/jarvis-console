@@ -217,7 +217,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 #desktop { position: relative; flex: 1; min-height: 0; overflow: hidden; z-index: 1; }
 .empty-hint {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; text-align: center; color: var(--text-3); padding: 24px; pointer-events: none;
+  justify-content: center; text-align: center; color: var(--text-3); padding: 24px 24px calc(var(--dock-h, 110px) + 12px); pointer-events: none;
 }
 .empty-mark { width: 84px; height: 84px; opacity: .9; filter: drop-shadow(0 0 24px color-mix(in srgb, var(--accent) 45%, transparent)); animation: spin 60s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -535,7 +535,9 @@ pre, .codeblock pre {
 .codeblock:hover .copy-code, .copy-code:focus { opacity: 1; }
 
 /* ------------------------------------------------ dock: taskbar + composer */
-#dock { position: relative; z-index: 20; flex: none; padding: 0 16px 14px; }
+/* the command bar floats over the desktop: the windows stay visible behind it, clicks around it reach them */
+#dock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 20; padding: 0 16px 14px; pointer-events: none; }
+#dock .composer, #dock .tpill { pointer-events: auto; }
 .taskbar { display: flex; gap: 6px; padding: 0 0 8px; overflow-x: auto; max-width: 1180px; margin: 0 auto; }
 .tpill {
   display: inline-flex; align-items: center; gap: 8px; max-width: 240px; height: 30px; padding: 0 10px; flex: none;
@@ -549,7 +551,7 @@ pre, .codeblock pre {
 .tpill .cnt { background: var(--warn); color: #1a1000; border-radius: 999px; font-size: 10px; font-weight: 700; padding: 0 6px; line-height: 16px; }
 .composer {
   position: relative; max-width: 760px; margin: 0 auto; border-radius: 16px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--surface) 74%, transparent); backdrop-filter: blur(14px) saturate(1.15);
   box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .7), 0 0 0 1px var(--border-2);
   transition: box-shadow .2s var(--ease);
 }
@@ -733,12 +735,18 @@ pre, .codeblock pre {
 .tool .pv-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); cursor: zoom-in; padding: 0; }
 .tool .pv-btn svg { width: 14px; height: 14px; }
 .tool .pv-btn:hover { background: var(--accent-soft); color: var(--accent); }
-.dialog.pv { width: min(1100px, 100%); height: min(90vh, 1000px); max-height: none; }
-.pv-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 18px; border-bottom: 1px solid var(--border); }
-.pv-head .vh { flex: 1; min-width: 0; }
-.pv-head h3 { margin: 0; padding: 0; font: 600 14.5px var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pv-head small { color: var(--text-3); font-size: 11px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
-.pv-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* preview windows: same desktop windows as the sessions (move, resize, enlarge) */
+.pv-win { min-width: 340px; min-height: 180px; }
+.pv-head { gap: 8px; height: 42px; padding: 0 6px 0 12px; }
+.pv-ic { flex: none; display: inline-flex; color: var(--pc); }
+.pv-ic svg { width: 16px; height: 16px; }
+.pv-head .vh { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.pv-head .win-title { flex: none; }
+.pv-head small { color: var(--text-3); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+@container (max-width: 520px) { .pv-head small { display: none; } }
+/* a frame under the pointer would swallow the drag / resize moves */
+.dragging iframe { pointer-events: none; }
+.pv-actions { flex: none; display: flex; gap: 1px; }
 .pv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; background: var(--bg-2); }
 .pv-wait { margin: auto; }
 .pv-body > .line.err { margin: 20px; }
@@ -753,7 +761,6 @@ pre, .codeblock pre {
 .pv-other { margin: auto; text-align: center; padding: 30px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .pv-text table.csv { display: table; font-size: 12px; }
 .pv-text table.csv td, .pv-text table.csv th { white-space: nowrap; padding: 4px 10px; }
-@media (max-width: 720px) { .pv-head { flex-wrap: wrap; } .pv-actions { order: 3; width: 100%; justify-content: flex-start; } }
 
 /* ------------------------------------------------ project panel */
 #project { display: flex; flex-direction: column; }
@@ -1038,3 +1045,7 @@ table.tbl td.narrow { width: 1%; white-space: nowrap; }
 .su-tips { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .upd-list { margin: 8px 0; padding-left: 18px; max-height: 200px; overflow: auto; font-size: 12.5px; }
 .upd-row { margin-top: 10px; }
+
+/* Claude showed files in preview windows */
+.line.shown svg { color: var(--accent); }
+.line.shown a { font-weight: 600; }

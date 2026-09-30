@@ -110,7 +110,22 @@ async function reloadConfig() {
     renderProfiles();
     selectProfile(S.profile, false);
     renderPills();
+    recolorTasks();
   } catch { /* keep the old one */ }
+}
+
+/** An account's color or name changed: every discussion shown takes it at once. */
+function recolorTasks() {
+  for (const t of S.tasks.values()) {
+    const p = profile(t.profile);
+    if (!p || (t.color === p.color && t.profile_name === p.name)) continue;
+    t.color = p.color;
+    t.profile_name = p.name;
+    S.windows.get(t.id)?.update(t);
+  }
+  renderTaskbar();
+  renderHistory();
+  renderHome();
 }
 
 // ------------------------------------------------------------ top bar & state
@@ -182,7 +197,7 @@ async function setEmergency(on) {
 
 function showConfig(tabName = null) {
   openConfig({
-    onSaved: (config, meta) => { applyConfig(config, meta); renderProfiles(); selectProfile(S.profile, false); renderPills(); },
+    onSaved: (config, meta) => { applyConfig(config, meta); renderProfiles(); selectProfile(S.profile, false); renderPills(); recolorTasks(); },
     state: () => S.state, setEmergency, theme, openSetup: startSetup,
   }, tabName).catch((e) => toast(e.message, "err"));
 }
@@ -682,6 +697,20 @@ function onTask(t, fresh = false) {
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
   if (w) w.addEvent(ev);
+  if (ev.kind === "show") showFiles(ev);
+}
+
+/** Claude asked to show files (tool mcp__jarvis__afficher): one preview window each, even if the
+    task's window is minimized or closed. Live events only, never when replaying a conversation. */
+function showFiles(ev) {
+  if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
+  const color = S.tasks.get(ev.task_id)?.color;
+  for (const path of ev.data?.files || []) openPreview({ taskId: ev.task_id, path, color });
+  for (const url of ev.data?.urls || []) {
+    let image = false;
+    try { image = IMG_EXT.test(new URL(url).pathname); } catch { /* shown as a page */ }
+    openPreview({ url, kind: image ? "image" : "web", color });
+  }
 }
 
 function renderTaskbar() {
@@ -740,7 +769,7 @@ document.addEventListener("click", (e) => {
   if (ref) {
     e.preventDefault();
     const taskId = ref.closest("[data-task]")?.dataset.task || ref.closest(".win")?.dataset.id;
-    if (taskId) openPreview({ taskId, path: ref.dataset.path });
+    if (taskId) openPreview({ taskId, path: ref.dataset.path, color: S.tasks.get(taskId)?.color });
     else toast("Aperçu disponible depuis la fenêtre de la tâche.");
     return;
   }

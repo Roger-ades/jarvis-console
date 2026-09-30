@@ -35,6 +35,25 @@ from .store import Store
 ACTIVE = {"queued", "running", "awaiting"}
 TERMINAL = {"done", "error", "cancelled", "interrupted"}
 HOOK_ID = "console_pretool"
+# The console's own MCP server, hosted in this process (the CLI reaches it over the control protocol).
+CONSOLE_MCP = "jarvis"
+SHOW_TOOL = f"mcp__{CONSOLE_MCP}__afficher"
+SHOW_SPEC = {
+    "name": "afficher",
+    "description": (
+        "Ouvre des fichiers ou des pages web dans des fenêtres d'aperçu de la console JARVIS, que l'utilisateur "
+        "voit à l'écran (images, PDF, HTML, texte, Markdown, CSV, JSON… ; les autres types proposent de s'ouvrir "
+        "avec leur application). À utiliser dès que l'utilisateur demande d'afficher, de montrer, d'ouvrir ou de "
+        "voir un fichier, et pour lui présenter un fichier que tu viens de créer quand il veut le voir. Chemins "
+        "absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché dans les dossiers de la "
+        "tâche. Les adresses https:// s'ouvrent dans un aperçu web."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {"fichiers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
+                                    "description": "Chemins des fichiers, ou adresses https://, à afficher."}},
+        "required": ["fichiers"],
+    },
+}
 
 
 class TaskError(Exception):
@@ -234,8 +253,14 @@ class Engine:
         p = claude_cli.find_cli(self.cfg.general.cli_path)
         return [p] if p else None
 
+    def _live_profile(self, t: dict) -> dict:
+        """The account as configured now: a color or a name changed later applies to old discussions too."""
+        prof = self.cfg.profile(t.get("profile") or "")
+        return {"color": prof.color, "profile_name": prof.name} if prof else {}
+
     def public(self, t: dict) -> dict:
         out = {k: v for k, v in t.items() if k not in ("spec", "queued_messages")}
+        out.update(self._live_profile(t))
         out["queued_messages"] = len(t.get("queued_messages") or [])
         spec = t.get("spec") or {}
         pre = spec.get("preset") or {}
@@ -764,6 +789,7 @@ class Engine:
         for t in tasks:
             if t["id"] in found:
                 out.append({k: t.get(k) for k in ("id", "title", "profile", "profile_name", "color", "status", "created", "workdir", "not_before")}
+                           | self._live_profile(t)
                            | {"snippet": found[t["id"]]})
             if len(out) >= limit:
                 break
@@ -997,7 +1023,8 @@ class Engine:
             f.write_text(system, encoding="utf-8")
             run.files.append(str(f))
             args += ["--append-system-prompt-file", str(f)]
-        mcp_file = mcp.write_config(prof, self.runtime, f"{t['id']}-{secrets.token_hex(3)}")
+        mcp_file = mcp.write_config(prof, self.runtime, f"{t['id']}-{secrets.token_hex(3)}",
+                                    extra={CONSOLE_MCP: {"type": "sdk", "name": CONSOLE_MCP}})
         if mcp_file:
             run.files.append(mcp_file)
             args += ["--mcp-config", mcp_file]
@@ -1059,7 +1086,7 @@ class Engine:
 
         threading.Thread(target=self._pump_stderr, args=(run,), daemon=True).start()
         self._write(run, {"type": "control_request", "request_id": f"init_{tid}",
-                          "request": {"subtype": "initialize", "hooks": {
+                          "request": {"subtype": "initialize", "sdkMcpServers": [CONSOLE_MCP], "hooks": {
                               "PreToolUse": [{"matcher": None, "hookCallbackIds": [HOOK_ID], "timeout": 86400}]}}})
         with self._lock:
             pending = list(t.get("queued_messages") or [])
@@ -1312,7 +1339,8 @@ class Engine:
                 t["session_started"] = True
                 t["fork_next"] = False
                 t["model_resolved"] = msg.get("model") or ""
-                t["mcp"] = [{"name": s.get("name"), "status": s.get("status")} for s in msg.get("mcp_servers") or []]
+                t["mcp"] = [{"name": s.get("name"), "status": s.get("status")} for s in msg.get("mcp_servers") or []
+                            if s.get("name") != CONSOLE_MCP]
                 self._save(t)
             self._event(tid, "init", {"model": msg.get("model"), "mcp": t["mcp"],
                                       "tools": len(msg.get("tools") or []),
@@ -1419,6 +1447,9 @@ class Engine:
             if hin.get("hook_event_name", "PreToolUse") != "PreToolUse":
                 return self._respond(run, rid, {})
             tool, tin = hin.get("tool_name", ""), hin.get("tool_input") or {}
+            if tool == SHOW_TOOL:
+                # Only shows files to the user; each one is checked like a preview (task folders, protected paths).
+                return self._respond(run, rid, _hook("allow", "Affichage dans la console."))
             v = pol.evaluate(tool, tin)
             target = summarize_target(tool, tin)
             self._audit("appel d'outil", {"outil": tool, "cible": _clip(target, 500), "décision": v.decision,
@@ -1487,7 +1518,63 @@ class Engine:
                                         "target": _clip(summarize_target(tool, tin), 300)})
             return self._respond(run, rid, {"behavior": "deny", "message": reason})
 
+        if sub == "mcp_message":
+            return self._respond(run, rid, {"mcp_response": self._console_mcp(tid, req.get("server_name"),
+                                                                              req.get("message") or {})})
+
         self._respond(run, rid, error=f"Requête non prise en charge par la console : {sub}")
+
+    # -------------------------------------------------------- the console's own MCP server
+    def _console_mcp(self, tid: str, server: str | None, msg: dict) -> dict:
+        """JSON-RPC answer of the in-process "jarvis" server (the CLI dials it at start)."""
+        mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+
+        def ok(result):
+            return {"jsonrpc": "2.0", "id": mid, "result": result}
+
+        if server != CONSOLE_MCP:
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Serveur inconnu : {server}"}}
+        if method == "initialize":
+            return ok({"protocolVersion": params.get("protocolVersion") or "2024-11-05", "capabilities": {"tools": {}},
+                       "serverInfo": {"name": CONSOLE_MCP, "version": "1.0.0"}})
+        if method == "tools/list":
+            return ok({"tools": [SHOW_SPEC]})
+        if method == "tools/call":
+            if params.get("name") != SHOW_SPEC["name"]:
+                return ok({"content": [{"type": "text", "text": f"Outil inconnu : {params.get('name')}"}], "isError": True})
+            text, failed = self.show_files(tid, (params.get("arguments") or {}).get("fichiers"))
+            return ok({"content": [{"type": "text", "text": text}], "isError": failed})
+        if method and method.startswith("notifications/"):
+            return {"jsonrpc": "2.0", "result": {}}
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Méthode non prise en charge : {method}"}}
+
+    def show_files(self, tid: str, items) -> tuple[str, bool]:
+        """Claude shows files to the user: each one checked like a preview, then opened in the UI."""
+        if isinstance(items, str):
+            items = [items]
+        items = [str(x).strip().strip('"') for x in (items or []) if str(x).strip()][:12]
+        if not items:
+            return "Aucun fichier indiqué.", True
+        files, urls, errors = [], [], []
+        for item in items:
+            if re.match(r"^https?://", item, re.I):
+                if item.lower().startswith("https://"):
+                    urls.append(item)
+                else:
+                    errors.append(f"{item} : seules les adresses https:// s'affichent")
+                continue
+            try:
+                files.append(str(self.task_file(tid, item)))
+            except TaskError as exc:
+                errors.append(f"{item} : {exc}")
+        if files or urls:
+            self._event(tid, "show", {"files": files, "urls": urls})
+        lines = []
+        if files or urls:
+            lines.append("Affiché dans la console JARVIS : " + ", ".join([*files, *urls]))
+        if errors:
+            lines.append("Non affiché : " + " ; ".join(errors))
+        return "\n".join(lines), not (files or urls)
 
     # -------------------------------------------------------- misc actions
     def update_task(self, tid: str, patch: dict) -> dict:
@@ -1593,7 +1680,10 @@ class Engine:
         """The task's own conversation (answers, tool inputs, resumed history) names this file."""
         spelled = os.path.expandvars(os.path.expanduser(asked))
         want = {norm(real).lower(), *([asked.replace("\\", "/").lower()] if os.path.isabs(spelled) else [])}
+        return any(w in s.replace("\\", "/").lower() for s in self._leaves(t) for w in want)
 
+    def _leaves(self, t: dict):
+        """Every string of the task's conversation (events, tool inputs, resumed history)."""
         def leaves(v):
             if isinstance(v, str):
                 yield v
@@ -1604,8 +1694,32 @@ class Engine:
                 for x in v:
                     yield from leaves(x)
 
-        sources = [e["data"] for e in self.store.events(t["id"], limit=100_000)] + [t.get("history") or []]
-        return any(w in s.replace("\\", "/").lower() for src in sources for s in leaves(src) for w in want)
+        for src in [e["data"] for e in self.store.events(t["id"], limit=100_000)] + [t.get("history") or []]:
+            yield from leaves(src)
+
+    SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".next", "dist", "build", ".cache"}
+
+    def _relative_file(self, t: dict, asked: str, roots: list[str]) -> str | None:
+        """A name given relative to the task ("logo.png", "images/logo.png") that is not directly in
+        its folder: the file the task wrote or cited under that name, else the most recent match in
+        its folders (bounded search)."""
+        tail = "/" + re.sub(r"^(?:\.{1,2}/)+", "", asked.replace("\\", "/")).lower()
+        cited = [s for s in self._leaves(t) if len(s) < 1024 and "\n" not in s and os.path.isabs(s)
+                 and ("/" + s.replace("\\", "/").lower()).endswith(tail) and os.path.isfile(s)]
+        if cited:
+            return os.path.realpath(cited[-1])
+        found, seen = [], 0
+        for root in dict.fromkeys(r for r in roots if r and os.path.isdir(r)):
+            for base, dirs, files in os.walk(root):
+                dirs[:] = [d for d in dirs if d not in self.SKIP_DIRS and not d.startswith(".")]
+                seen += len(files) + len(dirs)
+                for f in files:
+                    full = os.path.join(base, f)
+                    if ("/" + full.replace("\\", "/").lower()).endswith(tail):
+                        found.append(full)
+                if seen > 20_000:
+                    break
+        return os.path.realpath(max(found, key=os.path.getmtime)) if found else None
 
     def task_file(self, tid: str, path: str) -> Path:
         """A file for preview: in the task's folders or the profile's, or cited by the task itself;
@@ -1619,6 +1733,8 @@ class Engine:
         prof = self.cfg.profile(t.get("profile") or "")
         roots = [t["workdir"], *(t.get("add_dirs") or []), *([t["attachments_dir"]] if t.get("attachments_dir") else []),
                  *([expand_path(prof.workdir)] if prof and prof.workdir else [])]
+        if not os.path.isabs(raw) and not os.path.isfile(real):
+            real = self._relative_file(t, raw, [t["workdir"], *(t.get("add_dirs") or [])]) or real
         if not within(real, roots) and not self._cited(t, asked, real):
             raise TaskError("Aperçu limité aux dossiers de la tâche et aux fichiers cités dans sa conversation.", 403)
         spec = t.get("spec") or {}
