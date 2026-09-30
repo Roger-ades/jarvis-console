@@ -90,6 +90,15 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO events(task_id, seq, ts, kind, data) VALUES(?,?,?,?,?)",
                             (task_id, seq, ts, kind, json.dumps(data, ensure_ascii=False)))
 
+    def search_events(self, needle: str, limit: int = 200) -> list[dict]:
+        """Requests and answers containing the words (newest first), for the search."""
+        pat = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT task_id, kind, data FROM events WHERE kind IN ('user','text','result') "
+                "AND data LIKE ? ESCAPE '\\' ORDER BY ts DESC LIMIT ?", (pat, limit)).fetchall()
+        return [{"task_id": r["task_id"], "kind": r["kind"], "data": json.loads(r["data"])} for r in rows]
+
     def events(self, task_id: str, after: int = 0, limit: int = 5000) -> list[dict]:
         with self._lock:
             rows = self.db.execute(

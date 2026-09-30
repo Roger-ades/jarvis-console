@@ -55,7 +55,7 @@ def request(sub: dict) -> dict:
     while True:
         line = sys.stdin.readline()
         if not line:
-            return {}
+            return {"_eof": True}  # the host closed our input: nobody can answer any more
         m = json.loads(line)
         if m.get("type") == "control_response" and m["response"].get("request_id") == rid:
             return m["response"].get("response") or {}
@@ -66,6 +66,8 @@ def use_tool(name: str, inp: dict) -> tuple[bool, str]:
     hook = request({"subtype": "hook_callback", "callback_id": "console_pretool",
                     "input": {"hook_event_name": "PreToolUse", "tool_name": name, "tool_input": inp,
                               "session_id": SESSION}})
+    if hook.get("_eof"):  # what the real CLI tells the model when its host stopped answering
+        return False, "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed."
     decision = (hook.get("hookSpecificOutput") or {}).get("permissionDecision")
     if decision == "deny":
         return False, (hook["hookSpecificOutput"].get("permissionDecisionReason") or "hook deny")
@@ -219,6 +221,12 @@ def turn(text: str):
     out({"type": "system", "subtype": "init", "session_id": SESSION, "model": "fake-model",
          "tools": ["Read", "Write", "Bash"], "permissionMode": MODE,
          "mcp_servers": [{"name": "odoo", "status": "connected"}]})
+    # like the real CLI: the plan limits ride on every response
+    out({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
+        "status": "allowed", "resetsAt": int(time.time()) + 7200, "rateLimitType": "five_hour", "isUsingOverage": False,
+        "overageStatus": "rejected", "overageDisabledReason": "org_level_disabled",
+        "unifiedWindows": {"five_hour": {"utilization": 0.25, "resetsAt": int(time.time()) + 7200},
+                           "seven_day": {"utilization": 0.6, "resetsAt": int(time.time()) + 3 * 86400}}}})
     lines, error = [], False
     for raw in text.splitlines():
         parts = raw.strip().split(" ", 2)
@@ -252,6 +260,19 @@ def turn(text: str):
             lines.append("TOOLS=" + (opt("--tools") or "(tous)"))
         elif cmd == "FAIL":
             error = True
+        elif cmd == "BG":  # BG <seconds>: launch a background sub-agent that reports after this turn
+            task_id = f"bg_{uuid.uuid4().hex[:6]}"
+            out({"type": "system", "subtype": "task_started", "task_id": task_id, "description": "inventaire",
+                 "is_backgrounded": True, "session_id": SESSION})
+            out({"type": "system", "subtype": "background_tasks_changed", "session_id": SESSION,
+                 "tasks": [{"task_id": task_id, "task_type": "local_agent", "description": "inventaire"},
+                           {"task_id": "watch", "task_type": "monitor", "description": "veille", "ambient": True}]})
+            BACKGROUND.append((float(parts[1]) if len(parts) > 1 else 1.0, task_id))
+            lines.append("sous-agent lancé en arrière-plan")
+        elif cmd == "LIMIT":  # LIMIT <five_hour used> <status>: the session window is reached
+            out({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
+                "status": parts[2] if len(parts) > 2 else "allowed", "rateLimitType": "five_hour",
+                "utilization": float(parts[1]), "resetsAt": int(time.time()) + 600}})
         elif cmd == "FILES":
             lines.append(files())
         elif cmd == "DEMO":
@@ -268,9 +289,31 @@ def turn(text: str):
     out({"type": "result", "subtype": "success", "is_error": error, "result": result, "num_turns": 1,
          "total_cost_usd": 0.01, "duration_ms": 5, "session_id": SESSION,
          "usage": {"input_tokens": 10, "output_tokens": 5}})
+    if BACKGROUND:
+        background_work(*BACKGROUND.pop())
+
+
+BACKGROUND: list = []
+
+
+def background_work(seconds: float, task_id: str):
+    """A background sub-agent still working after the lead's turn ended (team mode), then the lead
+    taking over when it reports back, as the real CLI does."""
+    time.sleep(seconds)
+    ok, why = use_tool("Read", {"file_path": "rapport.md"})
+    out({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": SESSION})
+    out({"type": "system", "subtype": "task_notification", "task_id": task_id, "status": "completed",
+         "output_file": "", "summary": "inventaire", "session_id": SESSION})
+    text = f"Rapport du sous-agent : Read:{'ok' if ok else 'refus'}" + ("" if ok else f" ({why[:40]})")
+    out({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "text", "text": text}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "result": text, "num_turns": 1,
+         "total_cost_usd": 0.01, "duration_ms": 5, "session_id": SESSION, "usage": {"input_tokens": 1, "output_tokens": 1}})
 
 
 def main():
+    if "--input-format" not in ARGS and "-p" in ARGS:  # one-shot prompt, as used for the limits probe
+        turn(ARGS[ARGS.index("-p") + 1])
+        return 0
     while True:
         m = read()
         if m is None:

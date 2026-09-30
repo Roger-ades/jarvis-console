@@ -1,6 +1,6 @@
 // History drawer: every task, including closed windows; click to reopen.
 import { download } from "./api.js";
-import { STATUS, fmtCost, fmtDate, h } from "./util.js";
+import { STATUS, fmtCost, fmtDate, h, statusLabel } from "./util.js";
 
 let ctx = null, q = "", profile = "", status = "";
 
@@ -33,7 +33,7 @@ export function renderHistory() {
       on: { click: () => ctx.openTask(t.id), keydown: (e) => { if (e.key === "Enter") ctx.openTask(t.id); } } },
       h("div", { class: "hm" }, h("div", { class: "ht", title: t.prompt }, t.title),
         h("div", { class: "hs" }, [t.profile_name, t.preset_name, fmtDate(t.created), fmtCost(t.cost_usd)].filter(Boolean).join(" · "))),
-      h("span", { class: `chip s-${t.status}` }, STATUS[t.status] || t.status)))
+      h("span", { class: `chip s-${t.status}` }, statusLabel(t))))
       : [h("div", { class: "hrow" }, h("span", { class: "muted" }, "Aucune tâche."))]));
   }
   renderList();

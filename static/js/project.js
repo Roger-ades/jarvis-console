@@ -8,7 +8,7 @@ import { mdElement } from "./md.js";
 import { STATUS, confirmDialog, dialog, fmtDate, h, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
 
-const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"]];
+const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["rules", "Règles"]];
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const join = (a, b) => (a ? `${a}/${b}` : b);
@@ -58,8 +58,11 @@ async function browse() {
 function render() {
   const d = el();
   if (d.hidden) return;
-  const head = h("div", { class: "drawer-head" }, h("h2", {}, "Projet"),
+  const proj = ws ? ctx.project(ws.folder) : null;
+  const head = h("div", { class: "drawer-head" }, h("h2", {}, proj ? h("span", { class: "pj-name", style: { "--pc": proj.color } }, proj.name) : "Projet"),
     ws ? h("span", { class: "badge", style: { "--pc": ctx.profiles().find((p) => p.id === ws.profile)?.color || "var(--accent)" } }, ws.profile_name) : null,
+    ws ? h("button", { type: "button", class: "btn small", title: proj ? "Nom, couleur, compte, autorisations et modèle par défaut" : "Donner un nom et des réglages par défaut à ce dossier",
+      on: { click: async () => { if (await ctx.editProject(ws.folder, ws.profile)) render(); } } }, proj ? "Réglages" : "En faire un projet") : null,
     h("button", { type: "button", class: "icon-btn", title: "Ouvrir le dossier dans l'explorateur", svg: "folder", disabled: !ws,
       on: { click: () => reveal("") } }),
     h("button", { type: "button", class: "icon-btn", title: "Actualiser", svg: "retry", on: { click: () => load(ws?.folder ?? null) } }),
@@ -73,11 +76,12 @@ function render() {
   sel.addEventListener("change", () => (sel.value === "__other__" ? browse() : load(sel.value)));
   const tabs = h("div", { class: "pj-tabs", role: "tablist" }, ...TABS.map(([id, label]) => h("button", {
     type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id),
-    on: { click: () => { tab = id; note = null; render(); } } }, label, id === "memory" && ws.memory.files.length ? h("span", { class: "cnt" }, String(ws.memory.files.length)) : null)));
+    on: { click: () => { tab = id; note = null; render(); } } }, label, id === "memory" && ws.memory.files.length ? h("span", { class: "cnt" }, String(ws.memory.files.length))
+      : id === "rules" && ws.rules?.length ? h("span", { class: "cnt" }, String(ws.rules.length)) : null)));
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick), h("small", { title: ws.folder }, ws.folder)), tabs, body);
-  ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks })[tab](body);
+  ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules })[tab](body);
 }
 
 // ------------------------------------------------------------ instructions
@@ -260,4 +264,23 @@ function renderTasks(body) {
       btn("Contexte", "Joindre cette session à ta prochaine demande", () => ctx.addContext({ profile: r.profile, session_id: r.id, title: r.title, session_started: true })),
       btn("Reprendre", "Continuer cette session dans la console", () => resumeHere(r)))));
   }).catch(() => {});
+}
+
+// ------------------------------------------------------------ remembered rules
+function renderRules(body) {
+  body.append(h("p", { class: "pj-lead pad" }, "Actions autorisées sans validation pour les discussions de ce dossier, mémorisées avec « Toujours pour ce projet ». ",
+    "Les chemins protégés, les refus permanents et les contraintes Odoo s'appliquent toujours."));
+  const rules = ws.rules || [];
+  if (!rules.length) {
+    body.append(h("div", { class: "empty-row" }, "Aucune règle pour ce projet. Elles se créent depuis une demande de validation."));
+    return;
+  }
+  body.append(h("div", { class: "drawer-list flat" }, ...rules.map((r) => h("div", { class: "hrow file", style: { "--pc": "var(--ok)" } },
+    h("span", { class: "i", svg: "shield" }),
+    h("div", { class: "hm" }, h("div", { class: "ht mono" }, r.pattern), h("div", { class: "hs" }, r.created ? `mémorisée ${fmtDate(r.created)}` : "")),
+    h("button", { type: "button", class: "btn small ghost", title: "Ne plus autoriser sans validation", on: { click: async () => {
+      if (!(await confirmDialog("Retirer cette règle ?", `${r.pattern} demandera de nouveau une validation dans ce projet.`, "Retirer", "danger"))) return;
+      try { await api(`/api/workspace/rules?${new URLSearchParams({ ...scope(), pattern: r.pattern })}`, { method: "DELETE" }); load(ws.folder); }
+      catch (e) { toast(e.message, "err"); }
+    } } }, "Retirer")))));
 }

@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from starlette.datastructures import MutableHeaders
 
-from . import __version__, attachments, claude_cli, mcp, winsys
+from . import __version__, attachments, claude_cli, mcp, updater, winsys
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors)
 from .engine import Engine, TaskError
@@ -90,6 +90,7 @@ class TaskIn(BaseModel):
     team: bool = False
     attachments: list[str] = []
     context: list[dict] = []
+    not_before: float | None = None  # start at that time (e.g. when the account limit resets)
 
 
 class MessageIn(BaseModel):
@@ -101,6 +102,7 @@ class DecisionIn(BaseModel):
     decision: str
     message: str = ""
     answers: dict | None = None
+    remember: list[str] = []  # "toujours pour ce projet"
 
 
 def _err(status: int, detail: str, **extra) -> JSONResponse:
@@ -353,7 +355,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def create_task(body: TaskIn):
         return engine.create_task(body.prompt, profile=body.profile, model=body.model, preset=body.preset,
                                   workdir=body.workdir, effort=body.effort, confirmed=body.confirmed, team=body.team,
-                                  attachments=body.attachments, context=body.context)
+                                  attachments=body.attachments, context=body.context, not_before=body.not_before)
 
     # -------------------------------------------------------- attachments (raw body: no multipart dependency)
     @app.post("/api/uploads")
@@ -416,6 +418,29 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return engine.save_instructions(body.get("profile"), body.get("folder"), str(body.get("scope") or ""),
                                         str(body.get("text") or ""))
 
+    @app.get("/api/search")
+    def search(q: str = ""):
+        return engine.search(q)
+
+    @app.get("/api/projects")
+    def projects():
+        return {"projects": engine.projects()}
+
+    @app.put("/api/projects")
+    def project_save(body: dict = Body(...)):
+        return engine.save_project(body)
+
+    @app.delete("/api/projects")
+    def project_delete(folder: str):
+        engine.delete_project(folder)
+        return {"ok": True}
+
+    @app.delete("/api/workspace/rules")
+    def workspace_rule_delete(pattern: str, profile: str | None = None, folder: str | None = None):
+        _, wd = engine._ws_folder(profile, folder)
+        engine.delete_project_rule(wd, pattern)
+        return {"ok": True}
+
     @app.get("/api/workspace/memory")
     def workspace_memory(name: str, profile: str | None = None, folder: str | None = None):
         return engine.memory_note(profile, folder, name)
@@ -441,6 +466,14 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
                                                           "Content-Security-Policy": "sandbox"})
 
+    @app.get("/api/limits")
+    def limits():
+        return {"limits": engine.limits, "busy": sorted(engine._limits_busy)}
+
+    @app.post("/api/limits/{pid}/refresh")
+    def limits_refresh(pid: str):
+        return engine.refresh_limits(pid)
+
     @app.get("/api/fs/places")
     def fs_places():
         return {"places": engine.fs_places()}
@@ -465,7 +498,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/approvals/{aid}")
     def task_decide(tid: str, aid: str, body: DecisionIn):
-        return engine.decide(tid, aid, body.decision, body.message, body.answers)
+        return engine.decide(tid, aid, body.decision, body.message, body.answers, body.remember)
 
     @app.get("/api/tasks/{tid}/file")
     def task_file(tid: str, path: str):
@@ -575,6 +608,52 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         store.audit("arrêt de la console", {"tâches en cours": engine.state()["running"]})
         threading.Timer(0.6, lambda: setattr(server, "should_exit", True)).start()
         return {"ok": True}
+
+    # -------------------------------------------------------- updates from GitHub
+    upd: dict = {"status": None}
+
+    def check_updates():
+        upd["status"] = updater.status(fetch=True)
+        return upd["status"]
+
+    def update_loop():
+        time.sleep(20)
+        while True:
+            if cfg_store.config.general.update_check:
+                try:
+                    check_updates()
+                except Exception:  # noqa: BLE001 - a failed check never stops the console
+                    pass
+            time.sleep(6 * 3600)
+
+    if start_threads:
+        threading.Thread(target=update_loop, name="updates", daemon=True).start()
+
+    @app.get("/api/system/update")
+    def update_status():
+        if not upd["status"]:  # until the first check on GitHub: what the local copy knows
+            upd["status"] = {**updater.status(fetch=False), "stale": True}
+        return upd["status"]
+
+    @app.post("/api/system/update/check")
+    def update_check():
+        return check_updates()
+
+    @app.post("/api/system/update")
+    def update_install():
+        server = getattr(app.state, "server", None)
+        if server is None:
+            return _err(409, "Cette console n'a pas été lancée par start.bat : mets-la à jour depuis son terminal (git pull).")
+        try:
+            res = updater.update()
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            return _err(409, str(exc))
+        upd["status"] = None
+        store.audit("mise à jour de la console", {"changements": res["commits"], "dépendances": res["requirements"]})
+        if res["updated"]:
+            winsys.relaunch(port, data_dir)
+            threading.Timer(0.6, lambda: setattr(server, "should_exit", True)).start()
+        return {**res, "boot": boot}
 
     @app.get("/api/system/version")
     def system_version():

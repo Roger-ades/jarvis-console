@@ -180,3 +180,9 @@ async function openViewer(r) {
   body.scrollTop = body.scrollHeight;
   msg.focus();
 }
+
+/** Open one session's viewer from elsewhere (search). */
+export function showSession(context, pid, sid) {
+  ctx = context;
+  openViewer({ profile: pid, id: sid });
+}

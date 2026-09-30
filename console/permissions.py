@@ -426,9 +426,10 @@ class PolicyContext:
 
 class Policy:
     def __init__(self, preset: Preset, rules: list[ToolRule], constraints: list[InputConstraint],
-                 ctx: PolicyContext):
+                 ctx: PolicyContext, project_allow: list[str] | None = None):
         self.preset = preset
         self.ctx = ctx
+        self.project_allow = list(project_allow or [])  # "toujours pour ce projet", after every protection
         self.constraints = constraints
         locked = LOCKED_RULES + [r for r in rules if r.locked and r.decision == "deny"]
         self.locked = [r.pattern for r in locked]
@@ -635,6 +636,9 @@ class Policy:
         why = self.confine_violation(tool, inp)
         if why:
             return Verdict("deny", f"Dossier non autorisé : {why}.")
+        r = self.match_allow(self.project_allow, tool, inp) if self.project_allow else None
+        if r:
+            return Verdict("allow", f"Autorisé pour ce projet ({r}).", rule=r)
         r = self.match_any(self.ask, tool, inp)
         if r:
             return Verdict("ask", f"Validation requise ({r}).", rule=r)
@@ -644,6 +648,45 @@ class Policy:
         if self.preset.validate_writes and is_write(tool):
             return Verdict("ask", "Écriture ou commande : validation humaine du preset.")
         return Verdict("default", "Non listé.")
+
+
+# ---------------------------------------------------------------- "toujours pour ce projet"
+
+def suggest_rules(tool: str, inp: dict | None) -> list[str]:
+    """The narrowest useful rules to allow this call again in the same project."""
+    inp = inp if isinstance(inp, dict) else {}
+    if tool in SHELL_TOOLS:
+        out = []
+        for sub in split_commands(str(inp.get("command", ""))) or [str(inp.get("command", ""))]:
+            words = sub.split()
+            if not words:
+                continue
+            keep = words[:2] if len(words) > 1 and not words[1].startswith("-") else words[:1]
+            out.append(f"{tool}({' '.join(keep)}:*)")
+        return list(dict.fromkeys(out))
+    if tool in FILE_TOOLS:
+        return [f"{tool}(./**)"]  # this project's folder only
+    if tool == "WebFetch":
+        host = (urlparse(str(inp.get("url", ""))).hostname or "").lower()
+        return [f"WebFetch(domain:{host})"] if host else ["WebFetch"]
+    return [tool] if tool else []
+
+
+def project_rule_problem(pattern: str, tool: str = "") -> str | None:
+    """Why a remembered rule would be too broad, or None."""
+    name, spec = parse_rule(pattern)
+    if any(c in name for c in "*?["):
+        return "le nom de l'outil doit être exact (pas de *)"
+    if tool and name != tool and not (name in SHELL_TOOLS and tool in SHELL_TOOLS):
+        return f"la règle doit porter sur l'outil de l'action ({tool})"
+    bare = spec is None or spec.strip() in ("", "*", ":*", "**")
+    if name in SHELL_TOOLS and bare:
+        return "pour une commande, précise laquelle (par exemple git status:*)"
+    if name in FILE_TOOLS and spec is not None and spec.strip() in ("*", "**"):
+        return "limite la règle au dossier du projet (./**)"
+    if any(fnmatch.fnmatchcase(name, parse_rule(r.pattern)[0]) for r in LOCKED_RULES):
+        return "cette action est refusée en permanence"
+    return None
 
 
 # ---------------------------------------------------------------- CLI flags

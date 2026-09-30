@@ -3,15 +3,19 @@ import { ApiError, api, bootstrapAuth, openStream } from "./api.js";
 import { Attacher, hasFiles } from "./attach.js";
 import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
+import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
+import { accountState, gauges, initLimits, limitsBlock, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
 import { projectFollow, toggleProject } from "./project.js";
-import { checkVersion } from "./system.js";
+import { checkVersion, restartConsole, updateConsole } from "./system.js";
+import { openPalette } from "./palette.js";
+import { openSetup } from "./setup.js";
 import { openConfig, updateProbe } from "./config.js";
 import { renderHistory, toggleHistory } from "./history.js";
-import { toggleSessions } from "./library.js";
+import { showSession, toggleSessions } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, dialog, h, store, toast } from "./util.js";
+import { $, STATUS, confirmDialog, copyText, dialog, fmtDate, h, statusLabel, store, toast } from "./util.js";
 import { openPreview, revealImage } from "./viewer.js";
 import * as wm from "./wm.js";
 
@@ -36,6 +40,7 @@ async function boot() {
   applyConfig(config, meta);
   S.state = state;
   S.probes = probes.probes || {};
+  await loadProjects();
   await wm.loadState();
   wm.configure({ default_width: config.ui.default_width, default_height: config.ui.default_height });
   wm.onChange(renderTaskbar);
@@ -49,15 +54,29 @@ async function boot() {
     if (!t.closed) openWindow(t, false);
   }
   renderState();
+  initLimits(await api("/api/limits").catch(() => ({})), () => { renderPills(); renderHome(); }, onLimitAlert);
+  renderHome();
+  renderPills();
+  setInterval(renderPills, 60_000); // a window past its reset time goes back to 0
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
     probe: ({ profile: pid, probe }) => { S.probes[pid] = { ...(S.probes[pid] || {}), ...probe }; updateProbe(pid, probe); renderPills(); },
     config: reloadConfig, deleted: ({ id }) => { S.tasks.delete(id); closeWindow(id); renderHistory(); },
-    reload: resync, routines: routinesChanged,
+    reload: resync, routines: routinesChanged, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
+    projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); },
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
   checkVersion();
   setInterval(checkVersion, 60_000);
+  if (S.config.general.setup_done === false) startSetup(); // fresh install: the first-run assistant
+}
+
+function startSetup() {
+  openSetup({
+    state: () => S.state, profiles: () => profiles().map((p) => ({ ...p, workdir: S.meta?.profiles?.[p.id]?.workdir || p.workdir })),
+    probes: () => S.probes, newProject, recentFolders: (pid) => recentFolders(pid),
+    onDone: () => toast("Bienvenue ! Ctrl+K pour tout retrouver.", "ok"),
+  });
 }
 window.addEventListener("jarvis-check-version", () => checkVersion());
 
@@ -130,10 +149,29 @@ function renderPills() {
     const pr = S.probes[p.id] || S.state.probes?.[p.id];
     const known = pr && (pr.checked || pr.logged_in !== undefined);
     const cls = !known ? "" : pr.logged_in ? "ok" : "ko";
-    const label = !known ? "état inconnu — cliquer pour tester" : pr.logged_in ? "connecté" : "non connecté";
-    return h("button", { type: "button", class: "ppill", style: { "--pc": p.color }, title: `${p.name} : ${label}`,
-      on: { click: () => showConfig("profiles") } }, h("span", { class: "sw" }), p.name, h("span", { class: `st ${cls}` }));
+    const label = !known ? "connexion non testée" : pr.logged_in ? "connecté" : "non connecté";
+    const pill = h("button", { type: "button", class: "ppill", style: { "--pc": p.color },
+      title: `${limitsTitle(p.id, p.name)} · ${label}`,
+      on: { click: () => openLimits(pill, p, { onConfig: () => showConfig("profiles") }) } },
+      h("span", { class: "sw" }), h("span", { class: "pn" }, p.name), gauges(p.id), h("span", { class: `st ${cls}` }));
+    return pill;
   }));
+  renderProfileBars();
+}
+
+/** A thin line under each account button of the request bar: its 5-hour session used. */
+function renderProfileBars() {
+  $$pbtn().forEach((b, i) => {
+    const p = profiles()[i];
+    if (!p) return;
+    const used = sessionUsed(p.id);
+    let bar = b.querySelector(".pbar");
+    if (used === null) { bar?.remove(); return; }
+    if (!bar) { bar = h("span", { class: "pbar" }, h("i")); b.append(bar); }
+    bar.firstChild.style.width = `${Math.round(used * 100)}%`;
+    bar.className = `pbar ${used >= 0.9 ? "hot" : used >= 0.7 ? "warm" : "ok"}`;
+    b.title = `Profil ${p.name}${i < 9 ? ` (Alt+${i + 1})` : ""} · session ${Math.round(used * 100)} % utilisée`;
+  });
 }
 
 async function setEmergency(on) {
@@ -145,7 +183,7 @@ async function setEmergency(on) {
 function showConfig(tabName = null) {
   openConfig({
     onSaved: (config, meta) => { applyConfig(config, meta); renderProfiles(); selectProfile(S.profile, false); renderPills(); },
-    state: () => S.state, setEmergency, theme,
+    state: () => S.state, setEmergency, theme, openSetup: startSetup,
   }, tabName).catch((e) => toast(e.message, "err"));
 }
 
@@ -155,6 +193,7 @@ function renderProfiles() {
     type: "button", class: "pbtn", role: "radio", "aria-checked": String(p.id === S.profile), style: { "--pc": p.color },
     title: `Profil ${p.name}${i < 9 ? ` (Alt+${i + 1})` : ""}`, on: { click: () => { selectProfile(p.id); input.focus(); } },
   }, h("span", { class: "sw" }), p.name)));
+  renderProfileBars();
 }
 
 function option(value, label, title = "") { return h("option", { value, title: title || undefined }, label); }
@@ -166,7 +205,8 @@ function folderLabel(dir) {
   const parent = parts.pop();
   return parent && !/^[A-Za-z]:$/.test(parent) ? `${name} — ${parent}` : name;
 }
-const folderOption = (dir) => option(dir, folderLabel(dir), dir);
+const folderOption = (dir) => option(dir, projectFor(dir)?.name || folderLabel(dir), dir);
+const dirKey = (d) => String(d || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 
 /** One chip sums up model, permissions, effort and team mode; the panel holds the controls. */
 const EFFORT = { low: "effort faible", medium: "effort moyen", high: "effort élevé", xhigh: "effort très élevé", max: "effort max" };
@@ -224,16 +264,28 @@ function selectProfile(id, remember = true) {
   const recent = (wm.prefs().workdirs || {})[p.id] || [];
   const wd = $("#opt-workdir");
   const home = S.meta?.profiles?.[p.id]?.workdir || p.workdir;
-  wd.replaceChildren(option("", `${String(home).replace(/[\\/]+$/, "").split(/[\\/]/).pop()} (défaut)`, home),
-    ...recent.map(folderOption), option("__other__", "Autre dossier…"));
+  // pinned projects of this account first, then the folders used lately
+  const pinnedDirs = projects().filter((x) => x.pinned && (!x.profile || x.profile === p.id)).map((x) => x.folder);
+  const dirs = [...new Map([...pinnedDirs, ...recent].map((d) => [dirKey(d), d])).values()].filter((d) => dirKey(d) !== dirKey(home));
+  wd.replaceChildren(option("", `${projectFor(home)?.name || String(home).replace(/[\\/]+$/, "").split(/[\\/]/).pop()} (défaut)`, home),
+    ...dirs.map(folderOption), option("__other__", "Autre dossier…"));
   wd.value = "";
   lastWorkdir = "";
+  applyProject(projectFor(home));
   updateSummary();
 }
 const $$pbtn = () => Array.from(document.querySelectorAll("#cmd-profiles .pbtn"));
 
 $("#opt-workdir").addEventListener("change", async (e) => {
-  if (e.target.value !== "__other__") { lastWorkdir = e.target.value; updateSummary(); projectFollow(); return; }
+  if (e.target.value !== "__other__") {
+    lastWorkdir = e.target.value;
+    const proj = projectFor(currentFolder());
+    if (proj?.profile && proj.profile !== S.profile && profile(proj.profile)) { useProject(proj); return; }
+    applyProject(proj);
+    updateSummary();
+    projectFollow();
+    return;
+  }
   const sel = $("#opt-workdir");
   const path = await pickFolder({ title: "Dossier de travail", start: lastWorkdir || S.meta?.profiles?.[S.profile]?.workdir || "",
     recent: recentFolders() });
@@ -287,8 +339,84 @@ function chooseWorkdir(path) {
   sel.value = path;
   lastWorkdir = path;
   rememberWorkdir(S.profile, path);
+  applyProject(projectFor(path));
   updateSummary();
   projectFollow();
+}
+
+function currentFolder() {
+  const v = $("#opt-workdir").value;
+  return v && v !== "__other__" ? v : (S.meta?.profiles?.[S.profile]?.workdir || profile(S.profile)?.workdir || "");
+}
+
+/** A project chosen: the bar takes its defaults (they stay changeable for one request). */
+function applyProject(p) {
+  if (p) {
+    if (p.preset && [...$("#opt-preset").options].some((o) => o.value === p.preset)) $("#opt-preset").value = p.preset;
+    if (p.model) {
+      if (![...$("#opt-model").options].some((o) => o.value === p.model)) $("#opt-model").append(option(p.model, p.model));
+      $("#opt-model").value = p.model;
+    }
+    $("#opt-effort").value = p.effort || "";
+  }
+  updateProjectButton();
+}
+
+function useProject(p) {
+  if (p.profile && p.profile !== S.profile && profile(p.profile)) selectProfile(p.profile);
+  chooseWorkdir(p.folder);
+}
+
+function updateProjectButton() {
+  const p = projectFor(currentFolder());
+  const b = $("#btn-project");
+  b.querySelector(".lbl").textContent = p ? p.name : "Projet";
+  b.classList.toggle("has-project", !!p);
+  if (p) b.style.setProperty("--pc", p.color); else b.style.removeProperty("--pc");
+  b.title = p ? `Projet ${p.name} : consignes, mémoire, fichiers, discussions et règles (${p.folder})`
+    : "Projet : consignes, mémoire, fichiers et discussions du dossier de travail";
+}
+
+/** Projects changed (created, renamed, removed): names, home screen, top bar. */
+function refreshProjectsUI() {
+  for (const o of $("#opt-workdir").options) {
+    if (!o.value || o.value === "__other__") continue;
+    o.textContent = projectFor(o.value)?.name || folderLabel(o.value);
+  }
+  updateProjectButton();
+  renderHome();
+}
+
+async function newProject() {
+  const folder = await pickFolder({ title: "Dossier du nouveau projet", recent: recentFolders() });
+  if (!folder) return;
+  const saved = await editProject({ folder, profiles: profiles(), presets: S.config.presets, models: panelCtx.models(), current: { profile: S.profile } });
+  if (saved && saved !== "deleted") { refreshProjectsUI(); useProject(saved); }
+}
+
+/** The home screen: pinned projects, discussions to pick up again, the accounts' limits. */
+function renderHome() {
+  const home = $("#home");
+  if (!home) return;
+  const pinned = projects().filter((p) => p.pinned);
+  const recent = [...S.tasks.values()].sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 6);
+  const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
+    on: { click: () => { useProject(p); input.focus(); } } },
+    h("b", {}, p.name),
+    h("small", {}, [pname(p.folder), p.discussions ? `${p.discussions} discussion${p.discussions > 1 ? "s" : ""}` : "aucune discussion",
+      p.last ? fmtDate(p.last) : ""].filter(Boolean).join(" · ")),
+    p.profile && profile(p.profile) ? h("span", { class: "home-acc", style: { "--ac": profile(p.profile).color } }, profile(p.profile).name) : null);
+  home.replaceChildren(...[
+    h("section", { class: "home-sec" }, h("h3", {}, "Projets"), h("div", { class: "home-cards" }, ...pinned.map(card),
+      h("button", { type: "button", class: "home-card add", on: { click: newProject } }, h("b", {}, "+ Nouveau projet"),
+        h("small", {}, "Un dossier, ses consignes et ses réglages")))),
+    recent.length ? h("section", { class: "home-sec" }, h("h3", {}, "Reprendre"), h("div", { class: "home-list" }, ...recent.map((t) =>
+      h("button", { type: "button", class: "home-row", style: { "--pc": t.color }, on: { click: () => openTask(t.id) } },
+        h("span", { class: "t" }, t.title),
+        h("small", {}, [projectFor(t.workdir)?.name || pname(t.workdir), statusLabel(t), fmtDate(t.created)].filter(Boolean).join(" · ")))))) : null,
+    h("section", { class: "home-sec" }, h("h3", {}, "Limites des comptes"), h("div", { class: "home-lims" }, ...profiles().map((p) =>
+      limitsBlock(p, (e) => openLimits(e.currentTarget, p, { onConfig: () => showConfig("profiles") }))))),
+  ].filter(Boolean));
 }
 
 function rememberWorkdir(pid, dir) {
@@ -343,6 +471,9 @@ async function submit(extra = {}) {
     effort: $("#opt-effort").value || null, workdir: wd && wd !== "__other__" ? wd : null,
     team: $("#opt-team").getAttribute("aria-pressed") === "true", attachments: files, context, ...extra,
   };
+  const checked = await limitGuard(body);
+  if (!checked) return; // cancelled: the text stays in the bar
+  Object.assign(body, checked);
   // Clear at once so the next request can be typed while this one is sent.
   input.value = "";
   autoGrow(input, 220);
@@ -356,6 +487,43 @@ async function submit(extra = {}) {
   const t = await launch("/api/tasks", body);
   if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); }
   else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
+}
+
+/** Before a launch on an account at (or near) its limit: another account, later, or anyway. */
+async function limitGuard(body) {
+  const st = accountState(body.profile);
+  if (!st.known || (!st.blocked && !st.near)) return body;
+  const p = profile(body.profile);
+  const pc = (x) => `${Math.round((x ?? 0) * 100)} %`;
+  const other = profiles().find((x) => {
+    if (x.id === body.profile) return false;
+    const o = accountState(x.id);
+    return !o.blocked && (o.session ?? 0) < 0.8;
+  });
+  const msg = st.blocked
+    ? `La limite du compte ${p.name} est atteinte ; elle se réinitialise ${st.resetText}.`
+    : `Le compte ${p.name} est presque à sa limite : session ${pc(st.session)}, semaine ${pc(st.week)}.`;
+  const buttons = [{ label: "Annuler", value: null }];
+  if (st.blocked && st.resetAt) buttons.push({ label: "À la réinitialisation", value: "later", cls: other ? "" : "primary" });
+  buttons.push({ label: "Lancer quand même", value: "anyway" });
+  if (other) buttons.push({ label: `Lancer sur ${other.name}`, value: "other", cls: "primary" });
+  const v = await dialog({ title: st.blocked ? "Limite atteinte" : "Limite presque atteinte",
+    body: `${msg}${other ? ` Le compte ${other.name} a encore de la marge.` : ""}`, buttons });
+  if (!v) return null;
+  if (v === "other") { selectProfile(other.id); return { profile: other.id }; }
+  if (v === "later") return { not_before: st.resetAt + 60 };
+  return {};
+}
+
+function onLimitAlert(a) {
+  const p = profile(a.pid);
+  if (!p) return;
+  const text = a.rejected ? `${p.name} : limite atteinte (${a.label}) ; réinitialisation ${a.when}.`
+    : `${p.name} : ${a.label} à ${Math.round(a.used * 100)} % ; réinitialisation ${a.when}.`;
+  toast(text, a.rejected || a.used >= 0.9 ? "err" : "warn");
+  if (S.config?.general?.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
+    new Notification("Limite Claude", { body: text, tag: `limit-${a.pid}-${a.window}`, icon: "/static/img/favicon.svg" });
+  }
 }
 
 /** POST a launch; handles the confirmation round-trip (HTTP 409 need_confirm). */
@@ -467,6 +635,7 @@ const winCtx = {
   addContext: (t) => addContext(t),
   fork: (t) => forkTask(t),
   move: (t) => moveTask(t),
+  projectName: (folder) => projectFor(folder)?.name || "",
 };
 
 function openWindow(t, fresh) {
@@ -501,6 +670,7 @@ function openTask(id) {
 function onTask(t, fresh = false) {
   const prev = S.tasks.get(t.id);
   S.tasks.set(t.id, t);
+  if (!prev) queueMicrotask(renderHome);
   const w = S.windows.get(t.id);
   if (w) w.update(t);
   else if (t.status === "awaiting" && prev) openTask(t.id); // a validation always surfaces, even from a closed window
@@ -594,6 +764,9 @@ document.addEventListener("keydown", (e) => {
   } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
     e.preventDefault();
     showConfig();
+  } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    searchAnything();
   } else if (e.key === "Escape") {
     $("#menu-arrange").hidden = true;
     $("#menu-claudeai").hidden = true;
@@ -602,6 +775,41 @@ document.addEventListener("keydown", (e) => {
 });
 
 $("#btn-config").addEventListener("click", () => showConfig());
+$("#btn-search").addEventListener("click", () => searchAnything());
+
+/** Ctrl+K: actions, projects, discussions and Claude Code sessions in one list. */
+function searchAnything() {
+  closeDrawers();
+  openPalette({
+    tasks: () => [...S.tasks.values()],
+    projects,
+    projectName: (folder) => projectFor(folder)?.name || "",
+    openTask,
+    useProject: (p) => { useProject(p); input.focus(); },
+    openSession: (pid, sid) => showSession(panelCtx, pid, sid),
+    actions: () => [
+      { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => input.focus() },
+      { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
+      { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },
+      { label: "Sessions Claude Code", icon: "list", keywords: "desktop cli reprendre", run: () => toggleSessions(panelCtx) },
+      { label: "Routines", icon: "clock", keywords: "tâches planifiées programmer", run: () => toggleRoutines(panelCtx) },
+      { label: "Historique", icon: "clock", run: () => $("#btn-history").click() },
+      { label: "Configuration", icon: "gauge", keywords: "réglages paramètres", run: () => showConfig() },
+      { label: "Joindre des fichiers", icon: "clip", keywords: "pièce jointe pdf image", run: () => attacher.picker.click() },
+      { label: "Contexte d'autres discussions", icon: "link", run: () => contextPicker.pick() },
+      ...profiles().map((p) => ({ label: `Utiliser le compte ${p.name}`, icon: "user", hint: "Pour la prochaine demande",
+        run: () => { selectProfile(p.id); input.focus(); } })),
+      ...profiles().map((p) => ({ label: `Actualiser les limites · ${p.name}`, icon: "gauge", keywords: "quota usage session semaine",
+        run: () => api(`/api/limits/${p.id}/refresh`, { method: "POST" }).then(() => toast(`Lecture des limites de ${p.name}…`)).catch((e) => toast(e.message, "err")) })),
+      { label: "Ranger les fenêtres en cascade", icon: "panel", run: () => wm.arrange("cascade") },
+      { label: "Ranger les fenêtres en mosaïque", icon: "panel", run: () => wm.arrange("mosaique") },
+      { label: "Redémarrer la console", icon: "retry", keywords: "mise à jour", run: restartConsole },
+      { label: "Rechercher une mise à jour", icon: "retry", keywords: "github version git pull", run: () => updateConsole() },
+      { label: "Assistant de démarrage", icon: "sparkle", keywords: "installation comptes lanceur bienvenue", run: startSetup },
+      { label: S.state.emergency_stop ? "Réactiver la console" : "Arrêt d'urgence", icon: "stop", run: () => setEmergency(!S.state.emergency_stop) },
+    ],
+  });
+}
 function closeDrawers(except) {
   for (const id of ["history", "sessions", "routines", "project"]) if (id !== except) document.getElementById(id).hidden = true;
 }
@@ -644,6 +852,12 @@ const panelCtx = {
   },
   remember: (dir, pid = S.profile) => rememberWorkdir(pid, dir),
   recentFolders: (pid) => recentFolders(pid),
+  project: (folder) => projectFor(folder),
+  editProject: async (folder, pid) => {
+    const saved = await editProject({ folder, profiles: profiles(), presets: S.config.presets, models: panelCtx.models(), current: { profile: pid } });
+    if (saved) { refreshProjectsUI(); if (saved !== "deleted" && dirKey(saved.folder) === dirKey(currentFolder())) applyProject(saved); }
+    return saved;
+  },
   move: (t) => moveTask(t),
   moveSession: (pid, sid, title, from) => moveSession(pid, sid, title, from),
 };

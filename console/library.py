@@ -422,3 +422,55 @@ def merge_moved_copy(profile: Profile, original: str, copy: str) -> dict:
     _set_desktop_cwd(profile, original, folder)
     _forget(src, dup, dest)
     return {"session": original, "removed": copy, "folder": folder}
+
+
+# ---------------------------------------------------------------- search
+def snippet(text: str, needle: str, width: int = 70) -> str:
+    """The words around the first match, on one line."""
+    flat = " ".join(str(text or "").split())
+    i = flat.lower().find(needle.lower())
+    if i < 0:
+        return flat[:width * 2]
+    start, end = max(0, i - width), min(len(flat), i + len(needle) + width)
+    return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
+
+
+def search_sessions(profile: Profile, needle: str, limit: int = 30, budget: float = 1.5,
+                    skip: set[str] | None = None) -> list[dict]:
+    """Sessions whose title or conversation (requests and answers) contains the words, newest first.
+    Reading transcripts stops after `budget` seconds: the search stays quick."""
+    n = needle.lower()
+    skip = skip or set()
+    hits, t0 = [], time.time()
+    for r in list_sessions(profile):
+        if r["id"] in skip:
+            continue
+        head = f"{r['title']} {r['first_prompt']} {r['last_prompt']}"
+        snip = snippet(head, needle) if n in head.lower() else ""
+        if not snip and time.time() - t0 < budget:
+            f = find_transcript(profile, r["id"])
+            try:
+                with f.open(encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if n not in line.lower() or not line.startswith("{"):
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except ValueError:
+                            continue
+                        if obj.get("type") == "user":
+                            text = _is_prompt(obj)
+                        elif obj.get("type") == "assistant" and not obj.get("isSidechain"):
+                            text = _text_of((obj.get("message") or {}).get("content"))
+                        else:
+                            continue
+                        if n in text.lower():
+                            snip = snippet(text, needle)
+                            break
+            except (OSError, AttributeError):
+                pass
+        if snip:
+            hits.append({**r, "snippet": snip})
+            if len(hits) >= limit:
+                break
+    return hits

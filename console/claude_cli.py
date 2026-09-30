@@ -255,3 +255,33 @@ def open_terminal(title: str, cli: str, args: list[str], env: dict, cwd: str):
         if not term:
             raise ValueError("aucun terminal graphique trouvé")
         subprocess.Popen([term, "-e", "bash", "-lc", line + "; exec bash"])
+
+
+def limits_probe(cli: list[str], env: dict, cwd: str, timeout: float = 120) -> dict:
+    """Plan usage limits of an account: one tiny request (Haiku, no tool, no MCP, not saved as a
+    session) whose response carries the rate-limit windows. Returns {"events": [...]} or {"error": ...}."""
+    cmd = [*cli, "-p", "Réponds seulement : OK", "--model", "haiku", "--max-turns", "1", "--tools", "",
+           "--strict-mcp-config", "--no-session-persistence", "--output-format", "stream-json", "--verbose"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           cwd=cwd, env=env, timeout=timeout, stdin=subprocess.DEVNULL, **spawn_kwargs())
+    except subprocess.TimeoutExpired:
+        return {"error": "Claude n'a pas répondu à temps."}
+    except OSError as exc:
+        return {"error": f"Impossible de lancer la CLI : {exc}"}
+    events, error = [], ""
+    for line in r.stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("type") == "rate_limit_event" and isinstance(msg.get("rate_limit_info"), dict):
+            events.append(msg["rate_limit_info"])
+        elif msg.get("type") == "result" and msg.get("is_error"):
+            error = str(msg.get("result") or "")[:300]
+    if events:
+        return {"events": events}
+    tail = " ".join(r.stderr.strip().splitlines()[-2:])[:300]
+    return {"error": error or tail or "Aucune information de limite reçue (compte non connecté ?)."}

@@ -26,6 +26,9 @@
       <button class="btn ghost" id="btn-install" hidden title="Installer JARVIS comme application (fenêtre séparée, menu Démarrer)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span class="lbl">Installer</span>
       </button>
+      <button class="btn ghost" id="btn-search" title="Rechercher partout (Ctrl+K)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="lbl">Rechercher</span>
+      </button>
       <button class="btn ghost" id="btn-project" title="Projet : consignes, mémoire, fichiers et discussions du dossier de travail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/></svg><span class="lbl">Projet</span>
       </button>
@@ -76,10 +79,13 @@
 
   <main id="desktop">
     <div id="empty-hint" class="empty-hint">
-      <img src="/static/img/favicon.svg" alt="" class="empty-mark">
-      <p class="empty-title">Prêt, monsieur.</p>
-      <p>Chaque demande ouvre sa fenêtre et tourne en parallèle, avec le compte et les autorisations choisis.</p>
+      <div class="home-head">
+        <img src="/static/img/favicon.svg" alt="" class="empty-mark">
+        <p class="empty-title">Prêt, monsieur.</p>
+      </div>
+      <div id="home" class="home-grid"></div>
       <p class="empty-keys">
+        <span><kbd>Ctrl</kbd><kbd>K</kbd> rechercher</span>
         <span><kbd>@work</kbd><kbd>@perso</kbd> compte</span>
         <span><kbd>/</kbd> skills</span>
         <span><kbd>Alt</kbd><kbd>1</kbd> <kbd>2</kbd> profil</span>

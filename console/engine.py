@@ -24,10 +24,10 @@ from pathlib import Path
 
 from . import attachments as att
 from . import claude_cli, cloud, library, mcp
-from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ToolRule, dump,
+from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
                      expand_path)
-from .permissions import (INTERACTIVE_TOOLS, Policy, cli_permission_args, is_mcp, norm,
-                          policy_context, summarize_target, within)
+from .permissions import (INTERACTIVE_TOOLS, Policy, cli_permission_args, is_mcp, norm, parse_rule,
+                          policy_context, project_rule_problem, suggest_rules, summarize_target, within)
 from . import team as team_mod
 from .routines import Routine
 from .store import Store
@@ -97,6 +97,7 @@ class Approval:
     message: str = ""
     answers: dict | None = None
     by: str = "utilisateur"
+    suggest: list = field(default_factory=list)  # rules for "toujours pour ce projet"
     _claim_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def claim(self, decision: str, message: str = "", by: str = "utilisateur", answers: dict | None = None) -> bool:
@@ -111,7 +112,7 @@ class Approval:
     def public(self) -> dict:
         return {"id": self.id, "kind": self.kind, "tool": self.tool, "reason": self.reason,
                 "target": summarize_target(self.tool, self.input),
-                "input": _clip_json(self.input, 20000), "created": self.created}
+                "input": _clip_json(self.input, 20000), "created": self.created, "suggest": self.suggest}
 
 
 @dataclass
@@ -132,6 +133,11 @@ class Run:
     policy: Policy | None = None
     last_error: bool = False
     got_result: bool = False
+    # background work of the CLI (team mode sub-agents, background shells): the session must stay
+    # open and keep answering their permission checks after the lead's turn has ended
+    background: set = field(default_factory=set)
+    had_background: bool = False
+    last_output: float = field(default_factory=time.time)
 
 
 def _clip_json(value, limit: int):
@@ -198,6 +204,8 @@ class Engine:
         self._seq: dict[str, int] = {}
         self.emergency = bool(store.kv_get("emergency_stop", False))
         self.probes: dict = store.kv_get("probes", {}) or {}
+        self.limits: dict = store.kv_get("limits", {}) or {}  # plan usage limits, per profile
+        self._limits_busy: set[str] = set()
         self.routines: dict[str, Routine] = {}
         for raw in store.kv_get("routines", []) or []:
             try:
@@ -212,6 +220,8 @@ class Engine:
             threading.Thread(target=self._scheduler, name="scheduler", daemon=True).start()
             threading.Thread(target=self._watchdog, name="watchdog", daemon=True).start()
             threading.Thread(target=self._routine_loop, name="routines", daemon=True).start()
+            if self.cfg.general.limits_on_start:
+                threading.Thread(target=self._refresh_stale_limits, name="limits", daemon=True).start()
 
     # -------------------------------------------------------- helpers
     @property
@@ -288,6 +298,10 @@ class Engine:
     # -------------------------------------------------------- startup / shutdown
     def _recover(self):
         for t in self.store.list_tasks(limit=2000):
+            if t["status"] == "queued" and t.get("not_before") and not t.get("started"):
+                self.tasks[t["id"]] = t
+                self.queue.append(t["id"])
+                continue
             if t["status"] in ACTIVE:
                 t["status"] = "interrupted"
                 t["error"] = "Interrompue : le serveur s'est arrêté pendant l'exécution."
@@ -357,7 +371,7 @@ class Engine:
                     fork: bool = True, history: list | None = None, origin: str = "",
                     routine: dict | None = None, closed: bool = False, team: bool = False,
                     attachments: list[str] | None = None, context: list[dict] | None = None,
-                    extra_dirs: list[str] | None = None) -> dict:
+                    extra_dirs: list[str] | None = None, not_before: float | None = None) -> dict:
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif : réactive la console avant de lancer une tâche.", 423)
         cfg = self.cfg
@@ -419,6 +433,7 @@ class Engine:
             "todos": [], "usage": {}, "output_bytes": 0, "truncated": False, "model_resolved": "",
             "queued_messages": [att.message(text, files)], "origin": origin, "routine": routine,
             "attachments_dir": str(adir), "attachments": files,
+            "not_before": float(not_before) if not_before and not_before > now else None,
             "resumed_from": resume, "fork_next": bool(resume and fork),
             "team": bool(team_agents), "team_agents": team_models,
             "spec": {"profile": dump_model(prof), "preset": dump_model(pre),
@@ -438,6 +453,10 @@ class Engine:
             if history:
                 self._event(tid, "history", {"session": resume, "items": history[-40:], "total": len(history)})
             self._event(tid, "user", {"text": text, "first": True, **({"files": files} if files else {})})
+            if t["not_before"]:
+                self._event(tid, "status", {"status": "queued", "text": "Programmée pour "
+                            + time.strftime("%d/%m %H:%M", time.localtime(t["not_before"]))
+                            + " : réinitialisation de la limite du compte."})
             self._audit("tâche créée", {"demande": _clip(text, 2000), "modèle": model, "preset": pre.name,
                                         **({"pièces jointes": [f["path"] for f in files]} if files else {}),
                                         "dossier": wd, "effort": effort or "défaut",
@@ -707,15 +726,141 @@ class Engine:
         return self.state()
 
     # -------------------------------------------------------- approvals
-    def decide(self, tid: str, aid: str, decision: str, message: str = "", answers: dict | None = None) -> dict:
+    def decide(self, tid: str, aid: str, decision: str, message: str = "", answers: dict | None = None,
+               remember: list[str] | None = None) -> dict:
         if decision not in ("allow", "deny"):
             raise TaskError("Décision invalide.")
         run = self.runs.get(tid)
         appr = run.approvals.get(aid) if run else None
-        if not appr or not appr.claim(decision, (message or "").strip()[:2000], "utilisateur",
-                                      answers if isinstance(answers, dict) else None):
+        if not appr or appr.decision is not None:
             raise TaskError("Cette validation n'est plus en attente.", 409)
-        return {"ok": True}
+        added = []
+        if decision == "allow" and remember:
+            added = self.add_project_rules(self._get(tid)["workdir"], [str(x) for x in remember][:10], tool=appr.tool)
+        if not appr.claim(decision, (message or "").strip()[:2000], "utilisateur",
+                          answers if isinstance(answers, dict) else None):
+            raise TaskError("Cette validation n'est plus en attente.", 409)
+        return {"ok": True, "remembered": added}
+
+    # -------------------------------------------------------- search (Ctrl+K)
+    def search(self, q: str, limit: int = 30) -> dict:
+        """Discussions of the console (title, requests, answers) and Claude Code sessions (Desktop, CLI)."""
+        q = (q or "").strip()
+        if len(q) < 2:
+            return {"tasks": [], "sessions": []}
+        n = q.lower()
+        with self._lock:
+            tasks = sorted(self.tasks.values(), key=lambda t: t.get("created") or 0, reverse=True)
+        found: dict[str, str] = {}
+        for t in tasks:
+            head = f"{t.get('title', '')} {t.get('prompt', '')}"
+            if n in head.lower():
+                found[t["id"]] = library.snippet(t.get("prompt") or t.get("title"), q)
+        for e in self.store.search_events(q, 300):
+            tid = e["task_id"]
+            if tid not in found and tid in self.tasks:
+                found[tid] = library.snippet(e["data"].get("text") or "", q)
+        out = []
+        for t in tasks:
+            if t["id"] in found:
+                out.append({k: t.get(k) for k in ("id", "title", "profile", "profile_name", "color", "status", "created", "workdir", "not_before")}
+                           | {"snippet": found[t["id"]]})
+            if len(out) >= limit:
+                break
+        known = {t.get("session_id") for t in tasks}
+        sessions = []
+        for prof in self.cfg.profiles:
+            for r in library.search_sessions(prof, q, limit=limit, skip=known):
+                sessions.append({**r, "profile_name": prof.name, "color": prof.color})
+        sessions.sort(key=lambda r: r.get("updated") or 0, reverse=True)
+        return {"tasks": out, "sessions": sessions[:limit]}
+
+    # -------------------------------------------------------- projects (named folders with defaults)
+    def projects(self) -> list[dict]:
+        with self._lock:
+            tasks = list(self.tasks.values())
+        out = []
+        for p in self.cfg.projects:
+            key = norm(p.folder)
+            mine = [t for t in tasks if norm(t.get("workdir") or "") == key]
+            out.append({**p.model_dump(), "exists": os.path.isdir(p.folder), "discussions": len(mine),
+                        "last": max((t.get("created") or 0 for t in mine), default=None),
+                        "rules": len([r for r in self.cfg.project_rules if norm(r.folder) == key])})
+        out.sort(key=lambda x: (not x["pinned"], -(x["last"] or x["created"] or 0)))
+        return out
+
+    def save_project(self, data: dict) -> dict:
+        from .config import Project
+        _, folder = self._ws_folder(data.get("profile") or None, str(data.get("folder") or ""))
+        try:
+            proj = Project.model_validate({**data, "folder": folder})
+        except ValueError as e:
+            raise TaskError(f"Projet invalide : {e}") from e
+        if proj.profile and not self.cfg.profile(proj.profile):
+            raise TaskError("Compte inconnu.")
+        if proj.preset and not self.cfg.preset(proj.preset):
+            raise TaskError("Preset inconnu.")
+        cfg = self.cfg.model_copy(deep=True)
+        old = next((p for p in cfg.projects if norm(p.folder) == norm(folder)), None)
+        proj.created = old.created if old else time.time()
+        cfg.projects = [p for p in cfg.projects if norm(p.folder) != norm(folder)] + [proj]
+        self.cfg_store.save(cfg, f"projet {proj.name}")
+        self.bus.publish("projects", {"projects": self.projects()})
+        return proj.model_dump()
+
+    def delete_project(self, folder: str):
+        cfg = self.cfg.model_copy(deep=True)
+        keep = [p for p in cfg.projects if norm(p.folder) != norm(folder)]
+        if len(keep) == len(cfg.projects):
+            raise TaskError("Projet introuvable.", 404)
+        cfg.projects = keep
+        self.cfg_store.save(cfg, f"projet retiré : {Path(folder).name}")  # the folder itself is untouched
+        self.bus.publish("projects", {"projects": self.projects()})
+
+    # -------------------------------------------------------- rules remembered for a project
+    def project_allow(self, folder: str) -> list[str]:
+        key = norm(folder or "")
+        return [r.pattern for r in self.cfg.project_rules if norm(r.folder) == key]
+
+    def add_project_rules(self, folder: str, patterns: list[str], tool: str = "") -> list[str]:
+        clean = []
+        for pat in patterns:
+            try:
+                rule = ProjectRule(folder=folder, pattern=pat, created=time.time())
+            except ValueError as e:
+                raise TaskError(f"Règle invalide : {pat}.") from e
+            why = project_rule_problem(rule.pattern, tool)
+            if why:
+                raise TaskError(f"Règle refusée ({rule.pattern}) : {why}.")
+            clean.append(rule)
+        cfg = self.cfg.model_copy(deep=True)
+        known = set(self.project_allow(folder))
+        new = [r for r in clean if r.pattern not in known]
+        if not new:
+            return []
+        cfg.project_rules.extend(new)
+        self.cfg_store.save(cfg, f"règle mémorisée pour {Path(folder).name} : {', '.join(r.pattern for r in new)}")
+        with self._lock:  # discussions already running in this folder use it at once
+            for tid, run in self.runs.items():
+                t = self.tasks.get(tid)
+                if run.policy and t and norm(t["workdir"]) == norm(folder):
+                    run.policy.project_allow = self.project_allow(folder)
+        self._audit("règle mémorisée pour un projet", {"dossier": folder, "règles": [r.pattern for r in new]})
+        return [r.pattern for r in new]
+
+    def delete_project_rule(self, folder: str, pattern: str):
+        cfg = self.cfg.model_copy(deep=True)
+        before = len(cfg.project_rules)
+        cfg.project_rules = [r for r in cfg.project_rules if not (norm(r.folder) == norm(folder) and r.pattern == pattern)]
+        if len(cfg.project_rules) == before:
+            raise TaskError("Règle introuvable.", 404)
+        self.cfg_store.save(cfg, f"règle retirée pour {Path(folder).name} : {pattern}")
+        with self._lock:
+            for tid, run in self.runs.items():
+                t = self.tasks.get(tid)
+                if run.policy and t and norm(t["workdir"]) == norm(folder):
+                    run.policy.project_allow = self.project_allow(folder)
+        self._audit("règle de projet retirée", {"dossier": folder, "règle": pattern})
 
     def _park(self, tid: str, run: Run, appr: Approval, respond):
         """Hold a tool call until the user decides; answer the CLI from a side thread."""
@@ -767,6 +912,8 @@ class Engine:
                         if t is None or t["status"] != "queued":
                             self.queue.remove(tid)
                         continue
+                    if t.get("not_before") and t["not_before"] > time.time():
+                        continue  # scheduled for later (the account's limit resets then)
                     if len(busy) >= limit:
                         break
                     per = (t["spec"]["profile"] or {}).get("max_concurrent", 2)
@@ -800,6 +947,12 @@ class Engine:
                 for appr in list(run.approvals.values()):
                     if appr.decision is None and now - appr.created > g.approval_timeout_min * 60:
                         appr.claim("deny", f"Délai de validation dépassé ({g.approval_timeout_min} min).", "console")
+                # Background work is over and the lead said nothing since: the session can close.
+                t = self.tasks.get(tid) or {}
+                if (run.had_background and not run.background and not run.stdin_closed and run.got_result
+                        and run.results >= run.sent and not run.approvals and not t.get("queued_messages")
+                        and now - run.last_output > 45):
+                    self._close_stdin(run)
 
     # -------------------------------------------------------- one run = one CLI process
     @staticmethod
@@ -876,7 +1029,8 @@ class Engine:
             run.policy = Policy(pre, [ToolRule.model_validate(r) for r in spec["rules"]],
                                 [InputConstraint.model_validate(c) for c in spec["constraints"]],
                                 policy_context(t["workdir"], [*(t.get("add_dirs") or []), *([adir] if adir else [])],
-                                               spec["forbidden"], str(self.data_dir), [self.port]))
+                                               spec["forbidden"], str(self.data_dir), [self.port]),
+                                project_allow=self.project_allow(t["workdir"]))
             cmd = self._command(t, run)
             env = claude_cli.build_env(prof, self.cfg.general)
             if spec.get("team"):
@@ -917,6 +1071,7 @@ class Engine:
                 line = line.strip()
                 if not line:
                     continue
+                run.last_output = time.time()
                 try:
                     msg = json.loads(line)
                 except ValueError:
@@ -1004,6 +1159,8 @@ class Engine:
             self._on_init(t, msg.get("response") or {})
         elif typ == "system":
             self._on_system(tid, t, msg)
+        elif typ == "rate_limit_event":
+            self._on_rate_limit(t["profile"], msg.get("rate_limit_info") or {})
         elif typ == "stream_event":
             ev = msg.get("event") or {}
             if ev.get("type") == "content_block_delta":
@@ -1039,8 +1196,116 @@ class Engine:
         self.store.kv_set("probes", self.probes)
         self.bus.publish("probe", {"profile": t["profile"], "probe": cached})
 
+    # -------------------------------------------------------- plan usage limits
+    @staticmethod
+    def _fraction(v) -> float | None:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f / 100 if f > 1.5 else f  # the CLI gives 0..1; percentages are tolerated
+
+    def _on_rate_limit(self, pid: str, info: dict):
+        """Every response of Claude carries the account's limits (5-hour session, week…): keep the latest."""
+        if not isinstance(info, dict) or not info:
+            return
+        with self._lock:
+            cur = dict(self.limits.get(pid) or {})
+            windows = dict(cur.get("windows") or {})
+            for name, w in (info.get("unifiedWindows") or {}).items():
+                used = self._fraction((w or {}).get("utilization"))
+                if used is not None:
+                    windows[name] = {"used": used, "resets_at": (w or {}).get("resetsAt")}
+            kind, used = info.get("rateLimitType"), self._fraction(info.get("utilization"))
+            if kind and used is not None:  # the documented fields: the window that currently applies
+                windows[kind] = {"used": used, "resets_at": info.get("resetsAt") or (windows.get(kind) or {}).get("resets_at")}
+            cur.update({"status": info.get("status") or cur.get("status"), "type": kind or cur.get("type"),
+                        "resets_at": info.get("resetsAt") or cur.get("resets_at"), "windows": windows,
+                        "updated": time.time(), "error": ""})
+            if any(k in info for k in ("overageStatus", "overageDisabledReason", "isUsingOverage")):
+                cur["overage"] = {"status": info.get("overageStatus"), "reason": info.get("overageDisabledReason"),
+                                  "using": bool(info.get("isUsingOverage"))}
+            self.limits[pid] = cur
+            self.store.kv_set("limits", self.limits)
+        self.bus.publish("limits", {"profile": pid, "limits": cur})
+
+    def limit_block(self, pid: str) -> float | None:
+        """When the account's limit is reached: the time it resets (epoch), else None."""
+        cur = self.limits.get(pid) or {}
+        if cur.get("status") != "rejected":
+            return None
+        now = time.time()
+        full = [w["resets_at"] for k, w in (cur.get("windows") or {}).items()
+                if (w.get("resets_at") or 0) > now and ((w.get("used") or 0) >= 0.999 or k == cur.get("type"))]
+        if not full and (cur.get("resets_at") or 0) > now:
+            full = [cur["resets_at"]]
+        return max(full) if full else None  # blocked until the last full window resets
+
+    def refresh_limits(self, pid: str) -> dict:
+        """Ask Claude for the account's limits now: one tiny Haiku request (the answer is discarded)."""
+        prof = self.cfg.profile(pid)
+        if not prof:
+            raise TaskError("Profil inconnu.", 404)
+        cli = self.cli()
+        if not cli:
+            raise TaskError("Claude Code introuvable.", 404)
+        with self._lock:
+            if pid in self._limits_busy:
+                return {"started": False}
+            self._limits_busy.add(pid)
+
+        def work():
+            try:
+                wd = expand_path(prof.workdir)
+                Path(wd).mkdir(parents=True, exist_ok=True)
+                res = claude_cli.limits_probe(cli, claude_cli.build_env(prof, self.cfg.general), wd)
+                for info in res.get("events") or []:
+                    self._on_rate_limit(pid, info)
+                if res.get("error"):
+                    with self._lock:
+                        cur = dict(self.limits.get(pid) or {})
+                        cur.update({"error": res["error"], "checked": time.time()})
+                        self.limits[pid] = cur
+                        self.store.kv_set("limits", self.limits)
+                    self.bus.publish("limits", {"profile": pid, "limits": cur})
+            finally:
+                with self._lock:
+                    self._limits_busy.discard(pid)
+
+        threading.Thread(target=work, name=f"limits-{pid}", daemon=True).start()
+        return {"started": True}
+
+    def _refresh_stale_limits(self, max_age: float = 3 * 3600):
+        time.sleep(5)  # let the console start first
+        for prof in self.cfg.profiles:
+            cur = self.limits.get(prof.id) or {}
+            if not self._stop and time.time() - (cur.get("updated") or 0) > max_age:
+                try:
+                    self.refresh_limits(prof.id)
+                except TaskError:
+                    pass
+
+    def _on_background(self, run: Run, msg: dict):
+        """Live background tasks, from the CLI's level signal (and its start/end bookends as a fallback).
+        "Ambient" tasks (watchers that never end) do not keep the session open."""
+        st = msg.get("subtype")
+        if st == "background_tasks_changed":
+            run.background = {x.get("task_id") for x in msg.get("tasks") or [] if x.get("task_id") and not x.get("ambient")}
+        elif st == "task_started" and msg.get("is_backgrounded"):
+            run.background.add(msg.get("task_id"))
+        elif st == "task_updated" and (msg.get("patch") or {}).get("status") in ("completed", "failed", "killed"):
+            run.background.discard(msg.get("task_id"))
+        elif st == "task_notification":
+            run.background.discard(msg.get("task_id"))
+        if run.background:
+            run.had_background = True
+
     def _on_system(self, tid: str, t: dict, msg: dict):
         st = msg.get("subtype")
+        if st in ("background_tasks_changed", "task_started", "task_updated", "task_notification"):
+            run = self.runs.get(tid)
+            if run:
+                self._on_background(run, msg)
         if st == "init":
             with self._lock:
                 t["session_id"] = msg.get("session_id") or t["session_id"]
@@ -1128,8 +1393,11 @@ class Engine:
                 t["queued_messages"] = []
             for m in more:
                 self._send_user(run, m)
-            if not more:
+            if not more and not run.background:
                 self._close_stdin(run)
+            elif not more:
+                self._event(tid, "info", {"text": f"Travail en arrière-plan en cours ({len(run.background)}) : "
+                                                  "la session reste ouverte jusqu'à son retour."})
 
     # -------------------------------------------------------- control protocol
     def _respond(self, run: Run, rid: str, payload: dict | None = None, error: str | None = None):
@@ -1162,7 +1430,7 @@ class Engine:
             if tool in INTERACTIVE_TOOLS:
                 return self._respond(run, rid, {})
             if v.decision == "ask":
-                appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="hook", tool=tool,
+                appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="hook", tool=tool, suggest=suggest_rules(tool, tin),
                                 input=tin, reason=v.reason)
 
                 def answer(a: Approval, rid=rid):
@@ -1204,6 +1472,7 @@ class Engine:
             if v.decision == "ask" or pre_unlisted == "ask" or tool == "ExitPlanMode":
                 kind = "plan" if tool == "ExitPlanMode" else "permission"
                 appr = Approval(id=secrets.token_hex(4), request_id=rid, kind=kind, tool=tool, input=tin,
+                                suggest=suggest_rules(tool, tin) if kind == "permission" else [],
                                 reason=v.reason if v.decision == "ask" else "Claude Code demande l'autorisation.")
 
                 def answer_p(a: Approval, rid=rid, tin=tin):
@@ -1431,7 +1700,8 @@ class Engine:
         folders = list(dict.fromkeys([str(Path(expand_path(prof.workdir)).resolve()), *used]))[:20]
         return {"profile": prof.id, "profile_name": prof.name, "folder": wd, "folders": folders,
                 "instructions": {"folder": doc(Path(wd) / "CLAUDE.md"), "profile": doc(library.config_dir(prof) / "CLAUDE.md")},
-                "jarvis_instructions": prof.instructions, "memory": {"dir": str(mem), "files": notes}}
+                "jarvis_instructions": prof.instructions, "memory": {"dir": str(mem), "files": notes},
+                "rules": [{"pattern": r.pattern, "created": r.created} for r in self.cfg.project_rules if norm(r.folder) == norm(wd)]}
 
     def save_instructions(self, pid: str | None, folder: str | None, scope: str, text: str) -> dict:
         prof, wd = self._ws_folder(pid, folder)
@@ -1801,11 +2071,16 @@ class Engine:
                 if self.emergency:
                     raise TaskError("Arrêt d'urgence actif.", 423)
                 self._check_routine(r)
+                blocked = self.limit_block(r.profile)
                 t = self.create_task(r.prompt, profile=r.profile, model=r.model or None, preset=r.preset,
                                      workdir=r.workdir or None, effort=r.effort or None, confirmed=True,
                                      origin="routine", routine={"id": r.id, "name": r.name}, closed=not r.open_window,
-                                     team=r.team)
+                                     team=r.team, not_before=blocked + 60 if blocked else None)
                 run["task_id"] = t["id"]
+                if blocked:
+                    run["status"] = "reportée"
+                    run["error"] = "Limite du compte atteinte : lancée à la réinitialisation, " \
+                                   + time.strftime("%d/%m %H:%M", time.localtime(blocked + 60)) + "."
             except TaskError as exc:
                 run["status"], run["error"] = "non lancée", exc.message
                 t = None
@@ -1816,7 +2091,7 @@ class Engine:
                 if r.schedule.kind == "once":
                     r.enabled, r.next_run = False, None
             self._persist_routines()
-            if run["error"] and manual:
+            if run["status"] == "non lancée" and manual:
                 raise TaskError(run["error"], 409)
             return t or {}
 

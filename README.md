@@ -94,6 +94,33 @@ Chaque serveur importé peut être désactivé ; « Tester les MCP » affiche le
 
 ## Utiliser
 
+**Limites des comptes, toujours visibles** : chaque pastille de compte en haut (Travail,
+Perso) porte deux jauges, la session de 5 h et la semaine (« 5 · 52 % »), vertes, orange
+au-delà de 70 %, rouges au-delà de 90 % ou limite atteinte ; un trait sous chaque compte de
+la barre du bas reprend la session. Un clic sur la pastille donne le détail : pourcentages,
+heures de réinitialisation, dépassement payant, date de la mesure et **Actualiser**. Les
+chiffres arrivent avec chaque réponse de Claude (les mêmes que `/usage`) ; Actualiser, et
+la lecture au démarrage si la mesure a plus de 3 h, envoient une toute petite requête Haiku
+(désactivable dans Configuration → Général). Passé l'heure de réinitialisation, la jauge
+revient à 0.
+
+**Avant de lancer sur un compte plein** : une alerte à 80 % puis 90 % (et à la limite
+atteinte) ; au lancement sur un compte presque plein ou bloqué, la console propose de
+**lancer sur l'autre compte**, de **lancer à la réinitialisation** (la demande attend,
+« Programmée · 15:01 », et part seule, même après un redémarrage de la console) ou de
+lancer quand même. Une routine qui tombe sur un compte bloqué est reportée à la
+réinitialisation au lieu d'échouer.
+
+**Ctrl+K** (ou le bouton Rechercher) : une seule barre pour tout retrouver — actions,
+projets, discussions de la console (titre, demandes et réponses de Claude) et sessions
+Claude Code (Desktop, CLI), avec l'extrait trouvé ; flèches et Entrée pour ouvrir.
+
+**Toujours pour ce projet** : dans une demande de validation, ce bouton approuve et
+mémorise une règle pour les discussions du dossier (la plus étroite possible et
+modifiable : une commande précise, les fichiers du dossier, un outil Odoo, un domaine
+web). Les chemins protégés, les refus permanents et les contraintes Odoo passent toujours
+avant. Les règles se relisent et se retirent dans Projet → Règles.
+
 | Geste | Effet |
 |---|---|
 | `Entrée` / `Maj+Entrée` | envoyer / nouvelle ligne |
@@ -325,12 +352,26 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 
 Copie le projet **sans** `data/` ni `.venv/` (un dépôt Git les exclut d'office) : le
 nouveau poste démarre avec une configuration vierge, ses propres comptes, sans tes
-routines, ton historique ni ton jeton.
+routines, ton historique ni ton jeton. Au premier lancement, un **assistant** guide la mise
+en route : Claude Code trouvé, connexion de chaque compte (Se connecter / Tester), dossiers
+de travail et premier projet, lanceur et démarrage avec la session. Il se rouvre depuis
+Configuration → Général → Assistant de démarrage, ou Ctrl+K. Le plus simple : `git clone`
+du dépôt, pour profiter ensuite des mises à jour en un clic.
 
 ## Mises à jour
 
 Le code et les données sont séparés : `data/` (configuration, historique, routines,
 jeton, journal) et `.venv/` ne sont jamais remplacés par une mise à jour.
+
+**En un clic** (installation faite avec `git clone`) : la console regarde sur GitHub au
+démarrage puis toutes les 6 h ; un bandeau **« Nouvelle version disponible »** propose
+**Mettre à jour** (aussi dans Configuration → Général → Rechercher une mise à jour) : elle
+récupère la version (`git pull`), réinstalle les dépendances si `requirements.txt` a
+changé, puis redémarre. Elle refuse si des fichiers du programme ont été modifiés sur le
+poste (rien n'est écrasé). Pour un dépôt privé, les identifiants GitHub doivent avoir été
+enregistrés une fois (un premier `git pull` à la main).
+
+À la main :
 
 1. Arrête la console (Configuration → Général → Arrêter la console).
 2. Remplace les fichiers du projet (idéalement `git pull` depuis un dépôt privé).

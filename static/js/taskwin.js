@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { Attacher } from "./attach.js";
 import { mdElement } from "./md.js";
 import {
-  ACTIVE, STATUS, confirmDialog, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, toast, toolIcon, toolLabel,
+  ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, toast, toolIcon, toolLabel,
 } from "./util.js";
 import { openPreview, revealImage, thumbnail } from "./viewer.js";
 import * as wm from "./wm.js";
@@ -205,7 +205,7 @@ export class TaskWindow {
     this.titleEl.textContent = t.title;
     this.titleEl.title = t.prompt;
     this.statusEl.className = `status s-${t.status}`;
-    this.statusEl.textContent = STATUS[t.status] || t.status;
+    this.statusEl.textContent = statusLabel(t);
     this.stopBtn.hidden = !ACTIVE.has(t.status);
     this.pinBtn.classList.toggle("on", !!t.pinned);
     this.tick();
@@ -234,7 +234,7 @@ export class TaskWindow {
       chip("model", this.modelLabel() || "modèle", `Modèle : ${t.model_resolved || t.model}`),
     );
     if (t.effort) bits.push(chip("gauge", t.effort, `Effort : ${t.effort}`, true));
-    bits.push(chip("folder", baseName(t.workdir), `Dossier de travail : ${t.workdir}`, true));
+    bits.push(chip("folder", this.ctx.projectName?.(t.workdir) || baseName(t.workdir), `Dossier de travail : ${t.workdir}`, true));
     const mcp = t.mcp || [];
     if (mcp.length) {
       const ok = mcp.filter((s) => s.status === "connected").length;
@@ -611,10 +611,11 @@ export class TaskWindow {
     }
   }
 
-  async decide(p, decision, message = "", answers = null, el = null) {
+  async decide(p, decision, message = "", answers = null, el = null, remember = []) {
     el?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     try {
-      await api(`/api/tasks/${this.id}/approvals/${p.id}`, { method: "POST", body: { decision, message, answers } });
+      const r = await api(`/api/tasks/${this.id}/approvals/${p.id}`, { method: "POST", body: { decision, message, answers, remember } });
+      if (r?.remembered?.length) toast(`Mémorisé pour ce projet : ${r.remembered.join(", ")}`, "ok");
     } catch (e) {
       toast(e.message, "err");
       el?.querySelectorAll("button").forEach((b) => { b.disabled = false; });
@@ -629,6 +630,20 @@ export class TaskWindow {
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
     const el = h("div", { class: "appr" });
     const mcpWrite = p.tool.startsWith("mcp__");
+    // "Toujours pour ce projet": the proposed rules, editable, one per line
+    const rules = h("textarea", { class: "appr-rules", rows: String(Math.max(1, (p.suggest || []).length)), spellcheck: "false" });
+    rules.value = (p.suggest || []).join("\n");
+    const folder = String(this.task.workdir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+    const always = h("div", { class: "appr-always", hidden: true },
+      h("div", { class: "muted" }, `Règle mémorisée pour les discussions du dossier ${folder}. Les chemins protégés, les refus permanents et les contraintes Odoo restent appliqués.`),
+      rules,
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn small ghost", on: { click: () => { always.hidden = true; } } }, "Annuler"),
+        h("button", { type: "button", class: "btn small ok", on: { click: () => {
+          const list = rules.value.split("\n").map((x) => x.trim()).filter(Boolean);
+          if (!list.length) { rules.focus(); return; }
+          this.decide(p, "allow", msg.value, null, el, list);
+        } } }, "Mémoriser et approuver")));
     // Actions come first so they stay visible in a small window; the detail follows.
     el.append(...[
       this.apprHead(toolIcon(p.tool), "Validation requise", toolLabel(p.tool)),
@@ -636,7 +651,10 @@ export class TaskWindow {
       h("div", { class: "appr-reason" }, p.reason),
       h("div", { class: "appr-actions" }, msg,
         h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        p.suggest?.length ? h("button", { type: "button", class: "btn", title: "Approuver et ne plus demander pour ce type d'action dans ce projet",
+          on: { click: () => { always.hidden = false; rules.focus(); } } }, "Toujours pour ce projet") : null,
         h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } }, "Approuver")),
+      always,
       h("details", { open: mcpWrite || p.tool === "Edit" || p.tool === "Write" },
         h("summary", { class: "muted" }, "Détail de l'action proposée"), inputView(p.tool, p.input)),
     ].filter(Boolean));

@@ -1,7 +1,7 @@
 // Configuration window: a working copy of the config edited through tabs,
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
-import { restartConsole } from "./system.js";
+import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
 import { confirmDialog, fmtDate, h, toast } from "./util.js";
 
 const TABS = [
@@ -205,6 +205,7 @@ function tabGeneral() {
       text("Dossier des pièces jointes", `${g}.attachments_dir`, { placeholder: "~/ClaudeConsole/pieces-jointes", cls: "wide",
         help: "Chaque tâche y a son sous-dossier (date_identifiant), ajouté à ses dossiers de travail. Rien n'y est effacé automatiquement." }),
       check("Questions interactives (AskUserQuestion)", `${g}.ask_user_questions`, { help: "Claude peut te poser des questions dans la fenêtre." }),
+      check("Lire les limites des comptes au démarrage", `${g}.limits_on_start`, { help: "Si la dernière mesure date de plus de 3 h : une toute petite requête (Haiku) par compte. Sinon elles se mettent à jour à chaque tâche." }),
       lines("Variables d'environnement retirées", `${g}.env_strip`, { help: "Motifs retirés de l'environnement des tâches (ANTHROPIC_* évite toute facturation par clé API)." }),
     )),
     launcherSection(),
@@ -491,7 +492,8 @@ function launcherSection() {
         + "Il démarre la console si besoin et l'ouvre. Astuce : installe aussi l'app (bouton Installer en haut) ; le lanceur ouvre alors l'app installée "
         + "et sa fenêtre porte l'icône JARVIS au lieu de celle de Chrome.";
   }).catch(() => { state.textContent = ""; });
-  return section("Lanceur", null, help, h("div", { class: "row" }, btn), state);
+  const setup = h("button", { type: "button", class: "btn", on: { click: async () => { const c = ctx; await close(); if (!overlay) c.openSetup?.(); } } }, "Assistant de démarrage");
+  return section("Lanceur", null, help, h("div", { class: "row" }, btn, setup), state);
 }
 
 function serverSection() {
@@ -513,8 +515,26 @@ function serverSection() {
       ? `Le serveur tourne en arrière-plan, sans fenêtre. Journal : ${s.log}`
       : "Cette console n'a pas été lancée par start.bat / start.command : arrête-la depuis le terminal qui l'a lancée (Ctrl+C).";
   }).catch(() => { info.textContent = ""; });
+  // updates from GitHub
+  const upd = h("div", { class: "muted" }, "");
+  const install = h("button", { type: "button", class: "btn primary", hidden: true, on: { click: () => updateConsole() } }, "Mettre à jour");
+  const describe = (u) => {
+    install.hidden = !(u.behind > 0);
+    upd.textContent = u.error && !u.behind ? u.error
+      : u.behind ? `${u.behind} changement${u.behind > 1 ? "s" : ""} disponible${u.behind > 1 ? "s" : ""} : ${(u.commits || []).slice(0, 3).join(" · ")}${u.commits?.length > 3 ? "…" : ""}`
+        : `À jour${u.branch ? ` (branche ${u.branch})` : ""}${u.dirty ? " · des fichiers ont été modifiés sur ce poste : la mise à jour automatique est bloquée" : ""}.`;
+  };
+  const checkBtn = h("button", { type: "button", class: "btn", on: { click: async () => {
+    checkBtn.disabled = true;
+    upd.textContent = "Recherche sur GitHub…";
+    try { describe(await checkUpdateNow()); } catch (e) { upd.textContent = e.message; }
+    checkBtn.disabled = false;
+  } } }, "Rechercher une mise à jour");
+  api("/api/system/update").then(describe).catch(() => {});
   return section("Serveur", "Redémarrer active une mise à jour du code, sans relancer start.bat.",
-    h("div", { class: "row" }, restart, stop), info);
+    h("div", { class: "row" }, restart, stop), info,
+    h("div", { class: "row upd-row" }, checkBtn, install), upd,
+    check("Rechercher les mises à jour au démarrage, puis toutes les 6 h", "general.update_check"));
 }
 
 // ------------------------------------------------------------ actions

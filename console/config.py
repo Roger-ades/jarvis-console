@@ -90,6 +90,9 @@ class General(BaseModel):
     open_as: Literal["app", "navigateur"] = "app"
     cli_path: str = ""
     attachments_dir: str = "~/ClaudeConsole/pieces-jointes"
+    limits_on_start: bool = True  # read the plan limits at start when older than 3 h (one tiny request per account)
+    update_check: bool = True     # look for a new version on GitHub (git fetch) at start, then every 6 h
+    setup_done: bool = True       # False on a fresh install: the first-run assistant opens
     ask_user_questions: bool = True
     security_instructions: str = DEFAULT_SECURITY_PROMPT
     env_strip: list[str] = Field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
@@ -230,6 +233,50 @@ class ToolRule(BaseModel):
         return v
 
 
+class Project(BaseModel):
+    """A named working folder, like a claude.ai Project: its defaults apply when it is chosen."""
+    folder: str
+    name: str = Field(min_length=1, max_length=60)
+    color: str = "#72c9ff"
+    pinned: bool = True
+    profile: str = ""   # default account ("" = the current one)
+    preset: str = ""
+    model: str = ""
+    effort: Literal["", "low", "medium", "high", "xhigh", "max"] = ""
+    created: float = 0
+
+    @field_validator("color")
+    @classmethod
+    def _color(cls, v: str) -> str:
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", v or ""):
+            raise ValueError("couleur invalide (format #rrggbb)")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def _model(cls, v: str) -> str:
+        if not _MODEL.fullmatch(v or ""):
+            raise ValueError("nom de modèle invalide")
+        return v
+
+
+class ProjectRule(BaseModel):
+    """"Toujours autoriser ceci pour ce projet": an allow rule for the discussions of one folder.
+    It never outweighs protected paths, permanent refusals or constraints."""
+    folder: str
+    pattern: str
+    created: float = 0
+    note: str = ""
+
+    @field_validator("pattern")
+    @classmethod
+    def _pattern(cls, v: str) -> str:
+        v = v.strip()
+        if not _RULE.fullmatch(v):
+            raise ValueError(f"règle invalide : {v!r}")
+        return v
+
+
 class InputConstraint(BaseModel):
     tool: str
     path: str = Field(min_length=1)
@@ -295,6 +342,8 @@ class Config(BaseModel):
     profiles: list[Profile]
     presets: list[Preset]
     tool_rules: list[ToolRule] = Field(default_factory=list)
+    project_rules: list[ProjectRule] = Field(default_factory=list)
+    projects: list[Project] = Field(default_factory=list)
     constraints: list[InputConstraint] = Field(default_factory=list)
     security: Security = Field(default_factory=Security)
     ui: UISettings = Field(default_factory=UISettings)
@@ -407,7 +456,8 @@ def default_config() -> Config:
         InputConstraint(tool="mcp__*__create_record", path="values.state",
                         forbidden=["sale", "done", "cancel"], note="Un devis n'est jamais créé confirmé"),
     ]
-    return Config(profiles=profiles, presets=presets, tool_rules=rules, constraints=constraints)
+    return Config(profiles=profiles, presets=presets, tool_rules=rules, constraints=constraints,
+                  general=General(setup_done=False))  # a fresh install starts with the assistant
 
 
 def format_errors(exc: ValidationError) -> list[str]:

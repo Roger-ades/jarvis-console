@@ -203,3 +203,13 @@ export const STATUS = {
   error: "En erreur", cancelled: "Annulée", interrupted: "Interrompue",
 };
 export const ACTIVE = new Set(["queued", "running", "awaiting"]);
+
+/** Status label, "Programmée · 15:01" for a task waiting for its start time. */
+export function statusLabel(t) {
+  if (t.status === "queued" && t.not_before && t.not_before * 1000 > Date.now()) {
+    const d = new Date(t.not_before * 1000);
+    const same = d.toDateString() === new Date().toDateString();
+    return `Programmée · ${same ? "" : `${d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })} `}${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  return STATUS[t.status] || t.status;
+}
