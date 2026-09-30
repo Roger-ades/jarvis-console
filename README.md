@@ -128,6 +128,62 @@ d'hériter du modèle du chef. Le panneau latéral montre qui fait quoi, avec qu
 Modèles et règles du chef : Configuration → Modèles et consignes. Pour une question
 simple, laisse la case décochée : chaque délégation a un coût fixe.
 
+### Projet : consignes, mémoire, fichiers, discussions
+
+Le bouton **Projet** ouvre le dossier de travail choisi dans la barre du bas, comme un
+Projet claude.ai. N'importe quel dossier du disque peut devenir un projet : **Parcourir…**
+(ou « Autre dossier… » dans la barre du bas) ouvre un sélecteur avec Bureau, Documents,
+Téléchargements, OneDrive, disques et lecteurs réseau, un champ pour coller un chemin et
+« Nouveau dossier » ; les dossiers protégés n'y apparaissent pas. Le dossier choisi reste
+dans la liste (12 derniers par compte). Le panneau contient :
+
+- **Consignes** : le `CLAUDE.md` du dossier (lu par chaque discussion dans ce dossier,
+  console, Claude Desktop onglet Code et CLI) et celui du compte (tous ses dossiers), à
+  éditer sur place, avec un modèle pour démarrer ; plus les consignes propres à la console.
+- **Mémoire** : ce que Claude Code a retenu d'une session à l'autre dans ce dossier, à
+  corriger ou supprimer.
+- **Fichiers** : le contenu du dossier (les fichiers protégés n'apparaissent pas), avec
+  aperçu, « Citer » (ajoute le chemin à ta demande) et « Afficher dans le dossier ».
+- **Discussions** : celles de la console dans ce dossier, avec Contexte et Copie, et
+  les sessions Claude Desktop et CLI du dossier, et **Déplacer une session ici…**.
+
+**Déplacer une session dans un projet** : c'est la même session, pas une copie. Claude
+Code range chaque session sous son dossier ; la console la déplace sous le dossier du
+projet (même identifiant, références au dossier mises à jour) et met à jour la fiche de
+Claude Desktop, qui la retrouve aussi dans le nouveau dossier (ferme-la d'abord dans
+Claude Desktop si elle y est ouverte). Trois accès : Projet → Discussions → « Déplacer une
+session ici… », Sessions → bouton du dossier (« Dans … · déplacer… »), ou menu ⋯ d'une
+fenêtre → « Déplacer vers un projet… » (la même fenêtre continue dans le projet). Une
+discussion en cours ne se déplace pas. Cela permet aussi de reprendre une session dont le
+dossier d'origine a été supprimé. Reprendre une session continue la même par défaut ;
+« Continuer dans une copie » reste possible.
+
+Les doublons créés par une ancienne version (une copie par déplacement) sont signalés en
+haut du panneau Sessions : **Réunir en une seule session** redonne à chacun son
+identifiant d'origine, avec toute la suite, dans le dossier du projet.
+
+### Contexte d'autres discussions, copie d'une discussion
+
+**Contexte**, dans la barre du bas : choisis jusqu'à 5 discussions du même compte
+(console, Claude Desktop, CLI). Leur transcription propre (questions, réponses, actions,
+sans les résultats bruts des outils) est jointe à la demande ; Claude la lit si elle
+l'aide, ce qui coûte bien moins que de recharger toute une conversation. Aussi depuis le
+menu ⋯ d'une fenêtre : « Utiliser comme contexte d'une demande ».
+
+**Nouvelle discussion à partir d'ici** (menu ⋯ d'une fenêtre) : une copie repart avec
+tout le contexte, dans le même dossier ; l'originale ne change pas.
+
+### Pièces jointes
+
+Trombone de la barre du bas ou d'une fenêtre, **glisser-déposer** (sur la barre, sur une
+fenêtre ou n'importe où dans la console) ou **coller une capture d'écran** (Ctrl+V).
+Chaque fichier part aussitôt (barre de progression) ; à l'envoi, il est rangé dans le
+dossier de la tâche, `~/ClaudeConsole/pieces-jointes/<date>_<tâche>/` (réglable dans
+Configuration → Général), ajouté à ses dossiers de travail, et le message indique à Claude
+où le lire : il ouvre lui-même PDF, images et textes. Les fichiers restent visibles dans
+ta bulle (clic : aperçu), suivent la tâche si tu la relances, et ne sont jamais effacés
+automatiquement. 20 fichiers de 100 Mo au plus par message.
+
 ### Aperçus : images, PDF, pages web
 
 Les fichiers cités par Claude (chemin, lien `[texte](C:\...)`, image `![](...)`) sont
@@ -137,9 +193,11 @@ actions de fichier (Lire, Écrire, Modifier) ont un bouton œil, et une image cr
 Claude s'affiche aussitôt. Pour les autres types (Excel, Word…) : **Ouvrir avec
 l'application** ou **Afficher dans le dossier**.
 
-Seuls les fichiers des dossiers de la tâche sont accessibles, jamais un fichier protégé
-(Sécurité → chemins interdits), et la console ne lance jamais un programme (`.exe`,
-`.bat`, `.ps1`, macros…) : elle peut seulement le montrer dans son dossier.
+L'aperçu couvre les dossiers de la tâche, le dossier de travail du profil et les
+fichiers que la conversation de la tâche a elle-même cités (réponse de Claude, ses
+actions), par exemple un PDF copié ailleurs. Jamais un fichier protégé (Sécurité →
+chemins interdits, données de la console), et la console ne lance jamais un programme
+(`.exe`, `.bat`, `.ps1`, macros…) : elle peut seulement le montrer dans son dossier.
 
 Les liens web s'ouvrent dans un **mini-navigateur isolé** (Ctrl/⌘ + clic : vrai
 navigateur). Certains sites refusent l'affichage intégré : bouton « Ouvrir dans le
@@ -165,6 +223,13 @@ d'Edge à défaut ; réglable dans Configuration → Général). Pour l'installe
 vraie application (menu Démarrer, barre des tâches, barre de titre intégrée) : bouton
 **Installer** dans la barre du haut, ou menu ⋮ de Chrome → « Installer JARVIS ». Si le
 serveur n'est pas lancé, la fenêtre l'indique.
+
+**Lanceur à épingler** : Configuration → Général → **Créer le lanceur**. Sous Windows,
+« JARVIS Console » apparaît dans le menu Démarrer et sur le Bureau, avec l'icône JARVIS :
+clic droit → Épingler à la barre des tâches. Sur Mac, une app « JARVIS Console » dans ton
+dossier Applications, à glisser dans le Dock. Le lanceur démarre la console si besoin et
+l'ouvre ; si l'app est installée (ci-dessus), il ouvre l'app installée, dont la fenêtre
+porte aussi l'icône JARVIS au lieu de celle du navigateur.
 
 ### Routines
 
@@ -272,6 +337,12 @@ jeton, journal) et `.venv/` ne sont jamais remplacés par une mise à jour.
 3. Relance `start.bat` / `start.command` : les dépendances sont réinstallées d'elles-mêmes
    si `requirements.txt` a changé. Les nouveaux réglages prennent leur valeur par défaut ;
    une configuration devenue invalide est mise de côté et la dernière version valide reprise.
+
+La page se recharge avec les nouveaux fichiers, mais le serveur garde son ancien code tant
+qu'il n'a pas redémarré : un bandeau **« Mise à jour installée »** l'indique alors, avec un
+bouton **Redémarrer** (aussi dans Configuration → Général). Les tâches en cours sont
+interrompues, la page se recharge d'elle-même. Si `requirements.txt` a changé, passe
+plutôt par l'arrêt et `start.bat`, qui réinstalle les dépendances.
 
 Claude Code se met à jour avec les apps Claude Desktop : la console prend la version la
 plus récente (ou le chemin fixé dans Configuration → Général). Après une mise à jour,

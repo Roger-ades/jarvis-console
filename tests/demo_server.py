@@ -54,6 +54,7 @@ def main():
     store = ConfigStore(data)
     cfg = store.config if (data / "config.json").exists() else default_config()
     cfg.general.port = port
+    cfg.general.attachments_dir = str(ROOT / ".demo-work" / "pieces-jointes")
     for p in cfg.profiles:
         # Work folders must live outside the console's data folder, which agents may not touch.
         p.workdir = str(ROOT / ".demo-work" / p.id)

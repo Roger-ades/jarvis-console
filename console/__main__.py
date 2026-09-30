@@ -58,11 +58,23 @@ def app_browser() -> str | None:
     return None
 
 
-def open_ui(url: str, mode: str):
-    """A separate app window (no tabs, no address bar) when possible, else a browser tab."""
+def open_ui(url: str, mode: str, data_dir: Path | None = None):
+    """A separate app window (no tabs, no address bar) when possible, else a browser tab.
+    Once the console is installed as an app, that app: its window carries the JARVIS icon."""
+    import subprocess
+    # "ui-seen": the browser already holds the access token, so the app may open on its own start page
+    if mode == "app" and data_dir is not None and (data_dir / "ui-seen").exists():
+        from . import winsys
+        cmd = winsys.installed_app()
+        if cmd:
+            try:
+                extra = [f"--app-launch-url-for-shortcuts-menu-item={url}"] if os.name == "nt" else []
+                subprocess.Popen(cmd + extra, close_fds=True)
+                return
+            except OSError:
+                pass
     exe = app_browser() if mode == "app" else None
     if exe:
-        import subprocess
         try:
             subprocess.Popen([exe, f"--app={url}"], close_fds=True)
             return
@@ -78,7 +90,12 @@ def main(argv=None) -> int:
     ap.add_argument("--data-dir", default=os.environ.get("CONSOLE_DATA_DIR"))
     ap.add_argument("--no-browser", action="store_true", default=os.environ.get("CONSOLE_NO_BROWSER") == "1")
     ap.add_argument("--background", action="store_true", help="sans fenêtre (journal dans data/console.log)")
+    ap.add_argument("--after-restart", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        # output piped to a file on Windows is cp1252: an accent or an arrow must not crash the start
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     # pythonw.exe has no console at all: behave as --background
     background = args.background or sys.stdout is None
 
@@ -88,6 +105,8 @@ def main(argv=None) -> int:
     from .config import ConfigStore
     cfg = ConfigStore(data_dir).config
     port = args.port or int(os.environ.get("CONSOLE_PORT") or cfg.general.port)
+    if args.after_restart:
+        _wait_port_free(port)
 
     try:
         running = _call(port, "/api/ping").get("app") == "jarvis-console"
@@ -99,7 +118,7 @@ def main(argv=None) -> int:
         url = f"http://127.0.0.1:{port}/#code={code}"
         print(f"\n  La console tourne déjà. Nouvel accès : {url}\n")
         if not args.no_browser:
-            open_ui(url, cfg.general.open_as)
+            open_ui(url, cfg.general.open_as, data_dir)
         return 0
 
     import uvicorn
@@ -117,7 +136,7 @@ def main(argv=None) -> int:
     print(f"  Accès (lien à usage unique, valable 15 min) : {url}")
     print("  Pour rouvrir plus tard : relance start.bat. Arrêt : Configuration → Général, ou Ctrl+C.\n", flush=True)
     if not args.no_browser:
-        threading.Timer(1.2, open_ui, [url, cfg.general.open_as]).start()
+        threading.Timer(1.2, open_ui, [url, cfg.general.open_as, data_dir]).start()
     server.run()
     if not server.started:
         _fatal(f"Le port {port} est déjà utilisé par un autre programme : change-le dans Configuration → Général "
@@ -126,12 +145,30 @@ def main(argv=None) -> int:
     return 0
 
 
+def _wait_port_free(port: int, timeout: float = 60.0):
+    """Restart from the UI: the previous console is still closing its connections."""
+    import socket
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return
+            except OSError:
+                pass
+        time.sleep(0.3)
+
+
 def _redirect_output(data_dir: Path):
     """Windowless run (pythonw): logs go to data/console.log, kept under 2 Mo."""
     data_dir.mkdir(parents=True, exist_ok=True)
     log = data_dir / "console.log"
     if log.exists() and log.stat().st_size > 2_000_000:
-        log.replace(data_dir / "console.log.1")
+        try:
+            log.replace(data_dir / "console.log.1")
+        except OSError:
+            pass  # still open by a console that is closing (restart): rotate next time
     fh = open(log, "a", encoding="utf-8", buffering=1)
     sys.stdout = sys.stderr = fh
 

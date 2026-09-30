@@ -1,5 +1,6 @@
 // One task = one window: compact header, timeline, inspector panel, approvals, follow-up.
 import { api } from "./api.js";
+import { Attacher } from "./attach.js";
 import { mdElement } from "./md.js";
 import {
   ACTIVE, STATUS, confirmDialog, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, toast, toolIcon, toolLabel,
@@ -138,10 +139,14 @@ export class TaskWindow {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendFollowup(); }
     });
     this.input.addEventListener("input", () => autoGrow(this.input, 120));
-    this.foot = h("footer", { class: "win-foot" }, this.input,
+    this.attList = h("div", { class: "att-list win-att" });
+    this.att = new Attacher(this.attList);
+    this.att.bindDrop(this.el);
+    this.att.bindPaste(this.input);
+    this.foot = h("footer", { class: "win-foot" }, this.input, this.att.button("icon-btn"),
       h("button", { type: "button", class: "send-mini", title: "Envoyer (Entrée)", "aria-label": "Envoyer", svg: "send",
         on: { click: () => this.sendFollowup() } }));
-    this.el.append(this.head, this.sub, this.main, this.approvals, this.foot);
+    this.el.append(this.head, this.sub, this.main, this.approvals, this.attList, this.foot);
     this.timer = setInterval(() => this.tick(), 1000);
     this.update(t);
   }
@@ -155,6 +160,7 @@ export class TaskWindow {
 
   destroy() {
     clearInterval(this.timer);
+    this.att.picker.remove();
     wm.unregister(this.id);
   }
 
@@ -219,7 +225,9 @@ export class TaskWindow {
         svg("bot"), h("span", {}, `Équipe · ${Object.values(t.team_agents || {}).join(" / ")}`)));
     }
     if (t.routine) bits.push(chip("clock", `Routine · ${t.routine.name}`, "Lancée par une routine"));
-    if (t.resumed_from) bits.push(chip("retry", t.origin === "reprise desktop" ? "Reprise Claude Desktop" : "Reprise",
+    if (t.resumed_from) bits.push(chip(t.origin === "copie" ? "branch" : "retry",
+      t.origin === "reprise desktop" ? "Reprise Claude Desktop" : t.origin === "copie" ? "Copie d'une discussion"
+        : t.origin === "déplacée" ? "Déplacée dans ce projet" : "Reprise",
       `Suite de la session ${t.resumed_from}${t.fork_next === false ? " (copie)" : ""}`));
     bits.push(
       chip("shieldq", t.preset_name, `Autorisations : ${t.preset_name}${t.preset_mode ? ` (${t.preset_mode})` : ""}`),
@@ -343,6 +351,20 @@ export class TaskWindow {
     if (stick) this.body.scrollTop = this.body.scrollHeight;
   }
 
+  /** The user's message, with its attachments (click: preview). */
+  userMsg(d) {
+    const box = h("div", { class: "msg user" }, d.text || "");
+    if (d.files?.length) {
+      const list = h("div", { class: "msg-files" }, ...d.files.map((f) => h("a", {
+        href: "#", class: `fileref att-ref${f.context ? " ctx" : ""}${IMG_FILE.test(f.name) ? " img" : ""}`, "data-path": f.path,
+        title: f.context ? `Contexte : transcription de « ${f.title} »` : `Aperçu : ${f.path}`,
+      }, svg(f.context ? "link" : "clip"), h("span", {}, f.context ? f.title : f.name))));
+      box.append(list);
+      list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id));
+    }
+    return box;
+  }
+
   line(text, cls = "", ico = "") {
     return h("div", { class: `line ${cls}` }, ico ? svg(ico) : null, h("span", {}, text));
   }
@@ -391,7 +413,7 @@ export class TaskWindow {
       case "history": {
         const items = d.items || [];
         const list = h("div", { class: "hist-list" }, ...items.map((i) => i.role === "user"
-          ? h("div", { class: "msg user" }, i.text)
+          ? this.userMsg(i)
           : i.role === "tool" ? h("div", { class: "line" }, svg("dot"), i.text) : this.md(i.text, "md msg assistant")));
         this.push(h("details", { class: "hist" },
           h("summary", {}, svg("clock"), `Session reprise · ${d.total || items.length} messages précédents`,
@@ -399,7 +421,7 @@ export class TaskWindow {
         break;
       }
       case "user":
-        this.push(h("div", { class: "msg user" }, d.text));
+        this.push(this.userMsg(d));
         break;
       case "info":
         this.push(this.line(d.text, "", "info"), parent);
@@ -671,11 +693,14 @@ export class TaskWindow {
   // ------------------------------------------------------------ actions
   async sendFollowup() {
     const text = this.input.value.trim();
-    if (!text) return;
+    const files = this.att.ids();
+    if (!text && !files.length && !this.att.busy()) return;
+    if (!this.att.ready()) return;
     this.input.value = "";
     autoGrow(this.input, 120);
     try {
-      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text } });
+      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text, attachments: files } });
+      this.att.sent(files);
     } catch (e) {
       toast(e.message, "err");
       if (!this.input.value.trim()) this.input.value = text;
@@ -710,6 +735,10 @@ export class TaskWindow {
     const t = this.task;
     const others = this.ctx.profiles().filter((p) => p.id !== t.profile);
     popupMenu(anchor, [
+      { label: "Nouvelle discussion à partir d'ici", disabled: !t.resumable, run: () => this.ctx.fork(t) },
+      { label: "Utiliser comme contexte d'une demande", disabled: !t.resumable, run: () => this.ctx.addContext(t) },
+      { label: "Déplacer vers un projet…", disabled: !t.resumable, run: () => this.ctx.move(t) },
+      "-",
       { label: "Relancer", run: () => this.ctx.retry(this.id) },
       ...others.map((p) => ({ label: `Dupliquer avec ${p.name}`, run: () => this.ctx.duplicate(this.id, p.id) })),
       "-",

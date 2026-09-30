@@ -89,6 +89,7 @@ class General(BaseModel):
     notifications: bool = True
     open_as: Literal["app", "navigateur"] = "app"
     cli_path: str = ""
+    attachments_dir: str = "~/ClaudeConsole/pieces-jointes"
     ask_user_questions: bool = True
     security_instructions: str = DEFAULT_SECURITY_PROMPT
     env_strip: list[str] = Field(default_factory=lambda: list(DEFAULT_ENV_STRIP))

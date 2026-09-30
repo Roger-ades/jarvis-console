@@ -1,6 +1,7 @@
 // Configuration window: a working copy of the config edited through tabs,
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
+import { restartConsole } from "./system.js";
 import { confirmDialog, fmtDate, h, toast } from "./util.js";
 
 const TABS = [
@@ -201,9 +202,12 @@ function tabGeneral() {
       h("button", { type: "button", class: "btn small", on: { click: askNotify } }, "Autoriser les notifications"))),
     section("Claude Code", "La console pilote la CLI Claude Code installée sur ce poste (celle des apps Claude Desktop est détectée automatiquement).", grid(
       text("Chemin de la CLI", `${g}.cli_path`, { placeholder: meta.cli_detected || "détection automatique", help: `Détectée : ${meta.cli_detected || "aucune"}`, cls: "wide" }),
+      text("Dossier des pièces jointes", `${g}.attachments_dir`, { placeholder: "~/ClaudeConsole/pieces-jointes", cls: "wide",
+        help: "Chaque tâche y a son sous-dossier (date_identifiant), ajouté à ses dossiers de travail. Rien n'y est effacé automatiquement." }),
       check("Questions interactives (AskUserQuestion)", `${g}.ask_user_questions`, { help: "Claude peut te poser des questions dans la fenêtre." }),
       lines("Variables d'environnement retirées", `${g}.env_strip`, { help: "Motifs retirés de l'environnement des tâches (ANTHROPIC_* évite toute facturation par clé API)." }),
     )),
+    launcherSection(),
     serverSection(),
     section("Sauvegarde de la configuration", "Export et import en JSON, validés par le schéma ; chaque enregistrement garde la version précédente.",
       h("div", { class: "row" },
@@ -463,6 +467,33 @@ function tabHistory() {
   ];
 }
 
+function launcherSection() {
+  const state = h("div", { class: "muted" }, "…");
+  const help = h("p", { class: "muted" });
+  const btn = h("button", { type: "button", class: "btn primary", disabled: true, on: { click: async () => {
+    btn.disabled = true;
+    try {
+      const { paths } = await api("/api/system/launcher", { method: "POST" });
+      state.textContent = `Lanceur créé : ${paths.join(" · ")}`;
+      btn.textContent = "Recréer le lanceur";
+      toast("Lanceur JARVIS créé.", "ok");
+    } catch (e) { toast(e.message, "err"); }
+    btn.disabled = false;
+  } } }, "Créer le lanceur");
+  api("/api/system").then((s) => {
+    const mac = s.platform === "mac";
+    btn.disabled = !(mac || s.platform === "nt");
+    btn.textContent = s.launcher ? "Recréer le lanceur" : "Créer le lanceur";
+    state.textContent = s.launcher ? "Lanceur présent." : "Pas encore de lanceur.";
+    help.textContent = mac
+      ? "Crée « JARVIS Console » dans ton dossier Applications : glisse-le dans le Dock. Il démarre la console si besoin et l'ouvre."
+      : "Crée « JARVIS Console » dans le menu Démarrer et sur le Bureau, avec l'icône JARVIS. Clic droit dessus → Épingler à la barre des tâches. "
+        + "Il démarre la console si besoin et l'ouvre. Astuce : installe aussi l'app (bouton Installer en haut) ; le lanceur ouvre alors l'app installée "
+        + "et sa fenêtre porte l'icône JARVIS au lieu de celle de Chrome.";
+  }).catch(() => { state.textContent = ""; });
+  return section("Lanceur", null, help, h("div", { class: "row" }, btn), state);
+}
+
 function serverSection() {
   const info = h("div", { class: "muted" }, "…");
   const stop = h("button", { type: "button", class: "btn danger", disabled: true, on: { click: async () => {
@@ -474,13 +505,16 @@ function serverSection() {
     try { await api("/api/system/shutdown", { method: "POST" }); toast("Console arrêtée. Relance start.bat pour la rouvrir.", "ok"); }
     catch (e) { toast(e.message, "err"); }
   } } }, "Arrêter la console");
+  const restart = h("button", { type: "button", class: "btn", disabled: true, on: { click: restartConsole } }, "Redémarrer la console");
   api("/api/system").then((s) => {
     stop.disabled = !s.stoppable;
+    restart.disabled = !s.stoppable;
     info.textContent = s.stoppable
       ? `Le serveur tourne en arrière-plan, sans fenêtre. Journal : ${s.log}`
       : "Cette console n'a pas été lancée par start.bat / start.command : arrête-la depuis le terminal qui l'a lancée (Ctrl+C).";
   }).catch(() => { info.textContent = ""; });
-  return section("Serveur", null, h("div", { class: "row" }, stop), info);
+  return section("Serveur", "Redémarrer active une mise à jour du code, sans relancer start.bat.",
+    h("div", { class: "row" }, restart, stop), info);
 }
 
 // ------------------------------------------------------------ actions

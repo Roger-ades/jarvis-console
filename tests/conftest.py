@@ -27,6 +27,7 @@ def wait_for(pred, timeout=15.0, step=0.05):
 
 def make_config(tmp: Path):
     cfg = default_config()
+    cfg.general.attachments_dir = str(tmp / "pieces-jointes")
     for p in cfg.profiles:
         p.workdir = str(tmp / "work" / p.id)
         p.config_dir = str(tmp / "cfg" / p.id)

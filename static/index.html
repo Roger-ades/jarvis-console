@@ -26,6 +26,9 @@
       <button class="btn ghost" id="btn-install" hidden title="Installer JARVIS comme application (fenêtre séparée, menu Démarrer)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span class="lbl">Installer</span>
       </button>
+      <button class="btn ghost" id="btn-project" title="Projet : consignes, mémoire, fichiers et discussions du dossier de travail">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/></svg><span class="lbl">Projet</span>
+      </button>
       <button class="btn ghost" id="btn-sessions" title="Sessions Claude Code existantes (Claude Desktop, CLI, console)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Sessions</span>
       </button>
@@ -90,37 +93,49 @@
     <nav id="taskbar" class="taskbar" hidden></nav>
     <form id="commandbar" class="composer" autocomplete="off">
       <div id="suggest" class="suggest" hidden></div>
+      <div id="cmd-context" class="att-list" hidden></div>
+      <div id="cmd-files" class="att-list" hidden></div>
       <textarea id="cmd-input" rows="1" placeholder="Demande à Claude…" spellcheck="true"></textarea>
       <div class="composer-bar">
         <div id="cmd-profiles" class="seg" role="radiogroup" aria-label="Profil"></div>
-        <label class="chip-select" title="Modèle">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>
-          <select id="opt-model" aria-label="Modèle"></select>
-        </label>
-        <button type="button" id="opt-team" class="chip-toggle" aria-pressed="false"
-                title="Mode équipe : le modèle choisi dirige, des sous-agents moins chers (ou un expert) font le travail">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M12 10v3M12 13l-5 2.5M12 13l5 2.5"/></svg>
-          <span>Équipe</span>
-        </button>
-        <label class="chip-select" title="Autorisations">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
-          <select id="opt-preset" aria-label="Autorisations"></select>
-        </label>
-        <label class="chip-select" title="Effort">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18h3v-4H4zM10.5 18h3V10h-3zM17 18h3V6h-3z"/></svg>
-          <select id="opt-effort" aria-label="Effort">
-            <option value="">effort par défaut</option><option value="low">effort faible</option><option value="medium">effort moyen</option>
-            <option value="high">effort élevé</option><option value="xhigh">effort très élevé</option><option value="max">effort max</option>
-          </select>
-        </label>
-        <label class="chip-select grow" title="Dossier de travail">
+        <label class="chip-select folder" title="Dossier de travail">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           <select id="opt-workdir" aria-label="Dossier de travail"></select>
         </label>
-        <span class="composer-hint"><kbd>↵</kbd> envoyer <kbd>⇧↵</kbd> ligne</span>
-        <button type="submit" class="send-btn" id="cmd-send" title="Envoyer (Entrée)" aria-label="Envoyer">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+        <button type="button" id="opt-summary" class="chip-select opts-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="opt-panel"
+                title="Réglages de la demande : modèle, autorisations, effort, mode équipe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>
+          <span id="opt-summary-text">Réglages</span>
         </button>
+        <div class="composer-tools">
+          <button type="submit" class="send-btn" id="cmd-send" title="Envoyer (Entrée · Maj+Entrée : nouvelle ligne)" aria-label="Envoyer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="opt-panel" class="opt-panel" role="dialog" aria-label="Réglages de la demande" hidden>
+        <div class="opt-head">Réglages de la prochaine demande</div>
+        <label class="opt-row">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>Modèle</span>
+          <select id="opt-model" aria-label="Modèle"></select>
+        </label>
+        <label class="opt-row">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Autorisations</span>
+          <select id="opt-preset" aria-label="Autorisations"></select>
+        </label>
+        <label class="opt-row">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18h3v-4H4zM10.5 18h3V10h-3zM17 18h3V6h-3z"/></svg>Effort</span>
+          <select id="opt-effort" aria-label="Effort">
+            <option value="">par défaut</option><option value="low">faible</option><option value="medium">moyen</option>
+            <option value="high">élevé</option><option value="xhigh">très élevé</option><option value="max">max</option>
+          </select>
+        </label>
+        <div class="opt-row">
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3"/><circle cx="5" cy="17" r="2.5"/><circle cx="19" cy="17" r="2.5"/><path d="M12 10v3M12 13l-5 2.5M12 13l5 2.5"/></svg>Mode équipe</span>
+          <button type="button" id="opt-team" class="chip-toggle" aria-pressed="false"
+                  title="Mode équipe : le modèle choisi dirige, des sous-agents moins chers (ou un expert) font le travail"><span>Équipe</span></button>
+        </div>
+        <p class="opt-note">Valeurs par défaut de chaque compte : Configuration → Profils.</p>
       </div>
     </form>
   </div>
@@ -128,6 +143,7 @@
   <aside id="history" class="drawer" hidden aria-label="Historique"></aside>
   <aside id="sessions" class="drawer wide" hidden aria-label="Sessions Claude Code"></aside>
   <aside id="routines" class="drawer wide" hidden aria-label="Routines"></aside>
+  <aside id="project" class="drawer wide" hidden aria-label="Projet"></aside>
   <div id="modal-root"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
 </body>

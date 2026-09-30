@@ -22,6 +22,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import attachments as att
 from . import claude_cli, cloud, library, mcp
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ToolRule, dump,
                      expand_path)
@@ -354,7 +355,9 @@ class Engine:
                     preset: str | None = None, workdir: str | None = None, effort: str | None = None,
                     confirmed: bool = False, retry_of: str | None = None, resume: str | None = None,
                     fork: bool = True, history: list | None = None, origin: str = "",
-                    routine: dict | None = None, closed: bool = False, team: bool = False) -> dict:
+                    routine: dict | None = None, closed: bool = False, team: bool = False,
+                    attachments: list[str] | None = None, context: list[dict] | None = None,
+                    extra_dirs: list[str] | None = None) -> dict:
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif : réactive la console avant de lancer une tâche.", 423)
         cfg = self.cfg
@@ -365,8 +368,9 @@ class Engine:
             if pid:
                 profile = pid
                 text = text[m.end():].strip()
-        if not text:
+        if not text and not attachments and not context:
             raise TaskError("Demande vide.")
+        text = text or ("Voici des pièces jointes." if attachments else "Reprends le contexte joint.")
         prof = cfg.profile(profile or cfg.general.default_profile)
         if not prof:
             raise TaskError(f"Profil inconnu : {profile}")
@@ -386,6 +390,7 @@ class Engine:
         if effort not in ("", "low", "medium", "high", "xhigh", "max"):
             raise TaskError("Niveau d'effort invalide.")
         add_dirs = [d for d in (expand_path(x) for x in prof.add_dirs) if d and Path(d).is_dir()]
+        add_dirs += [d for d in (extra_dirs or []) if d and Path(d).is_dir() and d not in add_dirs]
         if resume and not re.fullmatch(r"[0-9a-fA-F-]{36}", resume):
             raise TaskError("Identifiant de session invalide.")
         team_agents, team_models, team_prompt = ({}, {}, "")
@@ -395,6 +400,14 @@ class Engine:
             team_agents, team_models, team_prompt = team_mod.build(model, cfg.team, resolved)
         tid = secrets.token_hex(4)
         now = time.time()
+        root = self.attachments_root()
+        adir = att.task_dir(root, tid, now)
+        try:
+            files = att.claim(root, attachments, adir) if attachments else []
+        except att.AttachmentError as e:
+            raise TaskError(str(e), e.status) from e
+        if context:
+            files += self._context_files(prof, context, adir)
         t = {
             "id": tid, "title": _title(text), "prompt": text, "profile": prof.id,
             "profile_name": prof.name, "color": prof.color, "model": model, "effort": effort,
@@ -404,7 +417,8 @@ class Engine:
             "cost_usd": 0.0, "duration_ms": 0, "result": "", "error": "", "is_error": False,
             "pinned": False, "closed": bool(closed), "retry_of": retry_of, "pending": [], "mcp": [],
             "todos": [], "usage": {}, "output_bytes": 0, "truncated": False, "model_resolved": "",
-            "queued_messages": [text], "origin": origin, "routine": routine,
+            "queued_messages": [att.message(text, files)], "origin": origin, "routine": routine,
+            "attachments_dir": str(adir), "attachments": files,
             "resumed_from": resume, "fork_next": bool(resume and fork),
             "team": bool(team_agents), "team_agents": team_models,
             "spec": {"profile": dump_model(prof), "preset": dump_model(pre),
@@ -423,8 +437,9 @@ class Engine:
             self._save(t)
             if history:
                 self._event(tid, "history", {"session": resume, "items": history[-40:], "total": len(history)})
-            self._event(tid, "user", {"text": text, "first": True})
+            self._event(tid, "user", {"text": text, "first": True, **({"files": files} if files else {})})
             self._audit("tâche créée", {"demande": _clip(text, 2000), "modèle": model, "preset": pre.name,
+                                        **({"pièces jointes": [f["path"] for f in files]} if files else {}),
                                         "dossier": wd, "effort": effort or "défaut",
                                         **({"équipe": team_models} if team_agents else {}),
                                         **({"reprise": resume, "copie": fork} if resume else {}),
@@ -437,7 +452,7 @@ class Engine:
         t = self._get(tid)
         return self.create_task(t["prompt"], profile=t["profile"], model=t["model"], preset=t["preset"],
                                 workdir=t["workdir"], effort=t["effort"], confirmed=confirmed, retry_of=tid,
-                                team=bool(t.get("team")))
+                                team=bool(t.get("team")), attachments=self._restage(t))
 
     def duplicate(self, tid: str, profile: str, confirmed: bool = False) -> dict:
         t = self._get(tid)
@@ -446,7 +461,133 @@ class Engine:
             raise TaskError(f"Profil inconnu : {profile}")
         preset = t["preset"] if self.cfg.preset(t["preset"]) else None
         return self.create_task(t["prompt"], profile=prof.id, model=t["model"], preset=preset,
-                                effort=t["effort"], confirmed=confirmed, retry_of=tid, team=bool(t.get("team")))
+                                effort=t["effort"], confirmed=confirmed, retry_of=tid, team=bool(t.get("team")),
+                                attachments=self._restage(t))
+
+    def fork(self, tid: str, prompt: str, confirmed: bool = False) -> dict:
+        """A new discussion that starts with this one's whole context; the original stays as it is."""
+        t = self._get(tid)
+        if not t.get("session_started"):
+            raise TaskError("Cette discussion n'a pas encore démarré : rien à reprendre.", 409)
+        prof = self.cfg.profile(t["profile"])
+        if not prof:
+            raise TaskError("Profil inconnu.", 404)
+        history = [{"role": i["role"], "text": (i.get("text") or f"{i.get('name')} · {i.get('target', '')}")[:1500]}
+                   for i in library.read_transcript(prof, t["session_id"], limit=60) if not i.get("sidechain")]
+        n = self.create_task(prompt, profile=prof.id, model=t["model"], preset=t["preset"] if self.cfg.preset(t["preset"]) else None,
+                             workdir=t["workdir"], effort=t["effort"], confirmed=confirmed, resume=t["session_id"], fork=True,
+                             history=history, origin="copie", team=bool(t.get("team")),
+                             extra_dirs=[t["attachments_dir"]] if t.get("attachments_dir") else None)
+        self._audit("discussion copiée", {"depuis": tid}, self.tasks[n["id"]])
+        return n
+
+    # -------------------------------------------------------- moving a session into a project
+    def move_session(self, pid: str, sid: str, folder: str) -> dict:
+        """The same session, moved into another folder: its transcript is filed where Claude Code
+        looks for it from there, Claude Desktop's record and the console's windows follow."""
+        prof = self.cfg.profile(pid)
+        if not prof:
+            raise TaskError("Profil inconnu.", 404)
+        if not library.UUID.match(sid or ""):
+            raise TaskError("Identifiant de session invalide.")
+        _, target = self._ws_folder(prof.id, folder)
+        with self._lock:
+            linked = [t for t in self.tasks.values() if t.get("session_id") == sid and t.get("profile") == prof.id]
+            if any(t["id"] in self.runs for t in linked):
+                raise TaskError("Cette discussion est en cours : attends qu'elle se termine pour la déplacer.", 409)
+        try:
+            res = library.move_session(prof, sid, target)
+        except FileNotFoundError as e:
+            raise TaskError("Transcription de la session introuvable.", 404) from e
+        except FileExistsError as e:
+            raise TaskError("Une session du même identifiant existe déjà dans ce projet.", 409) from e
+        with self._lock:
+            for t in linked:
+                t["workdir"] = target
+                self._save(t)
+                self._event(t["id"], "info", {"text": f"Discussion déplacée dans le projet {Path(target).name} ({target})."})
+        self._audit("session déplacée dans un projet", {"session": sid, "vers": target,
+                                                        "claude desktop": "mis à jour" if res["desktop"] else "non concerné"})
+        return {"session": sid, "folder": target, "desktop": res["desktop"], "tasks": [t["id"] for t in linked]}
+
+    def move_task(self, tid: str, folder: str) -> dict:
+        t = self._get(tid)
+        if tid in self.runs:
+            raise TaskError("Cette discussion est en cours : attends qu'elle se termine pour la déplacer.", 409)
+        if t.get("session_started"):
+            self.move_session(t["profile"], t["session_id"], folder)
+        else:
+            _, target = self._ws_folder(t["profile"], folder)
+            with self._lock:
+                t["workdir"] = target
+                self._save(t)
+        return self.public(self._get(tid))
+
+    def moved_copies(self, pid: str | None = None) -> list[dict]:
+        """Duplicates left by the former "move" (a copy per move): listed so they can be merged back."""
+        rows = []
+        for prof in self.cfg.profiles:
+            if pid in (None, "", prof.id):
+                rows += [{**r, "profile": prof.id, "profile_name": prof.name} for r in library.moved_copies(prof)]
+        return rows
+
+    def merge_moved_copies(self, pid: str | None = None) -> dict:
+        merged, skipped = [], []
+        for row in self.moved_copies(pid):
+            prof = self.cfg.profile(row["profile"])
+            with self._lock:
+                busy = any(t.get("session_id") in (row["original"], row["copy"]) and t["id"] in self.runs for t in self.tasks.values())
+            if busy:
+                skipped.append({**row, "reason": "discussion en cours"})
+                continue
+            try:
+                res = library.merge_moved_copy(prof, row["original"], row["copy"])
+            except (OSError, ValueError) as e:
+                skipped.append({**row, "reason": str(e)})
+                continue
+            with self._lock:
+                for t in self.tasks.values():
+                    if t.get("profile") == prof.id and t.get("session_id") in (row["original"], row["copy"]):
+                        t["session_id"] = row["original"]
+                        t["workdir"] = str(Path(res["folder"]).resolve()) if res["folder"] else t["workdir"]
+                        t["resumed_from"] = t.get("resumed_from") and row["original"]
+                        self._save(t)
+            merged.append({**row, **res})
+        if merged:
+            self._audit("copies de sessions réunies", {"réunies": [m["original"] for m in merged]})
+        return {"merged": merged, "skipped": skipped}
+
+    def _context_files(self, prof: Profile, sources: list[dict], dest: Path) -> list[dict]:
+        """Other discussions of the same account, written as Markdown next to the attachments."""
+        if len(sources) > 5:
+            raise TaskError("5 discussions au plus comme contexte.")
+        out = []
+        for src in sources:
+            if (src.get("profile") or prof.id) != prof.id:
+                raise TaskError("Contexte limité aux discussions du même compte.", 403)
+            title = str(src.get("title") or "discussion").strip()[:80] or "discussion"
+            md = library.transcript_markdown(prof, str(src.get("session") or ""), title)
+            if not md:
+                raise TaskError(f"Discussion introuvable pour le contexte : {title}.", 404)
+            out.append({**att.write_text(dest, f"contexte - {title}.md", md), "context": True, "title": title})
+        return out
+
+    def _restage(self, t: dict) -> list[str] | None:
+        root = self.attachments_root()
+        ids = [i for i in (att.stage_copy(root, f["path"]) for f in t.get("attachments") or []) if i]
+        return ids or None
+
+    # -------------------------------------------------------- attachments
+    def attachments_root(self) -> Path:
+        root = Path(expand_path(self.cfg.general.attachments_dir)
+                    or str(Path.home() / "ClaudeConsole" / "pieces-jointes")).resolve()
+        if within(str(root), [str(self.data_dir)]):
+            raise TaskError("Le dossier des pièces jointes ne peut pas être dans les données de la console "
+                            "(Configuration → Général).")
+        return root
+
+    def discard_upload(self, uid: str):
+        att.discard(self.attachments_root(), uid)
 
     def _get(self, tid: str) -> dict:
         t = self.tasks.get(tid) or self.store.get_task(tid)
@@ -455,21 +596,36 @@ class Engine:
         return t
 
     # -------------------------------------------------------- follow-ups
-    def followup(self, tid: str, text: str) -> dict:
+    def followup(self, tid: str, text: str, attachments: list[str] | None = None) -> dict:
         text = (text or "").strip()
-        if not text:
+        if not text and not attachments:
             raise TaskError("Message vide.")
+        text = text or "Voici des pièces jointes."
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif.", 423)
         with self._lock:
             t = self._get(tid)
             run = self.runs.get(tid)
-            self._event(tid, "user", {"text": text})
-            self._audit("message de suite", {"texte": _clip(text, 2000)}, t)
+            files = []
+            if attachments:
+                root = self.attachments_root()
+                adir = t.get("attachments_dir") or str(att.task_dir(root, tid, t.get("created") or time.time()))
+                t["attachments_dir"] = adir
+                try:
+                    files = att.claim(root, attachments, Path(adir))
+                except att.AttachmentError as e:
+                    raise TaskError(str(e), e.status) from e
+                t["attachments"] = [*(t.get("attachments") or []), *files]
+                if run and run.policy and adir not in run.policy.ctx.add_dirs:
+                    run.policy.ctx.add_dirs.append(adir)  # the live session may read it at once
+            sent = att.message(text, files)
+            self._event(tid, "user", {"text": text, **({"files": files} if files else {})})
+            self._audit("message de suite", {"texte": _clip(text, 2000),
+                                             **({"pièces jointes": [f["path"] for f in files]} if files else {})}, t)
             if run and run.proc and not run.stdin_closed and t["status"] in ("running", "awaiting"):
-                self._send_user(run, text)
+                self._send_user(run, sent)
             else:
-                t.setdefault("queued_messages", []).append(text)
+                t.setdefault("queued_messages", []).append(sent)
                 if t["status"] in TERMINAL:
                     t["status"] = "queued"
                     t["error"] = ""
@@ -673,7 +829,7 @@ class Engine:
         if t.get("effort"):
             args += ["--effort", t["effort"]]
         args += ["--max-turns", str(spec.get("max_turns") or 60)]
-        for d in t.get("add_dirs") or []:
+        for d in [*(t.get("add_dirs") or []), *([t["attachments_dir"]] if t.get("attachments_dir") else [])]:
             args += ["--add-dir", d]
         team = spec.get("team") or {}
         system = "\n\n".join(x for x in (spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
@@ -714,10 +870,13 @@ class Engine:
         try:
             prof = Profile.model_validate(spec["profile"])
             pre = self._preset_for(spec)
+            adir = t.get("attachments_dir")
+            if adir:
+                Path(adir).mkdir(parents=True, exist_ok=True)
             run.policy = Policy(pre, [ToolRule.model_validate(r) for r in spec["rules"]],
                                 [InputConstraint.model_validate(c) for c in spec["constraints"]],
-                                policy_context(t["workdir"], t.get("add_dirs") or [], spec["forbidden"],
-                                               str(self.data_dir), [self.port]))
+                                policy_context(t["workdir"], [*(t.get("add_dirs") or []), *([adir] if adir else [])],
+                                               spec["forbidden"], str(self.data_dir), [self.port]))
             cmd = self._command(t, run)
             env = claude_cli.build_env(prof, self.cfg.general)
             if spec.get("team"):
@@ -785,6 +944,12 @@ class Engine:
     def _finish(self, tid: str, run: Run):
         for f in run.files:
             mcp.remove_config(f)
+        adir = self.tasks[tid].get("attachments_dir")
+        if adir:
+            try:
+                Path(adir).rmdir()  # only when empty: no stray folder for tasks without attachments
+            except OSError:
+                pass
         self._release_approvals(run, "La tâche s'est arrêtée.")
         with self._lock:
             t = self.tasks[tid]
@@ -1155,16 +1320,38 @@ class Engine:
                  ".wsh", ".hta", ".msi", ".msp", ".lnk", ".reg", ".cpl", ".jar", ".docm", ".xlsm", ".pptm", ".dotm",
                  ".app", ".command", ".sh", ".pkg", ".dmg", ".py", ".pyw"}
 
+    def _cited(self, t: dict, asked: str, real: str) -> bool:
+        """The task's own conversation (answers, tool inputs, resumed history) names this file."""
+        spelled = os.path.expandvars(os.path.expanduser(asked))
+        want = {norm(real).lower(), *([asked.replace("\\", "/").lower()] if os.path.isabs(spelled) else [])}
+
+        def leaves(v):
+            if isinstance(v, str):
+                yield v
+            elif isinstance(v, dict):
+                for x in v.values():
+                    yield from leaves(x)
+            elif isinstance(v, list):
+                for x in v:
+                    yield from leaves(x)
+
+        sources = [e["data"] for e in self.store.events(t["id"], limit=100_000)] + [t.get("history") or []]
+        return any(w in s.replace("\\", "/").lower() for src in sources for s in leaves(src) for w in want)
+
     def task_file(self, tid: str, path: str) -> Path:
-        """A file of the task's folders, for preview: never outside them, never a forbidden path."""
+        """A file for preview: in the task's folders or the profile's, or cited by the task itself;
+        never a forbidden path."""
         t = self._get(tid)
-        raw = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"')))
+        asked = str(path or "").strip().strip('"')
+        raw = os.path.expandvars(os.path.expanduser(asked))
         if not raw:
             raise TaskError("Chemin manquant.")
         real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(t["workdir"], raw))
-        roots = [t["workdir"], *(t.get("add_dirs") or [])]
-        if not within(real, roots):
-            raise TaskError("Aperçu limité aux dossiers de travail de la tâche.", 403)
+        prof = self.cfg.profile(t.get("profile") or "")
+        roots = [t["workdir"], *(t.get("add_dirs") or []), *([t["attachments_dir"]] if t.get("attachments_dir") else []),
+                 *([expand_path(prof.workdir)] if prof and prof.workdir else [])]
+        if not within(real, roots) and not self._cited(t, asked, real):
+            raise TaskError("Aperçu limité aux dossiers de la tâche et aux fichiers cités dans sa conversation.", 403)
         spec = t.get("spec") or {}
         ctx = policy_context(t["workdir"], t.get("add_dirs") or [], spec.get("forbidden") or self.cfg.security.forbidden_paths,
                              str(self.data_dir), [self.port])
@@ -1179,7 +1366,9 @@ class Engine:
         return p
 
     def open_task_file(self, tid: str, path: str, reveal: bool = False):
-        p = self.task_file(tid, path)
+        self._open_path(self.task_file(tid, path), reveal, self._get(tid))
+
+    def _open_path(self, p: Path, reveal: bool, t: dict | None = None):
         if not reveal and p.suffix.lower() in self.RISKY_EXT:
             raise TaskError("Ouverture refusée : ce type de fichier peut exécuter du code. Utilise « Afficher dans le dossier ».", 403)
         if os.name == "nt":
@@ -1191,7 +1380,258 @@ class Engine:
             subprocess.Popen(["open", "-R", str(p)] if reveal else ["open", str(p)])
         else:
             subprocess.Popen(["xdg-open", str(p.parent if reveal else p)])
-        self._audit("fichier ouvert" if not reveal else "fichier affiché dans le dossier", {"chemin": str(p)}, self._get(tid))
+        self._audit("fichier ouvert" if not reveal else "fichier affiché dans le dossier", {"chemin": str(p)}, t)
+
+    # -------------------------------------------------------- project folder: instructions, memory, files
+    SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache", ".idea", ".vs"}
+    MEM_NAME = re.compile(r"^[\w .()\-]{1,120}\.md$")
+
+    def _guard(self, folder: str) -> Policy:
+        return Policy(self.cfg.presets[0], [], [], policy_context(folder, [], self.cfg.security.forbidden_paths,
+                                                                   str(self.data_dir), [self.port]))
+
+    def _ws_folder(self, pid: str | None, folder: str | None) -> tuple[Profile, str]:
+        prof = self.cfg.profile(pid or self.cfg.general.default_profile)
+        if not prof:
+            raise TaskError("Profil inconnu.", 404)
+        default = expand_path(prof.workdir)
+        p = Path(expand_path(folder) if folder else default)
+        if default and os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(default)):
+            p.mkdir(parents=True, exist_ok=True)
+        if not p.is_dir():
+            raise TaskError(f"Dossier introuvable : {p}", 404)
+        wd = str(p.resolve())
+        if self._guard(wd).forbidden_hit({"file_path": wd}, "Read"):
+            raise TaskError("Ce dossier est protégé par la configuration de sécurité.", 403)
+        return prof, wd
+
+    def workspace(self, pid: str | None, folder: str | None) -> dict:
+        prof, wd = self._ws_folder(pid, folder)
+
+        def doc(path: Path) -> dict:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+            except OSError:
+                text = ""
+            return {"path": str(path), "exists": path.is_file(), "text": text[:400_000]}
+
+        mem = library.memory_dir(prof, wd)
+        notes = []
+        if mem.is_dir():
+            for f in mem.glob("*.md"):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                notes.append({"name": f.name, "size": st.st_size, "mtime": st.st_mtime})
+        notes.sort(key=lambda x: (x["name"] != "MEMORY.md", x["name"].lower()))
+        with self._lock:
+            used = [t["workdir"] for t in sorted(self.tasks.values(), key=lambda t: t.get("created") or 0, reverse=True)
+                    if t.get("profile") == prof.id and t.get("workdir")]
+        folders = list(dict.fromkeys([str(Path(expand_path(prof.workdir)).resolve()), *used]))[:20]
+        return {"profile": prof.id, "profile_name": prof.name, "folder": wd, "folders": folders,
+                "instructions": {"folder": doc(Path(wd) / "CLAUDE.md"), "profile": doc(library.config_dir(prof) / "CLAUDE.md")},
+                "jarvis_instructions": prof.instructions, "memory": {"dir": str(mem), "files": notes}}
+
+    def save_instructions(self, pid: str | None, folder: str | None, scope: str, text: str) -> dict:
+        prof, wd = self._ws_folder(pid, folder)
+        if scope not in ("folder", "profile"):
+            raise TaskError("Portée inconnue.")
+        if len(text or "") > 400_000:
+            raise TaskError("Consignes trop longues (400 000 caractères au plus).")
+        path = Path(wd) / "CLAUDE.md" if scope == "folder" else library.config_dir(prof) / "CLAUDE.md"
+        self._write_doc(path, text or "")
+        self._audit("consignes modifiées", {"fichier": str(path), "caractères": len(text or "")})
+        return {"path": str(path), "exists": True}
+
+    def _write_doc(self, path: Path, text: str):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{secrets.token_hex(3)}.tmp")
+        tmp.write_text(text, encoding="utf-8", newline="")
+        os.replace(tmp, path)
+
+    def _mem_path(self, pid: str | None, folder: str | None, name: str) -> Path:
+        prof, wd = self._ws_folder(pid, folder)
+        if not self.MEM_NAME.fullmatch(name or ""):
+            raise TaskError("Nom de note de mémoire invalide.")
+        return library.memory_dir(prof, wd) / name
+
+    def memory_note(self, pid: str | None, folder: str | None, name: str) -> dict:
+        p = self._mem_path(pid, folder, name)
+        if not p.is_file():
+            raise TaskError("Note introuvable.", 404)
+        return {"name": name, "text": p.read_text(encoding="utf-8", errors="replace")[:400_000]}
+
+    def save_memory_note(self, pid: str | None, folder: str | None, name: str, text: str) -> dict:
+        p = self._mem_path(pid, folder, name)
+        if len(text or "") > 400_000:
+            raise TaskError("Note trop longue.")
+        self._write_doc(p, text or "")
+        self._audit("mémoire modifiée", {"note": str(p)})
+        return {"name": name}
+
+    def delete_memory_note(self, pid: str | None, folder: str | None, name: str):
+        p = self._mem_path(pid, folder, name)
+        if p.is_file():
+            p.unlink()
+            self._audit("note de mémoire supprimée", {"note": str(p)})
+
+    def workspace_files(self, pid: str | None, folder: str | None, sub: str = "") -> dict:
+        _, wd = self._ws_folder(pid, folder)
+        base = os.path.realpath(os.path.join(wd, sub or ""))
+        if not within(base, [wd]):
+            raise TaskError("Hors du dossier du projet.", 403)
+        if not os.path.isdir(base):
+            raise TaskError("Dossier introuvable.", 404)
+        guard, entries, more = self._guard(wd), [], False
+        with os.scandir(base) as it:
+            for e in it:
+                if e.name in self.SKIP_DIRS:
+                    continue
+                full = os.path.join(base, e.name)
+                if guard.forbidden_hit({"file_path": full}, "Read"):
+                    continue  # protected files are not even listed
+                try:
+                    is_dir, st = e.is_dir(), e.stat()
+                except OSError:
+                    continue
+                if len(entries) >= 1000:
+                    more = True
+                    break
+                entries.append({"name": e.name, "dir": is_dir, "size": None if is_dir else st.st_size, "mtime": st.st_mtime})
+        entries.sort(key=lambda x: (not x["dir"], x["name"].lower()))
+        rel = os.path.relpath(base, wd)
+        return {"folder": wd, "sub": "" if rel == "." else rel.replace("\\", "/"), "entries": entries, "truncated": more}
+
+    def workspace_file(self, pid: str | None, folder: str | None, path: str) -> Path:
+        _, wd = self._ws_folder(pid, folder)
+        raw = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"')))
+        if not raw:
+            raise TaskError("Chemin manquant.")
+        real = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(wd, raw))
+        if not within(real, [wd]):
+            raise TaskError("Hors du dossier du projet.", 403)
+        if self._guard(wd).forbidden_hit({"file_path": real}, "Read"):
+            raise TaskError("Ce fichier est protégé par la configuration de sécurité.", 403)
+        p = Path(real)
+        if not p.is_file():
+            raise TaskError("Fichier introuvable.", 404)
+        if p.stat().st_size > 100 * 1024 * 1024:
+            raise TaskError("Fichier trop volumineux pour un aperçu (plus de 100 Mo).", 413)
+        return p
+
+    def open_workspace_file(self, pid: str | None, folder: str | None, path: str, reveal: bool = False):
+        if path in ("", "."):
+            _, wd = self._ws_folder(pid, folder)
+            self._open_path(Path(wd), False)  # the folder itself, in the file explorer
+            return
+        self._open_path(self.workspace_file(pid, folder, path), reveal)
+
+    # -------------------------------------------------------- folder picker (any folder of the disk)
+    HIDDEN_DIRS = {"$recycle.bin", "system volume information", "$windows.~bt", "$windows.~ws", "config.msi", "recovery"}
+
+    def fs_places(self) -> list[dict]:
+        """Starting points of the folder picker: account folders, usual folders, drives."""
+        home = Path.home()
+        places, seen = [], set()
+
+        def add(label: str, path, kind: str):
+            try:
+                p = str(Path(path).resolve())
+            except (OSError, ValueError):
+                return
+            if p.lower() in seen or not os.path.isdir(p) or self._guard(p).forbidden_hit({"file_path": p}, "Read"):
+                return
+            seen.add(p.lower())
+            places.append({"label": label, "path": p, "kind": kind})
+
+        for prof in self.cfg.profiles:
+            add(f"Dossier du compte {prof.name}", expand_path(prof.workdir), "account")
+        known = {"Bureau": "Desktop", "Documents": "Documents", "Téléchargements": "Downloads"}
+        if os.name == "nt":
+            try:
+                import ctypes
+                for label, csidl in (("Bureau", 0x10), ("Documents", 0x05)):
+                    buf = ctypes.create_unicode_buffer(260)
+                    if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf) == 0:
+                        add(label, buf.value, "folder")
+            except (AttributeError, OSError):
+                pass
+        for label, name in known.items():
+            add(label, home / name, "folder")
+        for var in ("OneDriveCommercial", "OneDriveConsumer", "OneDrive"):
+            if os.environ.get(var):
+                add(Path(os.environ[var]).name, os.environ[var], "cloud")
+        add("Dossier personnel", home, "home")
+        if os.name == "nt":
+            try:
+                import ctypes
+                mask, k32 = ctypes.windll.kernel32.GetLogicalDrives(), ctypes.windll.kernel32
+            except (AttributeError, OSError):
+                mask, k32 = 0, None
+            for i, letter in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+                if not mask >> i & 1 or letter in "AB":
+                    continue
+                root = f"{letter}:\\"
+                kind = k32.GetDriveTypeW(root)  # 2 removable, 3 fixed, 4 network, 5 CD
+                if kind == 4:  # a network drive: never probed (a disconnected one would freeze the picker)
+                    places.append({"label": f"Réseau {letter}:", "path": root, "kind": "network"})
+                elif kind in (2, 3, 5) and os.path.isdir(root):
+                    places.append({"label": f"Disque {letter}:", "path": root, "kind": "drive"})
+        elif sys.platform == "darwin" and os.path.isdir("/Volumes"):
+            for v in sorted(os.listdir("/Volumes")):
+                add(v, f"/Volumes/{v}", "drive")
+        return places
+
+    def fs_dirs(self, path: str) -> dict:
+        """Sub-folders of a folder (names only), for the picker. Protected folders are left out."""
+        raw = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"'))) or str(Path.home())
+        if not os.path.isabs(raw):
+            raise TaskError("Indique un chemin complet (par exemple C:\\Users\\…\\Documents).")
+        base = os.path.realpath(raw)
+        if not os.path.isdir(base):
+            raise TaskError(f"Dossier introuvable : {raw}", 404)
+        guard = self._guard(base)
+        if guard.forbidden_hit({"file_path": base}, "Read"):
+            raise TaskError("Ce dossier est protégé par la configuration de sécurité.", 403)
+        dirs, more = [], False
+        try:
+            with os.scandir(base) as it:
+                for e in it:
+                    try:
+                        if not e.is_dir() or e.name.startswith(".") or e.name.lower() in self.HIDDEN_DIRS:
+                            continue
+                        if os.name == "nt" and e.stat().st_file_attributes & 0x6:  # hidden or system
+                            continue
+                    except OSError:
+                        continue
+                    if guard.forbidden_hit({"file_path": os.path.join(base, e.name)}, "Read"):
+                        continue
+                    if len(dirs) >= 2000:
+                        more = True
+                        break
+                    dirs.append(e.name)
+        except PermissionError as exc:
+            raise TaskError("Accès refusé par Windows à ce dossier.", 403) from exc
+        dirs.sort(key=str.lower)
+        parent = os.path.dirname(base.rstrip("\\/")) if base.rstrip("\\/") != base[:3].rstrip("\\/") else ""
+        if parent and os.path.normcase(parent) == os.path.normcase(base):
+            parent = ""
+        return {"path": base, "parent": parent, "dirs": dirs, "truncated": more}
+
+    def fs_mkdir(self, path: str, name: str) -> dict:
+        base = self.fs_dirs(path)["path"]
+        clean = att.safe_name(name)
+        if clean in ("fichier", "") and not str(name or "").strip():
+            raise TaskError("Nom de dossier manquant.")
+        target = Path(base) / clean
+        if self._guard(base).forbidden_hit({"file_path": str(target)}, "Read"):
+            raise TaskError("Ce dossier serait protégé par la configuration de sécurité.", 403)
+        if target.exists():
+            raise TaskError(f"« {clean} » existe déjà ici.", 409)
+        target.mkdir()
+        self._audit("dossier créé", {"chemin": str(target)})
+        return {"path": str(target)}
 
     # -------------------------------------------------------- existing Claude Code sessions
     def sessions(self, pid: str | None = None) -> list[dict]:
@@ -1218,15 +1658,21 @@ class Engine:
                 "items": library.read_transcript(prof, sid)}
 
     def resume_session(self, pid: str, sid: str, prompt: str, preset: str | None = None, model: str | None = None,
-                       effort: str | None = None, fork: bool = True, confirmed: bool = False) -> dict:
+                       effort: str | None = None, fork: bool = True, confirmed: bool = False,
+                       workdir: str | None = None) -> dict:
+        """Continue an existing session in the console; with another folder, it first moves there."""
         prof, row = self._session(pid, sid)
-        if not row["resumable"]:
-            raise TaskError(f"Le dossier de cette session n'existe plus : {row['cwd'] or '(inconnu)'}.", 409)
+        origin = "reprise desktop" if row["origin"] == "desktop" else "reprise"
+        if workdir and not (row["cwd"] and norm(workdir) == norm(row["cwd"])):
+            self.move_session(prof.id, sid, workdir)
+            prof, row = self._session(pid, sid)
+        elif not row["resumable"]:
+            raise TaskError(f"Le dossier de cette session n'existe plus ({row['cwd'] or 'inconnu'}) : "
+                            "choisis un projet pour la reprendre.", 409)
         history = [{"role": i["role"], "text": (i.get("text") or f"{i.get('name')} · {i.get('target', '')}")[:1500]}
                    for i in library.read_transcript(prof, sid, limit=60) if not i.get("sidechain")]
         t = self.create_task(prompt, profile=prof.id, model=model, preset=preset, workdir=row["cwd"], effort=effort,
-                             confirmed=confirmed, resume=sid, fork=fork, history=history,
-                             origin="reprise desktop" if row["origin"] == "desktop" else "reprise")
+                             confirmed=confirmed, resume=sid, fork=fork, history=history, origin=origin)
         with self._lock:
             live = self.tasks[t["id"]]
             live["title"] = _title(row["title"]) if row["title"] else live["title"]

@@ -1,8 +1,10 @@
-"""Start the console with the session (so routines run): Windows and macOS."""
+"""Windows and macOS integration: start with the session (so routines run), the pinnable
+launcher with the JARVIS icon, the installed app, and restarting the console."""
 from __future__ import annotations
 
 import os
 import plistlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -48,12 +50,131 @@ def set_startup(on: bool) -> bool:
         "$s.Arguments = " + _ps_quote(arguments) + ";"
         "$s.WorkingDirectory = " + _ps_quote(str(ROOT)) + ";"
         "$s.WindowStyle = 7;"
+        "$s.IconLocation = " + _ps_quote(f"{ICON},0") + ";"
         "$s.Description = 'JARVIS Console (routines)';"
         "$s.Save()"
     )
     subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
                    check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
     return startup_enabled()
+
+
+# ---------------------------------------------------------------- launcher (pinnable, JARVIS icon)
+ICON = ROOT / "static" / "img" / "jarvis.ico"
+LAUNCHER = "JARVIS Console"
+
+
+def _programs_dir() -> Path:
+    return Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / "Microsoft/Windows/Start Menu/Programs"
+
+
+def _mac_app() -> Path:
+    return Path.home() / "Applications" / f"{LAUNCHER}.app"
+
+
+def launcher_exists() -> bool:
+    if sys.platform == "darwin":
+        return _mac_app().is_dir()
+    return (_programs_dir() / f"{LAUNCHER}.lnk").exists()
+
+
+def create_launcher() -> list[str]:
+    """A "JARVIS Console" launcher with its own icon: it starts the console if needed and opens it.
+    Windows: Start Menu and Desktop shortcuts (to pin to the taskbar). macOS: ~/Applications app (to keep in the Dock)."""
+    if sys.platform == "darwin":
+        return [_create_mac_app()]
+    if os.name != "nt":
+        raise OSError("lanceur disponible sous Windows et macOS")
+    pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    target, arguments = (pyw, "-m console") if pyw.exists() else (ROOT / "start.bat", "")
+    script = (
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new();"
+        "$w = New-Object -ComObject WScript.Shell;"
+        "foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {"
+        "  $p = Join-Path $dir " + _ps_quote(f"{LAUNCHER}.lnk") + ";"
+        "  $s = $w.CreateShortcut($p);"
+        "  $s.TargetPath = " + _ps_quote(str(target)) + ";"
+        "  $s.Arguments = " + _ps_quote(arguments) + ";"
+        "  $s.WorkingDirectory = " + _ps_quote(str(ROOT)) + ";"
+        "  $s.IconLocation = " + _ps_quote(f"{ICON},0") + ";"
+        "  $s.Description = " + _ps_quote("JARVIS · Console d'agents Claude") + ";"
+        "  $s.Save(); $p"
+        "}"
+    )
+    r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                       check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    return [line.strip() for line in r.stdout.decode("utf-8", "replace").splitlines() if line.strip()]
+
+
+def _create_mac_app() -> str:
+    import shlex
+    import shutil
+    py = ROOT / ".venv" / "bin" / "python"
+    if not py.exists():
+        raise OSError("lance d'abord start.command une fois (création de l'environnement Python)")
+    app = _mac_app()
+    (app / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+    (app / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
+    exe = app / "Contents" / "MacOS" / "jarvis"
+    exe.write_text("#!/bin/sh\n"
+                   f"cd {shlex.quote(str(ROOT))}\n"
+                   'export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\n'
+                   f"exec {shlex.quote(str(py))} -m console --background\n", encoding="utf-8")
+    exe.chmod(0o755)
+    shutil.copy(ROOT / "static" / "img" / "jarvis.icns", app / "Contents" / "Resources" / "jarvis.icns")
+    with (app / "Contents" / "Info.plist").open("wb") as fh:
+        plistlib.dump({"CFBundleName": LAUNCHER, "CFBundleDisplayName": LAUNCHER, "CFBundleIdentifier": "local.jarvis.console.launcher",
+                       "CFBundleExecutable": "jarvis", "CFBundleIconFile": "jarvis", "CFBundlePackageType": "APPL",
+                       "CFBundleShortVersionString": "1.0", "LSUIElement": True}, fh)  # no Dock icon for the server itself
+    return str(app)
+
+
+def installed_app() -> list[str] | None:
+    """The console installed as an app (Chrome/Edge "Installer"): its window then carries the JARVIS
+    icon instead of the browser's. Returns the command that opens it, or None."""
+    if sys.platform == "darwin":
+        for base in (Path.home() / "Applications" / "Chrome Apps.localized", Path.home() / "Applications" / "Edge Apps.localized"):
+            for app in sorted(base.glob("JARVIS*.app")) if base.is_dir() else []:
+                return ["open", str(app)]
+        return None
+    if os.name != "nt":
+        return None
+    progs = _programs_dir()
+    links = [p for p in [*sorted((progs / "Chrome Apps").glob("JARVIS*.lnk")), *sorted(progs.glob("JARVIS*.lnk"))]
+             if p.name != f"{LAUNCHER}.lnk"]
+    if not links:
+        return None
+    script = ("[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); $w = New-Object -ComObject WScript.Shell;"
+              + "".join(f"$s = $w.CreateShortcut({_ps_quote(str(p))}); $s.TargetPath; $s.Arguments;" for p in links))
+    try:
+        r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+                           capture_output=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = r.stdout.decode("utf-8", "replace").splitlines()
+    for target, args in zip(lines[0::2], lines[1::2]):
+        app_id = re.search(r"--app-id=(\w+)", args)
+        profile = re.search(r'--profile-directory=(?:"([^"]+)"|(\S+))', args)
+        if app_id and target.strip():
+            return [target.strip(), *([f"--profile-directory={profile.group(1) or profile.group(2)}"] if profile else []),
+                    f"--app-id={app_id.group(1)}"]
+    return None
+
+
+def relaunch(port: int, data_dir: Path):
+    """Start a fresh, windowless console that takes over once this one has freed the port."""
+    exe = Path(sys.executable)
+    if os.name == "nt" and exe.with_name("pythonw.exe").exists():
+        exe = exe.with_name("pythonw.exe")
+    args = [str(exe), "-m", "console", "--no-browser", "--background", "--after-restart",
+            "--port", str(port), "--data-dir", str(data_dir)]
+    kw = {"cwd": str(ROOT), "close_fds": True, "stdin": subprocess.DEVNULL,
+          "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if os.name == "nt":
+        kw["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
+    subprocess.Popen(args, **kw)
 
 
 def _set_mac(on: bool) -> bool:

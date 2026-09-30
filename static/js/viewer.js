@@ -17,8 +17,18 @@ export function kindOf(name) {
   return "other";
 }
 
-export async function fileBlob(taskId, path) {
-  const r = await api(`/api/tasks/${taskId}/file?path=${encodeURIComponent(path)}`, { raw: true });
+/** Where a file comes from: a task (its folders, what it cited) or a project folder. */
+function source(opts) {
+  if (opts.folder) {
+    const q = `profile=${encodeURIComponent(opts.profile || "")}&folder=${encodeURIComponent(opts.folder)}`;
+    return { get: (path) => `/api/workspace/file?${q}&path=${encodeURIComponent(path)}`, open: "/api/workspace/file/open",
+      extra: { profile: opts.profile, folder: opts.folder } };
+  }
+  return { get: (path) => `/api/tasks/${opts.taskId}/file?path=${encodeURIComponent(path)}`, open: `/api/tasks/${opts.taskId}/file/open`, extra: {} };
+}
+
+export async function fileBlob(taskId, path, opts = null) {
+  const r = await api(source(opts || { taskId }).get(path), { raw: true });
   return r.blob();
 }
 
@@ -52,7 +62,7 @@ function csvTable(text) {
   return h("div", { class: "md" }, table, rows.length > 500 ? h("p", { class: "muted" }, "500 premières lignes.") : null);
 }
 
-/** opts: {taskId, path} for a file, or {url, kind:"web"|"image"} for the web. */
+/** opts: {taskId, path} or {profile, folder, path} for a file, or {url, kind:"web"|"image"} for the web. */
 export async function openPreview(opts) {
   const urls = [];
   const body = h("div", { class: "pv-body" }, h("div", { class: "muted pv-wait" }, "Chargement…"));
@@ -84,14 +94,15 @@ export async function openPreview(opts) {
   }
 
   const { taskId, path } = opts;
-  body.dataset.task = taskId; // links to other files inside a previewed document
+  const src = source(opts);
+  if (taskId) body.dataset.task = taskId; // links to other files inside a previewed document
   const openWith = async (reveal) => {
-    try { await api(`/api/tasks/${taskId}/file/open`, { method: "POST", body: { path, reveal } }); }
+    try { await api(src.open, { method: "POST", body: { ...src.extra, path, reveal } }); }
     catch (e) { toast(e.message, "err"); }
   };
   actions.append(btn("Ouvrir avec l'application", () => openWith(false), "primary"), btn("Afficher dans le dossier", () => openWith(true)));
   let blob;
-  try { blob = await fileBlob(taskId, path); }
+  try { blob = await fileBlob(taskId, path, opts); }
   catch (e) { body.replaceChildren(h("div", { class: "line err" }, e.message)); return; }
   actions.append(btn("Télécharger", () => downloadBlob(blob, baseName(path))));
   const url = URL.createObjectURL(blob);

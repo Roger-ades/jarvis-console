@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import os
 import secrets
 import subprocess
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -17,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from starlette.datastructures import MutableHeaders
 
-from . import __version__, claude_cli, mcp, winsys
+from . import __version__, attachments, claude_cli, mcp, winsys
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors)
 from .engine import Engine, TaskError
@@ -27,6 +29,14 @@ from .store import Store
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 PUBLIC_API = {"/api/ping", "/api/auth/exchange"}
+
+
+def code_stamp() -> float:
+    """Newest change to the server's code. The web page is read from disk on every load, the
+    Python code only at start: a newer stamp means an update waits for a restart."""
+    return max((p.stat().st_mtime for p in Path(__file__).resolve().parent.glob("*.py")), default=0.0)
+
+
 # Scripts only from the console itself. Web images and pages are allowed as sources, but
 # the page never creates them on its own: only a click of the user does (no silent
 # exfiltration through an image URL written by a model), and web pages run sandboxed.
@@ -78,10 +88,13 @@ class TaskIn(BaseModel):
     effort: str | None = None
     confirmed: bool = False
     team: bool = False
+    attachments: list[str] = []
+    context: list[dict] = []
 
 
 class MessageIn(BaseModel):
-    text: str
+    text: str = ""
+    attachments: list[str] = []
 
 
 class DecisionIn(BaseModel):
@@ -182,14 +195,21 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return _err(exc.status, exc.message, **exc.extra)
 
     # -------------------------------------------------------- auth
+    boot = secrets.token_hex(6)
+    loaded = code_stamp()
+
     @app.get("/api/ping")
     def ping():
-        return {"ok": True, "app": "jarvis-console", "version": __version__}
+        return {"ok": True, "app": "jarvis-console", "version": __version__, "boot": boot}
 
     @app.post("/api/auth/exchange")
     def exchange(body: dict = Body(...)):
         if not auth.redeem(str(body.get("code", ""))):
             return _err(401, "Code d'accès expiré ou déjà utilisé : relance start.bat.")
+        try:
+            (data_dir / "ui-seen").touch()  # the browser now holds the token: the launcher may open the installed app
+        except OSError:
+            pass
         return {"token": auth.token}
 
     @app.post("/api/auth/code")
@@ -332,7 +352,21 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.post("/api/tasks")
     def create_task(body: TaskIn):
         return engine.create_task(body.prompt, profile=body.profile, model=body.model, preset=body.preset,
-                                  workdir=body.workdir, effort=body.effort, confirmed=body.confirmed, team=body.team)
+                                  workdir=body.workdir, effort=body.effort, confirmed=body.confirmed, team=body.team,
+                                  attachments=body.attachments, context=body.context)
+
+    # -------------------------------------------------------- attachments (raw body: no multipart dependency)
+    @app.post("/api/uploads")
+    async def upload(request: Request, name: str = ""):
+        try:
+            return await attachments.receive(engine.attachments_root(), name, request.stream())
+        except attachments.AttachmentError as e:
+            raise TaskError(str(e), e.status) from e
+
+    @app.delete("/api/uploads/{uid}")
+    def upload_discard(uid: str):
+        engine.discard_upload(uid)
+        return {"ok": True}
 
     @app.get("/api/tasks/{tid}")
     def get_task(tid: str):
@@ -354,7 +388,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/message")
     def task_message(tid: str, body: MessageIn):
-        return engine.followup(tid, body.text)
+        return engine.followup(tid, body.text, body.attachments)
 
     @app.post("/api/tasks/{tid}/cancel")
     def task_cancel(tid: str):
@@ -363,6 +397,67 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.post("/api/tasks/{tid}/retry")
     def task_retry(tid: str, body: dict = Body(default={})):
         return engine.retry(tid, confirmed=bool(body.get("confirmed")))
+
+    @app.post("/api/tasks/{tid}/fork")
+    def task_fork(tid: str, body: dict = Body(default={})):
+        return engine.fork(tid, str(body.get("prompt") or ""), confirmed=bool(body.get("confirmed")))
+
+    @app.post("/api/tasks/{tid}/move")
+    def task_move(tid: str, body: dict = Body(...)):
+        return engine.move_task(tid, str(body.get("workdir") or ""))
+
+    # -------------------------------------------------------- project folder (instructions, memory, files)
+    @app.get("/api/workspace")
+    def workspace(profile: str | None = None, folder: str | None = None):
+        return engine.workspace(profile, folder)
+
+    @app.put("/api/workspace/instructions")
+    def workspace_instructions(body: dict = Body(...)):
+        return engine.save_instructions(body.get("profile"), body.get("folder"), str(body.get("scope") or ""),
+                                        str(body.get("text") or ""))
+
+    @app.get("/api/workspace/memory")
+    def workspace_memory(name: str, profile: str | None = None, folder: str | None = None):
+        return engine.memory_note(profile, folder, name)
+
+    @app.put("/api/workspace/memory")
+    def workspace_memory_save(body: dict = Body(...)):
+        return engine.save_memory_note(body.get("profile"), body.get("folder"), str(body.get("name") or ""),
+                                       str(body.get("text") or ""))
+
+    @app.delete("/api/workspace/memory")
+    def workspace_memory_delete(name: str, profile: str | None = None, folder: str | None = None):
+        engine.delete_memory_note(profile, folder, name)
+        return {"ok": True}
+
+    @app.get("/api/workspace/files")
+    def workspace_files(profile: str | None = None, folder: str | None = None, sub: str = ""):
+        return engine.workspace_files(profile, folder, sub)
+
+    @app.get("/api/workspace/file")
+    def workspace_file(path: str, profile: str | None = None, folder: str | None = None):
+        p = engine.workspace_file(profile, folder, path)
+        media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
+                                                          "Content-Security-Policy": "sandbox"})
+
+    @app.get("/api/fs/places")
+    def fs_places():
+        return {"places": engine.fs_places()}
+
+    @app.get("/api/fs/dirs")
+    def fs_dirs(path: str = ""):
+        return engine.fs_dirs(path)
+
+    @app.post("/api/fs/mkdir")
+    def fs_mkdir(body: dict = Body(...)):
+        return engine.fs_mkdir(str(body.get("path") or ""), str(body.get("name") or ""))
+
+    @app.post("/api/workspace/file/open")
+    def workspace_file_open(body: dict = Body(...)):
+        engine.open_workspace_file(body.get("profile"), body.get("folder"), str(body.get("path") or ""),
+                                   reveal=bool(body.get("reveal")))
+        return {"ok": True}
 
     @app.post("/api/tasks/{tid}/duplicate")
     def task_duplicate(tid: str, body: dict = Body(...)):
@@ -395,6 +490,18 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def sessions(profile: str | None = None):
         return {"sessions": engine.sessions(profile)}
 
+    @app.get("/api/sessions/duplicates")
+    def session_duplicates(profile: str | None = None):
+        return {"duplicates": engine.moved_copies(profile)}
+
+    @app.post("/api/sessions/duplicates/merge")
+    def session_duplicates_merge(body: dict = Body(default={})):
+        return engine.merge_moved_copies(body.get("profile") or None)
+
+    @app.post("/api/sessions/{pid}/{sid}/move")
+    def session_move(pid: str, sid: str, body: dict = Body(...)):
+        return engine.move_session(pid, sid, str(body.get("workdir") or ""))
+
     @app.get("/api/sessions/{pid}/{sid}")
     def session_detail(pid: str, sid: str):
         return engine.session_transcript(pid, sid)
@@ -403,7 +510,8 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def session_resume(pid: str, sid: str, body: dict = Body(...)):
         return engine.resume_session(pid, sid, str(body.get("prompt", "")), preset=body.get("preset") or None,
                                      model=body.get("model") or None, effort=body.get("effort") or None,
-                                     fork=bool(body.get("fork", True)), confirmed=bool(body.get("confirmed")))
+                                     fork=bool(body.get("fork", True)), confirmed=bool(body.get("confirmed")),
+                                     workdir=body.get("workdir") or None)
 
     @app.post("/api/sessions/{pid}/{sid}/terminal")
     def session_terminal(pid: str, sid: str):
@@ -447,7 +555,17 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.get("/api/system")
     def system_info():
         return {"startup": winsys.startup_enabled(), "log": str(data_dir / "console.log"),
-                "stoppable": getattr(app.state, "server", None) is not None}
+                "stoppable": getattr(app.state, "server", None) is not None,
+                "launcher": winsys.launcher_exists(), "platform": "mac" if sys.platform == "darwin" else os.name}
+
+    @app.post("/api/system/launcher")
+    def system_launcher():
+        try:
+            paths = winsys.create_launcher()
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return _err(500, f"Lanceur non créé : {exc}")
+        store.audit("lanceur créé", {"chemins": paths})
+        return {"paths": paths}
 
     @app.post("/api/system/shutdown")
     def system_shutdown():
@@ -457,6 +575,22 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         store.audit("arrêt de la console", {"tâches en cours": engine.state()["running"]})
         threading.Timer(0.6, lambda: setattr(server, "should_exit", True)).start()
         return {"ok": True}
+
+    @app.get("/api/system/version")
+    def system_version():
+        return {"version": __version__, "boot": boot, "stale": code_stamp() > loaded + 1,
+                "restartable": getattr(app.state, "server", None) is not None}
+
+    @app.post("/api/system/restart")
+    def system_restart():
+        """Stop, and let a fresh process (waiting for the port) take over with the new code."""
+        server = getattr(app.state, "server", None)
+        if server is None:
+            return _err(409, "Cette console n'a pas été lancée par start.bat : redémarre-la depuis son terminal.")
+        store.audit("redémarrage de la console", {"tâches en cours": engine.state()["running"]})
+        winsys.relaunch(port, data_dir)
+        threading.Timer(0.6, lambda: setattr(server, "should_exit", True)).start()
+        return {"ok": True, "boot": boot}
 
     @app.post("/api/system/startup")
     def system_startup(body: dict = Body(...)):

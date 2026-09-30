@@ -1,5 +1,10 @@
 // Main: command bar, task windows, live stream, shortcuts, notifications.
 import { ApiError, api, bootstrapAuth, openStream } from "./api.js";
+import { Attacher, hasFiles } from "./attach.js";
+import { ContextPicker } from "./context.js";
+import { pickFolder } from "./folderpicker.js";
+import { projectFollow, toggleProject } from "./project.js";
+import { checkVersion } from "./system.js";
 import { openConfig, updateProbe } from "./config.js";
 import { renderHistory, toggleHistory } from "./history.js";
 import { toggleSessions } from "./library.js";
@@ -51,7 +56,10 @@ async function boot() {
     reload: resync, routines: routinesChanged,
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
+  checkVersion();
+  setInterval(checkVersion, 60_000);
 }
+window.addEventListener("jarvis-check-version", () => checkVersion());
 
 let firstHello = true;
 async function resync() {
@@ -149,12 +157,55 @@ function renderProfiles() {
   }, h("span", { class: "sw" }), p.name)));
 }
 
-function option(value, label) { return h("option", { value }, label); }
+function option(value, label, title = "") { return h("option", { value, title: title || undefined }, label); }
+
+/** A folder as a short label: its name, and its parent when that helps ("Visiotech — Fournisseurs"). */
+function folderLabel(dir) {
+  const parts = String(dir || "").replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
+  const name = parts.pop() || dir;
+  const parent = parts.pop();
+  return parent && !/^[A-Za-z]:$/.test(parent) ? `${name} — ${parent}` : name;
+}
+const folderOption = (dir) => option(dir, folderLabel(dir), dir);
+
+/** One chip sums up model, permissions, effort and team mode; the panel holds the controls. */
+const EFFORT = { low: "effort faible", medium: "effort moyen", high: "effort élevé", xhigh: "effort très élevé", max: "effort max" };
+function updateSummary() {
+  const p = profile(S.profile);
+  if (!p) return;
+  const m = $("#opt-model").value || p.default_model || "default";
+  const model = m === "default" ? "Modèle par défaut" : m.charAt(0).toUpperCase() + m.slice(1);
+  const preset = $("#opt-preset").selectedOptions[0]?.textContent || "";
+  const team = $("#opt-team").getAttribute("aria-pressed") === "true";
+  const effort = EFFORT[$("#opt-effort").value];
+  const text = [team ? "Équipe" : "", model, preset, effort].filter(Boolean).join(" · ");
+  $("#opt-summary-text").textContent = text;
+  $("#opt-summary").classList.toggle("team", team);
+  $("#opt-summary").title = `Réglages de la demande : ${text}`;
+  const wd = $("#opt-workdir");
+  wd.parentElement.title = `Dossier de travail : ${wd.value && wd.value !== "__other__" ? wd.value : (S.meta?.profiles?.[p.id]?.workdir || p.workdir)}`;
+}
+
+function toggleOptions(open = $("#opt-panel").hidden) {
+  $("#opt-panel").hidden = !open;
+  $("#opt-summary").setAttribute("aria-expanded", String(open));
+  if (open) $("#opt-model").focus();
+}
+$("#opt-summary").addEventListener("click", () => toggleOptions());
+for (const id of ["#opt-model", "#opt-preset", "#opt-effort"]) $(id).addEventListener("change", updateSummary);
+document.addEventListener("pointerdown", (e) => {
+  if (!$("#opt-panel").hidden && !e.target.closest("#opt-panel, #opt-summary")) toggleOptions(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#opt-panel").hidden) { e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
+}, true);
 
 function selectProfile(id, remember = true) {
   const p = profile(id);
   if (!p) return;
   S.profile = p.id;
+  contextPicker.profileChanged();
+  queueMicrotask(projectFollow);
   if (remember) wm.savePrefs({ profile: p.id });
   $$pbtn().forEach((b, i) => b.setAttribute("aria-checked", String(profiles()[i]?.id === p.id)));
   $("#commandbar").style.setProperty("--pc", p.color);
@@ -172,51 +223,138 @@ function selectProfile(id, remember = true) {
 
   const recent = (wm.prefs().workdirs || {})[p.id] || [];
   const wd = $("#opt-workdir");
-  wd.replaceChildren(option("", `${S.meta?.profiles?.[p.id]?.workdir || p.workdir} (défaut)`),
-    ...recent.map((d) => option(d, d)), option("__other__", "Autre dossier…"));
+  const home = S.meta?.profiles?.[p.id]?.workdir || p.workdir;
+  wd.replaceChildren(option("", `${String(home).replace(/[\\/]+$/, "").split(/[\\/]/).pop()} (défaut)`, home),
+    ...recent.map(folderOption), option("__other__", "Autre dossier…"));
   wd.value = "";
+  lastWorkdir = "";
+  updateSummary();
 }
 const $$pbtn = () => Array.from(document.querySelectorAll("#cmd-profiles .pbtn"));
 
 $("#opt-workdir").addEventListener("change", async (e) => {
-  if (e.target.value !== "__other__") return;
-  const v = await dialog({ title: "Dossier de travail", body: "Chemin complet d'un dossier existant (il doit être autorisé par la configuration de sécurité).",
-    input: { placeholder: "C:\\Users\\…\\MonProjet" }, buttons: [{ label: "Annuler", value: null }, { label: "Utiliser", value: true, cls: "primary" }] });
+  if (e.target.value !== "__other__") { lastWorkdir = e.target.value; updateSummary(); projectFollow(); return; }
   const sel = $("#opt-workdir");
-  if (!v || !v.trim()) { sel.value = ""; return; }
-  const path = v.trim();
-  if (![...sel.options].some((o) => o.value === path)) sel.insertBefore(option(path, path), sel.lastChild);
-  sel.value = path;
+  const path = await pickFolder({ title: "Dossier de travail", start: lastWorkdir || S.meta?.profiles?.[S.profile]?.workdir || "",
+    recent: recentFolders() });
+  if (!path) { sel.value = lastWorkdir; return; }
+  chooseWorkdir(path);
 });
+let lastWorkdir = "";
+
+function recentFolders(pid = S.profile) {
+  const p = profile(pid);
+  const home = S.meta?.profiles?.[pid]?.workdir || p?.workdir || "";
+  return [...new Set([home, ...((wm.prefs().workdirs || {})[pid] || [])].filter(Boolean))];
+}
+
+/** Move a console discussion into another project: a copy of its session continues there. */
+async function moveTask(t) {
+  const path = await pickFolder({ title: `Déplacer « ${t.title} » vers…`, start: t.workdir, recent: recentFolders(t.profile) });
+  if (!path) return;
+  if (!(await confirmDialog("Déplacer la discussion ?",
+    `« ${t.title} » passe dans ${path} : c'est la même discussion, qui continue là (dans Claude Desktop aussi). `
+    + "Si elle est ouverte dans Claude Desktop, ferme-la d'abord.", "Déplacer"))) return;
+  try {
+    const n = await api(`/api/tasks/${t.id}/move`, { method: "POST", body: { workdir: path } });
+    onTask(n);
+    rememberWorkdir(t.profile, n.workdir);
+    projectFollow();
+    toast("Discussion déplacée.", "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/** Move an existing session (console, Claude Desktop, CLI) into a project folder: the same session. */
+async function moveSession(pid, sid, title, from) {
+  const path = await pickFolder({ title: `Déplacer « ${title} » vers…`, start: from, recent: recentFolders(pid) });
+  if (!path) return null;
+  if (!(await confirmDialog("Déplacer la session ?",
+    `« ${title} » passe dans ${path} : c'est la même session, qui continue là (dans Claude Desktop aussi). `
+    + "Si elle est ouverte dans Claude Desktop, ferme-la d'abord.", "Déplacer"))) return null;
+  try {
+    const r = await api(`/api/sessions/${pid}/${sid}/move`, { method: "POST", body: { workdir: path } });
+    rememberWorkdir(pid, r.folder);
+    projectFollow();
+    toast(r.desktop ? "Session déplacée (Claude Desktop mis à jour)." : "Session déplacée.", "ok");
+    return r;
+  } catch (e) { toast(e.message, "err"); return null; }
+}
+
+/** A folder picked by the user: selected in the bar and kept in its list (and in the Projet panel). */
+function chooseWorkdir(path) {
+  const sel = $("#opt-workdir");
+  if (![...sel.options].some((o) => o.value === path)) sel.insertBefore(folderOption(path), sel.lastChild);
+  sel.value = path;
+  lastWorkdir = path;
+  rememberWorkdir(S.profile, path);
+  updateSummary();
+  projectFollow();
+}
 
 function rememberWorkdir(pid, dir) {
   if (!dir) return;
   const all = { ...(wm.prefs().workdirs || {}) };
-  all[pid] = [dir, ...(all[pid] || []).filter((d) => d !== dir)].slice(0, 8);
+  all[pid] = [dir, ...(all[pid] || []).filter((d) => d !== dir)].slice(0, 12);
   wm.savePrefs({ workdirs: all });
 }
 
 function history() { return store.get("jarvis.prompts", []); }
 
+const attacher = new Attacher($("#cmd-files"));
+const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
+$("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
+
+/** From a window: this discussion becomes context of the next request. */
+function addContext(t) {
+  if (!t.session_started && !t.resumable) { toast("Cette discussion n'a pas encore démarré.", "err"); return; }
+  if (S.profile !== t.profile) selectProfile(t.profile);
+  contextPicker.add({ profile: t.profile, session: t.session_id, title: t.title });
+  toast("Contexte ajouté à ta prochaine demande.", "ok");
+  input.focus();
+}
+
+async function forkTask(t) {
+  const text = await dialog({ title: "Nouvelle discussion à partir d'ici",
+    body: "Une copie repart avec tout le contexte de cette discussion ; l'originale ne change pas. Que veux-tu demander ?",
+    input: { placeholder: "Ta demande pour la nouvelle discussion" },
+    buttons: [{ label: "Annuler", value: null }, { label: "Lancer", value: true, cls: "primary" }] });
+  if (text && text.trim()) launch(`/api/tasks/${t.id}/fork`, { prompt: text.trim() });
+}
+attacher.bindDrop($("#commandbar"));
+attacher.bindPaste(input);
+// Files dropped anywhere else on the page join the next request (and never replace the app).
+window.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+window.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  attacher.add([...e.dataTransfer.files]);
+  input.focus();
+});
+
 async function submit(extra = {}) {
   const prompt = input.value.trim();
-  if (!prompt) return;
+  const files = attacher.ids();
+  const context = contextPicker.sources();
+  if (!prompt && !files.length && !context.length && !attacher.busy()) return;
+  if (!attacher.ready()) return;
   const wd = $("#opt-workdir").value;
   const body = {
     prompt, profile: S.profile, model: $("#opt-model").value || null, preset: $("#opt-preset").value || null,
     effort: $("#opt-effort").value || null, workdir: wd && wd !== "__other__" ? wd : null,
-    team: $("#opt-team").getAttribute("aria-pressed") === "true", ...extra,
+    team: $("#opt-team").getAttribute("aria-pressed") === "true", attachments: files, context, ...extra,
   };
   // Clear at once so the next request can be typed while this one is sent.
   input.value = "";
   autoGrow(input, 220);
   hideSuggest();
   S.lastRecall = -1;
-  const hist = history().filter((x) => x !== prompt);
-  hist.unshift(prompt);
-  store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
+  if (prompt) {
+    const hist = history().filter((x) => x !== prompt);
+    hist.unshift(prompt);
+    store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
+  }
   const t = await launch("/api/tasks", body);
-  if (t) rememberWorkdir(body.profile, body.workdir);
+  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); }
   else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
 }
 
@@ -247,6 +385,7 @@ function setTeam(on, remember = true) {
     ? `Mode équipe actif : le modèle choisi dirige ; éclaireur ${t.scout_model}, exécutant ${t.worker_model}, expert ${t.expert_model} selon le chef`
     : "Mode équipe : le modèle choisi dirige, des sous-agents moins chers (ou un expert) font le travail";
   if (remember) wm.savePrefs({ team: on });
+  updateSummary();
 }
 $("#opt-team").addEventListener("click", () => setTeam($("#opt-team").getAttribute("aria-pressed") !== "true"));
 
@@ -325,6 +464,9 @@ const winCtx = {
   onFocus: (id) => { if (S.attention.delete(id)) renderTaskbar(); },
   onAttention: (id, kind) => attention(id, kind),
   autoImages: () => !!S.config?.ui?.auto_images,
+  addContext: (t) => addContext(t),
+  fork: (t) => forkTask(t),
+  move: (t) => moveTask(t),
 };
 
 function openWindow(t, fresh) {
@@ -461,7 +603,7 @@ document.addEventListener("keydown", (e) => {
 
 $("#btn-config").addEventListener("click", () => showConfig());
 function closeDrawers(except) {
-  for (const id of ["history", "sessions", "routines"]) if (id !== except) document.getElementById(id).hidden = true;
+  for (const id of ["history", "sessions", "routines", "project"]) if (id !== except) document.getElementById(id).hidden = true;
 }
 const panelCtx = {
   profiles, presets: () => S.config.presets, launch, closeDrawers, onTask: (t) => onTask(t, true),
@@ -475,7 +617,37 @@ const panelCtx = {
     input.setSelectionRange(text.length, text.length);
   },
   models: () => [...document.querySelectorAll("#opt-model option")].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
+  tasks: () => [...S.tasks.values()],
+  openTask: (id) => { closeDrawers(); openTask(id); },
+  addContext: (t) => addContext(t),
+  fork: (t) => forkTask(t),
+  sessions: () => toggleSessions(panelCtx),
+  openConfig: (tab) => showConfig(tab),
+  mention: (text) => {
+    const at = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, at), after = input.value.slice(at);
+    const piece = `${before && !/\s$/.test(before) ? " " : ""}${text} `;
+    input.value = before + piece + after;
+    autoGrow(input, 220);
+    input.focus();
+    input.setSelectionRange(before.length + piece.length, before.length + piece.length);
+  },
+  workdir: () => { const v = $("#opt-workdir").value; return v === "__other__" ? "" : v; },
+  workdirOptions: () => [...$("#opt-workdir").options].map((o) => o.value).filter((v) => v && v !== "__other__"),
+  setWorkdir: (dir, isDefault) => {
+    const sel = $("#opt-workdir");
+    if (isDefault) { sel.value = ""; lastWorkdir = ""; updateSummary(); return; }
+    if (![...sel.options].some((o) => o.value === dir)) sel.insertBefore(folderOption(dir), sel.lastChild);
+    sel.value = dir;
+    lastWorkdir = dir;
+    updateSummary();
+  },
+  remember: (dir, pid = S.profile) => rememberWorkdir(pid, dir),
+  recentFolders: (pid) => recentFolders(pid),
+  move: (t) => moveTask(t),
+  moveSession: (pid, sid, title, from) => moveSession(pid, sid, title, from),
 };
+$("#btn-project").addEventListener("click", () => toggleProject(panelCtx));
 $("#btn-history").addEventListener("click", () => {
   closeDrawers("history");
   toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask });

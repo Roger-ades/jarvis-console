@@ -66,6 +66,31 @@ export async function api(path, { method = "GET", body, raw = false } = {}) {
   throw new ApiError(401, { detail: "Accès refusé." });
 }
 
+/** Upload one file as a raw body (XHR for the progress bar). Resolves {id, name, size}. */
+export function uploadFile(file, name, onProgress, retry = true) {
+  let xhr;
+  const done = new Promise((resolve, reject) => {
+    xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/uploads?name=${encodeURIComponent(name)}`);
+    xhr.setRequestHeader("X-Console-Token", token);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress?.(e.loaded / e.total); };
+    xhr.onload = async () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+      if (xhr.status === 401 && retry) {
+        await askToken();
+        uploadFile(file, name, onProgress, false).promise.then(resolve, reject);
+      } else if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new ApiError(xhr.status, data));
+    };
+    xhr.onerror = () => reject(new ApiError(0, { detail: "Envoi impossible : la console ne répond pas." }));
+    xhr.onabort = () => reject(new ApiError(0, { detail: "Envoi annulé." }));
+    xhr.send(file);
+  });
+  return { promise: done, abort: () => xhr.abort() };
+}
+
 /** Resilient SSE reader. handlers: {event: fn(data)}, onOpen(), onDown() */
 export function openStream(handlers, onOpen, onDown) {
   let stopped = false, delay = 1000;

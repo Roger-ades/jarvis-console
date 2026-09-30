@@ -1,4 +1,5 @@
-"""Render the app icons (PNG) used by the installable web app. No dependency.
+"""Render the app icons: PNG for the installable web app, .ico (Windows launcher) and
+.icns (macOS launcher). No dependency.
 
     .venv\\Scripts\\python.exe tests\\make_icons.py
 """
@@ -10,11 +11,34 @@ from pathlib import Path
 OUT = Path(__file__).resolve().parent.parent / "static" / "img"
 
 
-def png(path: Path, size: int, pixels: bytearray):
+def png_bytes(size: int, pixels: bytearray) -> bytes:
     raw = b"".join(b"\x00" + bytes(pixels[y * size * 4:(y + 1) * size * 4]) for y in range(size))
     chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-                     + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def png(path: Path, size: int, pixels: bytearray):
+    path.write_bytes(png_bytes(size, pixels))
+
+
+def ico(path: Path, sizes=(16, 24, 32, 48, 64, 128, 256)):
+    """Windows icon with PNG-compressed images (supported since Vista)."""
+    images = [(n, png_bytes(n, render(n, False))) for n in sizes]
+    offset = 6 + 16 * len(images)
+    head, body = struct.pack("<HHH", 0, 1, len(images)), b""
+    for n, data in images:
+        head += struct.pack("<BBBBHHII", n % 256, n % 256, 0, 0, 1, 32, len(data), offset + len(body))
+        body += data
+    path.write_bytes(head + body)
+
+
+def icns(path: Path):
+    """macOS icon: PNG entries of 128, 256 and 512 px."""
+    body = b"".join(t + struct.pack(">I", len(d) + 8) + d
+                    for t, d in ((b"ic07", png_bytes(128, render(128, False))), (b"ic08", png_bytes(256, render(256, False))),
+                                 (b"ic09", png_bytes(512, render(512, False)))))
+    path.write_bytes(b"icns" + struct.pack(">I", len(body) + 8) + body)
 
 
 def clamp(v, lo=0.0, hi=1.0):
@@ -84,3 +108,6 @@ if __name__ == "__main__":
     for name, size, mask in (("icon-192.png", 192, False), ("icon-512.png", 512, False), ("icon-maskable-512.png", 512, True)):
         png(OUT / name, size, render(size, mask))
         print("écrit", name)
+    ico(OUT / "jarvis.ico")
+    icns(OUT / "jarvis.icns")
+    print("écrit jarvis.ico, jarvis.icns")

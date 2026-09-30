@@ -1,7 +1,7 @@
 // Existing Claude Code sessions (Claude Desktop Code tab, CLI, console): browse, read, resume.
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
-import { fmtDate, h, toast, toolIcon, toolLabel } from "./util.js";
+import { confirmDialog, fmtDate, h, toast, toolIcon, toolLabel } from "./util.js";
 
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
 let ctx = null, rows = [], q = "", profile = "", origin = "", project = "", showArchived = false, loading = false;
@@ -19,12 +19,30 @@ export function toggleSessions(context) {
   load();
 }
 
+let dups = [];
+
 async function load() {
   loading = true;
   render();
   try { rows = (await api("/api/sessions")).sessions; } catch (e) { toast(e.message, "err"); }
+  try { dups = (await api("/api/sessions/duplicates")).duplicates || []; } catch { dups = []; }
   loading = false;
   render();
+}
+
+/** Duplicates made by the former "move into a project": back to one session each. */
+async function mergeDups() {
+  const list = dups.map((d) => `• ${d.title || "(sans titre)"} — ${baseName(d.from)} → ${baseName(d.to)}`).join("\n");
+  const ok = await confirmDialog("Réunir les sessions dupliquées ?",
+    h("div", {}, h("p", {}, "Chaque session reprend son identifiant d'origine (celui que connaît Claude Desktop), avec toute la suite, dans le dossier du projet ; la copie disparaît."),
+      h("pre", { class: "dup-list" }, list)), "Réunir");
+  if (!ok) return;
+  try {
+    const r = await api("/api/sessions/duplicates/merge", { method: "POST", body: {} });
+    toast(`${r.merged.length} session(s) réunie(s)${r.skipped.length ? ` · ${r.skipped.length} à trier à la main` : ""}.`, r.skipped.length ? "warn" : "ok");
+    r.skipped.forEach((x) => toast(`${x.title || x.original} : ${x.reason}`, "warn"));
+  } catch (e) { toast(e.message, "err"); }
+  load();
 }
 
 function render() {
@@ -59,6 +77,9 @@ function render() {
       h("button", { type: "button", class: "icon-btn", title: "Actualiser", svg: "retry", on: { click: load } }),
       h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { d.hidden = true; } } })),
     h("div", { class: "drawer-note" }, "Sessions de l'onglet Code de Claude Desktop, de la CLI et de la console, pour chaque compte. Les conversations claude.ai, les projets et Cowork restent sur claude.ai."),
+    dups.length ? h("div", { class: "drawer-note dup-note" }, h("span", {},
+      `${dups.length} session${dups.length > 1 ? "s ont" : " a"} été dupliquée${dups.length > 1 ? "s" : ""} par un ancien déplacement vers un projet.`),
+    h("div", { class: "row" }, h("button", { type: "button", class: "btn small primary", on: { click: mergeDups } }, "Réunir en une seule session"))) : null,
     h("div", { class: "drawer-filters" }, search,
       sel(profile, [["", "Tous les comptes"], ...profiles.map((p) => [p.id, p.name])], (v) => { profile = v; renderList(); }),
       sel(origin, [["", "Toutes origines"], ...Object.entries(ORIGIN)], (v) => { origin = v; renderList(); }),
@@ -91,19 +112,48 @@ async function openViewer(r) {
       h("b", {}, toolLabel(it.name)), h("span", { class: "tt" }, it.target || "")));
   }
   if (!data.items.length) body.append(h("div", { class: "muted" }, "Transcription vide ou illisible."));
+  const sub = h("small", {}, [ORIGIN[s.origin], s.cwd, fmtDate(s.updated), `${s.prompts} demande(s)`, s.model].filter(Boolean).join(" · "));
   const presets = ctx.presets().filter((p) => p.enabled);
   const preset = h("select", {}, ...presets.map((p) => h("option", { value: p.id }, p.name)));
   preset.value = ctx.profiles().find((p) => p.id === s.profile)?.default_preset || presets[0]?.id;
   const fork = h("input", { type: "checkbox" });
-  fork.checked = true;
+  fork.checked = false; // the same session continues; tick for a copy (e.g. while it is open in Claude Desktop)
   const msg = h("textarea", { rows: "2", placeholder: "Ton message pour continuer cette session…" });
+  // Moving = the same session, filed in another project folder (Claude Desktop follows).
+  const folderBtn = h("button", { type: "button", class: "btn small ghost folder-choice", on: { click: async () => {
+    const r = await ctx.moveSession(s.profile, s.id, s.title, s.cwd);
+    if (!r) return;
+    s.cwd = r.folder;
+    s.resumable = true;
+    sub.textContent = [ORIGIN[s.origin], s.cwd, fmtDate(s.updated), `${s.prompts} demande(s)`, s.model].filter(Boolean).join(" · ");
+    refresh();
+    load();
+  } } });
+  const goBtn = h("button", { type: "button", class: "btn primary", on: { click: () => resume() } });
+  const termBtn = h("button", { type: "button", class: "btn ghost", title: "Reprend la session d'origine en interactif (ferme-la d'abord dans Claude Desktop)",
+    on: { click: () => terminal() } }, "Terminal");
+  const note = h("div", { class: "line err", hidden: true });
+  const forkLabel = h("label", { class: "check", title: "Coché : la suite part dans une copie et la session d'origine reste intacte (utile si elle est ouverte dans Claude Desktop)." }, fork, "Continuer dans une copie");
+  function refresh() {
+    folderBtn.replaceChildren(h("span", { class: "i", svg: "folder" }),
+      s.resumable ? `Dans ${baseName(s.cwd)} · déplacer…` : "Déplacer dans un projet…");
+    folderBtn.title = "Déplacer cette session dans un autre dossier (projet) : la même session continue là";
+    goBtn.disabled = !s.resumable;
+    goBtn.textContent = "Reprendre dans la console";
+    termBtn.disabled = !s.resumable;
+    note.hidden = s.resumable;
+    note.textContent = `Le dossier d'origine n'existe plus (${s.cwd || "inconnu"}) : déplace la session dans un projet pour la reprendre.`;
+  }
   const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey, true); };
   const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".dialog:not(.viewer)")) close(); };
   const resume = async () => {
     const prompt = msg.value.trim();
     if (!prompt) { msg.focus(); toast("Écris d'abord le message qui relance la session.", "warn"); return; }
     const t = await ctx.launch(`/api/sessions/${s.profile}/${s.id}/resume`, { prompt, preset: preset.value, fork: fork.checked });
-    if (t) { close(); document.getElementById("sessions").hidden = true; }
+    if (t) {
+      close();
+      document.getElementById("sessions").hidden = true;
+    }
   };
   msg.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); resume(); } });
   const terminal = async () => {
@@ -114,20 +164,19 @@ async function openViewer(r) {
     h("div", { class: "viewer-head" },
       h("span", { class: "badge" }, s.profile_name),
       h("div", { class: "vh" }, h("h3", {}, s.title),
-        h("small", {}, [ORIGIN[s.origin], s.cwd, fmtDate(s.updated), `${s.prompts} demande(s)`, s.model].filter(Boolean).join(" · "))),
+        sub),
       h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: close } })),
     body,
-    h("div", { class: "viewer-foot" },
-      s.resumable ? msg : h("div", { class: "line err" }, `Le dossier de cette session n'existe plus (${s.cwd || "inconnu"}) : reprise impossible.`),
+    h("div", { class: "viewer-foot" }, note, msg,
       h("div", { class: "row" },
+        folderBtn,
         h("label", { class: "chip-select" }, h("span", { class: "i", svg: "shieldq" }), preset),
-        h("label", { class: "check", title: "La session d'origine reste intacte ; la suite part dans une copie." }, fork, "Continuer dans une copie"),
-        h("span", { class: "grow" }),
-        h("button", { type: "button", class: "btn ghost", disabled: !s.resumable, title: "Reprend la session d'origine en interactif (ferme-la d'abord dans Claude Desktop)", on: { click: terminal } }, "Terminal"),
-        h("button", { type: "button", class: "btn primary", disabled: !s.resumable, on: { click: resume } }, "Reprendre dans la console"))));
+        forkLabel,
+        h("span", { class: "grow" }), termBtn, goBtn)));
+  refresh();
   const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
   root.append(overlay);
   document.addEventListener("keydown", onKey, true);
   body.scrollTop = body.scrollHeight;
-  if (s.resumable) msg.focus();
+  msg.focus();
 }
