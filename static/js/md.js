@@ -20,7 +20,7 @@ const PATH_RX = new RegExp(`^(?:[A-Za-z]:[\\\\/]|~[\\\\/]|/(?:Users|home|Volumes
 // In running text, folder and file names may contain spaces ("Dev Projects") but never start or
 // end with one. \u0000 is excluded so a path or URL never swallows a rendered placeholder.
 const SEG = "[^<>|*?:\\n\\u0000,;\\\\/\\s](?:[^<>|*?:\\n\\u0000,;\\\\/]*?[^<>|*?:\\n\\u0000,;\\\\/\\s])?";
-const PATH_IN_TEXT = new RegExp(`(^|[\\s(«])((?:[A-Za-z]:[\\\\/]|~[\\\\/]|/(?:Users|home|Volumes)/)(?:${SEG}[\\\\/])*?${SEG}\\.(?:${EXT}))(?=$|[\\s.,;:!?)»])`, "gi");
+const PATH_IN_TEXT = new RegExp(`(^|[\\s(«;*_\\[])((?:[A-Za-z]:[\\\\/]|~[\\\\/]|/(?:Users|home|Volumes)/)(?:${SEG}[\\\\/])*?${SEG}\\.(?:${EXT}))(?=$|[\\s.,;:!?)»*_\\]&])`, "gi");
 const LOCAL_LINK = /(!?)\[([^\]\n]*)\]\((?:&lt;)?((?:[A-Za-z]:[\\/]|~[\\/]|\/(?:Users|home|Volumes|tmp)\/)[^)\n\u0000]*?)(?:&gt;)?\)/g;
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
