@@ -155,6 +155,15 @@ def test_files_of_the_folder(client, data_dir):  # noqa: F811
     assert r.status_code == 200 and r.content == b"%PDF-1.4" and r.headers["content-security-policy"] == "sandbox"
     assert client.get("/api/workspace/file", params={**q, "path": ".env"}, headers=h).status_code == 403
     assert client.get("/api/workspace/file", params={**q, "path": "../x"}, headers=h).status_code == 403
+    # an open preview asks only for the file's stamp, and reloads when it changes
+    stat = {**q, "path": "notes.md", "stat": 1}
+    before = client.get("/api/workspace/file", params=stat, headers=h).json()["stamp"]
+    assert client.get("/api/workspace/file", params={**q, "path": "notes.md"}, headers=h).headers["x-file-stamp"] == before
+    (folder / "notes.md").write_text("# Notes\n\n- relance Dupont", encoding="utf-8")
+    assert client.get("/api/workspace/file", params=stat, headers=h).json()["stamp"] != before
+    assert client.get("/api/workspace/file", params={**q, "path": ".env", "stat": 1}, headers=h).status_code == 403
+    (folder / "notes.md").unlink()
+    assert client.get("/api/workspace/file", params=stat, headers=h).status_code == 404
     # the console's own data can never become a project folder
     assert client.get("/api/workspace", params={"profile": "work", "folder": str(data_dir)}, headers=h).status_code == 403
 

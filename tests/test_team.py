@@ -16,7 +16,7 @@ def test_roles_depend_on_the_chief():
     assert roles("sonnet")[0] == {"eclaireur": "haiku", "expert": "opus"}             # escalates up
     assert roles("claude-opus-5-5")[0] == {"eclaireur": "haiku", "executant": "sonnet"}
     assert roles("haiku")[0] == {"expert": "opus"}  # never a worker dearer than the chief
-    assert "expert" in roles("sonnet")[1] and "moins de trois actions" in roles("sonnet")[1]
+    assert "expert" in roles("sonnet")[1] and "toute petite tâche" in roles("sonnet")[1]
 
 
 def test_default_resolves_through_the_account_models():
@@ -26,7 +26,7 @@ def test_default_resolves_through_the_account_models():
 
 def test_scout_is_read_only():
     agents, _, _ = team.build("opus", TeamSettings())
-    assert set(agents["eclaireur"]["tools"]) <= {"Read", "Glob", "Grep", "WebSearch", "WebFetch", "TodoWrite"}
+    assert {"Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"} <= set(agents["eclaireur"]["disallowedTools"])
 
 
 def test_team_task_passes_agents_and_subagent_model(engine):

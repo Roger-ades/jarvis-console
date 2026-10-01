@@ -381,7 +381,9 @@ function tabModels() {
   });
   return [
     section("Modèles", "Le modèle se choisit aussi à chaque demande dans la barre de commande.", grid(
-      num("Nombre max de tours par tâche", "general.max_turns", { min: 1, max: 1000, help: "Chaque preset peut le réduire." })),
+      num("Nombre max de tours par tâche", "general.max_turns", { min: 1, max: 1000, help: "Chaque preset peut le réduire." }),
+      num("Compacter le contexte vers (milliers de tokens)", "general.compact_at_k", { min: 0, max: 1000,
+        help: "Chaque action relit tout le contexte de la session. Opus a une fenêtre d'un million de tokens : sans ce réglage, Claude Code ne compacte presque jamais. 0 : seuil de Claude Code." })),
       h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Type de tâche (preset)"), h("th", {}, "Modèle"))), h("tbody", {}, rows))),
     section("Mode équipe", "Case « Équipe » de la barre du bas : le modèle choisi dirige ; il délègue le travail de volume à des sous-agents moins chers et, s'il est lui-même moins puissant, les points difficiles à l'expert. Un rôle n'est proposé que s'il est utile à côté du chef.",
       grid(
@@ -428,6 +430,9 @@ function tabSecurity(state) {
       h("div", { class: "row" }, h("button", { type: "button", class: "btn", on: { click: rotate } }, "Régénérer le jeton d'accès"),
         h("span", { class: "muted" }, "Les autres onglets ouverts devront être rouverts via start.bat.")),
       grid(lines("Origines supplémentaires autorisées", "security.extra_origins", { cls: "", rows: 3, help: "Rarement utile. Ex. http://127.0.0.1:8788" }))),
+    section("Pages web montrées par Claude", "Quand Claude veut afficher une page web (outil « afficher »), elle s'ouvre seule si son site est approuvé ; sinon la tâche te propose de l'ouvrir, et rien n'est chargé tant que tu ne cliques pas.",
+      grid(lines("Domaines approuvés", "security.trusted_domains", { rows: 4,
+        help: "Un domaine par ligne, sous-domaines compris (ex. monentreprise.odoo.com, monentreprise.sharepoint.com). Adresses https:// seulement." }))),
     section("Dossiers et fichiers interdits", "Jamais lus ni écrits par un agent, quel que soit le preset. Le dossier de données de la console est toujours protégé.",
       grid(lines("Chemins interdits", "security.forbidden_paths", { rows: 8, help: "~/ = dossier utilisateur ; **/ = n'importe où ; *.pem = motif de nom." }))),
     section("Journal d'audit", "Demandes, profils, presets, appels d'outils avec leur décision, validations et résultats.",

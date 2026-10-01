@@ -317,6 +317,10 @@ def summarize_target(tool: str, inp: dict) -> str:
         return f"{len(inp.get('todos') or [])} élément(s)"
     if tool == "mcp__jarvis__afficher":  # the console's own tool
         return ", ".join(str(x) for x in inp.get("fichiers") or [])[:300]
+    if tool == "mcp__jarvis__afficher_resultat":
+        return " · ".join(str(inp[k]) for k in ("outil", "contient", "id") if inp.get(k))[:200] or "dernier résultat"
+    if tool == "mcp__jarvis__presenter":
+        return str(inp.get("titre") or "")[:200] or "affichage"
     if is_mcp(tool):
         bits = [f"{k}={inp[k]}" for k in ("model", "record_id", "query", "q", "to", "subject", "name")
                 if k in inp and not isinstance(inp[k], (dict, list))]

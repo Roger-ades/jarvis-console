@@ -5,6 +5,7 @@ import { mdElement } from "./md.js";
 import {
   ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, toast, toolIcon, toolLabel,
 } from "./util.js";
+import { openDisplayModal, openDisplayWindow, renderDisplay, setAnswer, setDoc } from "./display.js";
 import { openPreview, revealImage, thumbnail } from "./viewer.js";
 import * as wm from "./wm.js";
 
@@ -29,6 +30,34 @@ function place(el, anchor, width = 220) {
   });
 }
 
+// The prompt cache lasts about an hour on Claude plans (measured on real sessions): after that, the
+// next action sends the whole context again.
+const CACHE_TTL = 55 * 60;
+const BIG_CONTEXT = 80000;
+const ROLE = { eclaireur: "éclaireur", executant: "exécutant", expert: "expert" };
+const agentLabel = (type) => (type === "chef" ? "Chef" : ROLE[type] ? ROLE[type][0].toUpperCase() + ROLE[type].slice(1) : type || "Sous-agent");
+const serverKey = (name) => String(name || "").replace(/[^A-Za-z0-9_-]/g, "_");
+const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+const ago = (ts) => {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  return s < 10 ? "à l'instant" : `il y a ${fmtDuration(s * 1000)}`;
+};
+
+/** A chip per tool with its count; MCP tools stand out (plug icon, accent). */
+function toolChips(tools, max = 99) {
+  const list = Object.entries(tools || {}).sort((a, b) => b[1] - a[1]);
+  return h("div", { class: "tchips" },
+    ...list.slice(0, max).map(([name, n]) => h("span", { class: `tchip${name.startsWith("mcp__") ? " mcp" : ""}`, title: name },
+      name.startsWith("mcp__") ? svg("plug") : null, h("span", {}, toolLabel(name)), h("b", {}, String(n)))),
+    list.length > max ? h("span", { class: "tchip more" }, `+${list.length - max}`) : null);
+}
+
+/** "Opus 5.5" for claude-opus-5-5, "Haiku 4.5" for claude-haiku-4-5-20251001. */
+function modelName(id = "") {
+  const m = id.match(/(opus|sonnet|haiku|fable)-(\d+)-(\d+)/i);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}.${m[3]}` : id || "modèle";
+}
+
 function dismissable(el, onClose) {
   const off = (e) => { if (!el.contains(e.target)) close(); };
   const esc = (e) => { if (e.key === "Escape") close(); };
@@ -45,7 +74,8 @@ function dismissable(el, onClose) {
 export function popupMenu(anchor, items) {
   document.querySelectorAll(".menu.popup, .popover").forEach((m) => m.remove());
   const menu = h("div", { class: "menu popup" });
-  Object.assign(menu.style, { position: "fixed", zIndex: "9000" });
+  // (the base .menu is anchored right: 0 for the top bar; here it must size to its content)
+  Object.assign(menu.style, { position: "fixed", zIndex: "9000", right: "auto", bottom: "auto", maxWidth: "360px" });
   let close = () => {};
   for (const it of items) {
     if (it === "-") { menu.append(h("hr")); continue; }
@@ -148,7 +178,37 @@ export class TaskWindow {
         on: { click: () => this.sendFollowup() } }));
     this.el.append(this.head, this.sub, this.main, this.approvals, this.attList, this.foot);
     this.timer = setInterval(() => this.tick(), 1000);
+    // What the session does, from its transcripts: every agent's tools, background sub-agents included
+    this.activity = null;
+    this.actTimer = setInterval(() => { if (ACTIVE.has(this.task.status) && !wm.isMinimized(this.id)) this.refreshActivity(); }, 4000);
     this.update(t);
+  }
+
+  async refreshActivity() {
+    if (!this.task.resumable || this.actBusy) return;
+    this.actBusy = true;
+    try {
+      const a = await api(`/api/tasks/${this.id}/activity`);
+      this.activity = a.available ? a : null;
+      this.updateAgentCards();
+      if (this.inspOpen) this.renderInspector();
+    } catch { /* the conversation still shows what the stream brought */ } finally {
+      this.actBusy = false;
+    }
+  }
+
+  /** Sub-agent cards of the conversation: their tools, live (the stream shows none for background ones). */
+  updateAgentCards() {
+    for (const g of this.activity?.agents || []) {
+      const a = g.tool_use_id && this.agents.get(g.tool_use_id);
+      if (!a) continue;
+      const n = Object.values(g.tools).reduce((x, y) => x + y, 0);
+      a.live.replaceChildren(toolChips(g.tools, 6));
+      if (g.background) {
+        const busy = ACTIVE.has(this.task.status) && Date.now() / 1000 - (g.last || 0) < 30;
+        a.sm.replaceChildren(`${n} action${n > 1 ? "s" : ""} `, busy ? h("span", { class: "spin" }) : svg("check", "ok-ic"));
+      }
+    }
   }
 
   mount(fresh) {
@@ -160,6 +220,7 @@ export class TaskWindow {
 
   destroy() {
     clearInterval(this.timer);
+    clearInterval(this.actTimer);
     this.att.picker.remove();
     wm.unregister(this.id);
   }
@@ -169,7 +230,7 @@ export class TaskWindow {
     this.insp.hidden = !open;
     this.inspBtn.classList.toggle("on", open);
     if (save) wm.flag(this.id, "insp", open);
-    if (open) this.renderInspector();
+    if (open) { this.renderInspector(); this.refreshActivity(); }
   }
 
   toggleInspector() { this.setInspector(!this.inspOpen); }
@@ -193,12 +254,109 @@ export class TaskWindow {
   }
 
   tokens() {
+    const mu = Object.values(this.task.model_usage || {});
+    if (mu.length) {  // every model of the session, sub-agents included
+      return mu.reduce((n, u) => n + (u.inputTokens || 0) + (u.outputTokens || 0) + (u.cacheReadInputTokens || 0) + (u.cacheCreationInputTokens || 0), 0);
+    }
     const u = this.task.usage || {};
     return (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
   }
 
+  /** The lead's context: size, compaction threshold, and whether the prompt cache is still warm. */
+  contextInfo() {
+    const t = this.task;
+    const size = t.context_tokens || 0, limit = t.context_limit || 0;
+    const now = Date.now() / 1000;
+    const idle = t.context_at ? Math.max(0, now - t.context_at) : 0;
+    const touched = Math.max(t.context_at || 0, t.warm?.last || 0);   // a keep-warm read restarts the cache's hour
+    const warmUntil = (t.keep_warm_until || 0) > now ? t.keep_warm_until : 0;
+    return { size, limit, ratio: limit ? size / limit : 0, idle, cold: touched ? now - touched > CACHE_TTL : false, warmUntil };
+  }
+
+  contextChip() {
+    const c = this.contextInfo();
+    if (!c.size) return null;
+    const lvl = c.ratio >= 0.85 ? " hot" : c.ratio >= 0.6 ? " warn" : "";
+    const w = this.task.warm || {};
+    const tip = [`Contexte de la session : ${fmtTokens(c.size)} tokens, relus à chaque action de Claude.`,
+      c.limit ? `Compactage automatique vers ${fmtTokens(c.limit)}.` : "",
+      c.warmUntil ? `Cache gardé au chaud jusqu'à ${hhmm(c.warmUntil)}${w.pings ? ` · ${w.pings} maintien${w.pings > 1 ? "s" : ""} (${fmtTokens(w.read)} relus)` : ""}.` : "",
+      c.cold ? `Dernière activité il y a ${fmtDuration(c.idle * 1000)} : le cache a expiré, la prochaine action renverra tout le contexte.` : "",
+      "Cliquer : compacter, garder au chaud ou repartir sur une nouvelle demande."].filter(Boolean).join("\n");
+    return h("button", { type: "button", class: `meta-chip ctx${lvl}${c.cold ? " cold" : ""}${c.warmUntil ? " warm" : ""}`, title: tip,
+      on: { click: (e) => this.contextMenu(e.currentTarget) } },
+    svg(c.warmUntil ? "flame" : "gauge"), h("span", {}, `Contexte ${fmtTokens(c.size)}${c.warmUntil ? " · chaud" : ""}`),
+    c.limit ? h("span", { class: "ctx-bar" }, h("i", { style: { width: `${Math.min(100, Math.round(c.ratio * 100))}%` } })) : null);
+  }
+
+  contextMenu(anchor) {
+    const t = this.task, c = this.contextInfo();
+    popupMenu(anchor, [
+      { title: `Contexte : ${fmtTokens(c.size)}${c.limit ? ` sur ${fmtTokens(c.limit)}` : ""} tokens` },
+      { label: "Compacter maintenant", disabled: !t.resumable, run: () => this.compact() },
+      c.warmUntil
+        ? { label: `Arrêter le maintien au chaud (prévu jusqu'à ${hhmm(c.warmUntil)})`, run: () => this.keepWarm(0) }
+        : { label: "Garder au chaud…", disabled: !t.resumable, run: () => this.keepWarmDialog() },
+      { label: "Utiliser comme contexte d'une nouvelle demande", disabled: !t.resumable, run: () => this.ctx.addContext(t) },
+    ]);
+  }
+
+  /** What compacting costs: one full read of the context by the session's model, to write the summary. */
+  compactCost(c) {
+    return `Compacter fait relire une fois tout le contexte (${fmtTokens(c.size)} tokens) par ${this.modelLabel() || "le modèle de la session"} pour le résumer. `
+      + (c.cold ? "Le cache a expiré : cette relecture coûte autant que de renvoyer toute la discussion. "
+        : "Le cache est encore chaud : ça coûte à peu près une action de plus. ")
+      + "C'est rentable si tu continues à travailler ici (chaque action relira ensuite le résumé au lieu de tout), pas pour une seule question.";
+  }
+
+  /** Keep the prompt cache from expiring while the discussion rests (a read every 50 min). */
+  async keepWarmDialog() {
+    const c = this.contextInfo();
+    const hours = await dialog({
+      title: "Garder le cache au chaud ?",
+      body: `Toutes les 50 minutes, tant que la discussion est inactive, une copie jetable de la session relit le contexte depuis le cache `
+        + `(${fmtTokens(c.size)} tokens, avec ${this.modelLabel() || "le modèle de la session"}) pour qu'il n'expire pas. Rien n'est écrit dans la conversation. `
+        + "Chaque maintien coûte environ 1/20e d'une reprise à froid : c'est rentable si tu reviens dans cette discussion, perdu sinon. "
+        + (c.cold ? "Le cache a déjà expiré : le premier maintien le recréera, ce qui coûte comme une reprise. " : "")
+        + "Arrêt automatique à la fin de la durée, à la fermeture de la fenêtre ou si le quota du compte approche de sa limite.",
+      buttons: [{ label: "Annuler", value: null }, { label: "1 h", value: 1 }, { label: "2 h", value: 2 },
+        { label: "4 h", value: 4, cls: "primary" }, { label: "8 h", value: 8 }],
+    });
+    if (hours) this.keepWarm(hours);
+  }
+
+  async keepWarm(hours) {
+    try {
+      await api(`/api/tasks/${this.id}/keep-warm`, { method: "POST", body: { hours } });
+      toast(hours ? `Cache gardé au chaud pendant ${hours} h.` : "Maintien au chaud arrêté.");
+    } catch (e) { toast(e.message, "err"); }
+  }
+
+  /** Claude Code summarizes the conversation (/compact): the next actions re-read a few thousand tokens. */
+  async compact() {
+    const c = this.contextInfo();
+    if (!(await confirmDialog("Compacter la discussion ?", this.compactCost(c), "Compacter"))) return;
+    try {
+      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text: "", compact: true } });
+      toast("Compactage demandé à Claude Code…");
+    } catch (e) { toast(e.message, "err"); }
+  }
+
+  /** Which member of the team a model is: the lead, a team role, or Claude Code's own sub-agents. */
+  modelRole(id) {
+    const t = this.task, out = [];
+    if (id === t.model_resolved) out.push("chef");
+    for (const [name, alias] of Object.entries(t.team_agents || {})) {
+      if (alias && id !== t.model_resolved && id.toLowerCase().includes(String(alias).toLowerCase())) out.push(ROLE[name] || name);
+    }
+    if (!out.length && t.model_resolved) out.push("sous-agents");
+    return [...new Set(out)].join(", ");
+  }
+
   update(t) {
+    const before = this.task?.status;
     this.task = t;
+    if (before && before !== t.status && !ACTIVE.has(t.status)) this.refreshActivity();  // the final figures
     this.el.style.setProperty("--pc", t.color);
     this.el.setAttribute("aria-label", t.title);
     this.whoName.textContent = t.profile_name;
@@ -244,6 +402,8 @@ export class TaskWindow {
         svg("plug"), h("span", {}, `${mcp.length} MCP${ok < mcp.length ? ` · ${ok} actifs` : ""}`), dots));
     }
     if (t.queued_messages) bits.push(chip("clock", `${t.queued_messages} en attente`, "Messages de suite en attente"));
+    const ctxChip = this.contextChip();
+    if (ctxChip) bits.push(ctxChip);
     this.sub.replaceChildren(...bits);
   }
 
@@ -277,7 +437,9 @@ export class TaskWindow {
         children.length ? h("ul", {}, ...children.map(node)) : null);
     };
     const top = kids(null);
-    secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Agents", h("span", { class: "n" }, String(1 + this.agents.size))),
+    const act = this.activity;
+    if (act) secs.push(this.agentsSection(act));
+    else secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Agents", h("span", { class: "n" }, String(1 + this.agents.size))),
       h("ul", { class: "tree" }, h("li", {},
         h("div", { class: "agent", style: { "--ac": t.color }, on: { click: () => { this.body.scrollTop = 0; } } },
           h("span", { class: "ic", svg: "bot" }),
@@ -293,9 +455,15 @@ export class TaskWindow {
         ...t.todos.map((x) => h("div", { class: `todo ${x.status}` },
           h("span", { class: "b", svg: x.status === "completed" ? "check" : "" }), h("span", {}, x.content)))));
     }
-    // Activity
-    const total = [...this.toolCounts.values()].reduce((a, b) => a + b, 0);
-    const top6 = [...this.toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+    if (act) secs.push(this.mcpSection(act));
+    // Activity (all agents when the transcripts are readable, else what the stream brought)
+    const counts = new Map(this.toolCounts);
+    if (act) {
+      counts.clear();
+      for (const g of act.agents) for (const [name, n] of Object.entries(g.tools)) counts.set(toolLabel(name), (counts.get(toolLabel(name)) || 0) + n);
+    }
+    const total = [...counts.values()].reduce((a, b) => a + b, 0);
+    const top6 = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
     const max = top6[0]?.[1] || 1;
     secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Activité"),
       h("div", { class: "stats" },
@@ -308,6 +476,33 @@ export class TaskWindow {
         h("span", {}, name), h("span", {}, String(n)), h("i")))) : null,
       t.cost_usd ? h("div", { class: "note", title: "Estimation calculée par Claude Code au tarif API" },
         `Équivalent API estimé : ${fmtCost(t.cost_usd)}. Avec un abonnement Claude, l'usage est décompté du quota du forfait ; il n'est facturé en plus que si les crédits d'usage sont activés et le quota dépassé.`) : null));
+    if (act) secs.push(this.recentSection(act));
+    // Usage per model (lead and sub-agents): what weighs on the quota
+    const fromLog = act && Object.keys(act.models || {}).length;
+    const mu = (fromLog
+      ? Object.entries(act.models).map(([id, u]) => ({ id, calls: u.calls, u: { cacheCreationInputTokens: u.cache_creation_input_tokens, outputTokens: u.output_tokens },
+        read: (u.cache_read_input_tokens || 0) + (u.input_tokens || 0) }))
+      : Object.entries(t.model_usage || {}).map(([id, u]) => ({ id, u, read: (u.cacheReadInputTokens || 0) + (u.inputTokens || 0) })))
+      .sort((a, b) => b.read - a.read);
+    if (mu.length) {
+      const c = this.contextInfo();
+      const all = mu.reduce((n, m) => n + m.read, 0) || 1;
+      secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Consommation"),
+        h("table", { class: "usage" },
+          h("thead", {}, h("tr", {}, h("th", {}, "Modèle"), fromLog ? h("th", { title: "Appels à l'API" }, "Appels") : null,
+            h("th", { title: "Tokens relus (cache et entrée) : le gros du quota, chaque action relit tout le contexte" }, "Relus"),
+            h("th", { title: "Tokens mis en cache : le contexte envoyé la première fois ou après expiration du cache" }, "Écrits"),
+            h("th", { title: "Tokens produits par le modèle" }, "Produits"))),
+          h("tbody", {}, ...mu.map(({ id, u, read, calls }) => h("tr", {},
+            h("td", { title: `${id} · ${Math.round((read / all) * 100)} % des tokens relus` }, h("b", {}, modelName(id)),
+              h("small", {}, this.modelRole(id)), h("i", { class: "share", style: { width: `${Math.max(2, Math.round((read / all) * 100))}%` } })),
+            fromLog ? h("td", {}, String(calls || 0)) : null,
+            h("td", {}, fmtTokens(read)), h("td", {}, fmtTokens(u.cacheCreationInputTokens || 0)),
+            h("td", {}, fmtTokens(u.outputTokens || 0)))))),
+        c.size ? h("div", { class: "note" }, `Contexte actuel du chef : ${fmtTokens(c.size)} tokens${c.limit ? `, compacté automatiquement vers ${fmtTokens(c.limit)}` : ""}. Chacune de ses actions le relit.`) : null,
+        t.warm?.pings ? h("div", { class: "note" }, `Maintien du cache : ${t.warm.pings} fois · ${fmtTokens(t.warm.read)} relus en cache`
+          + `${t.warm.written >= 1000 ? ` · ${fmtTokens(t.warm.written)} réécrits` : ""}${c.warmUntil ? ` · actif jusqu'à ${hhmm(c.warmUntil)}` : ""}.`) : null));
+    }
     // Session
     const mcp = t.mcp || [];
     secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Session"),
@@ -318,7 +513,53 @@ export class TaskWindow {
         t.resumable ? h("dt", {}, "Session") : null, t.resumable ? h("dd", { title: "claude --resume" }, t.session_id) : null),
       mcp.length ? h("div", { class: "mcp-list" }, ...mcp.map((s) => h("div", { class: "mcp-row" },
         h("i", { class: mcpCls(s.status) }), h("span", {}, String(s.name || "").replace(/^claude\.ai /, "")), h("em", {}, s.status)))) : null));
-    this.insp.replaceChildren(...secs);
+    this.insp.replaceChildren(...secs.filter(Boolean));
+  }
+
+  /** Lead and sub-agents (background ones too) with their model, calls and tools. */
+  agentsSection(act) {
+    const t = this.task;
+    const rows = act.agents.map((g) => {
+      const lead = g.type === "chef";
+      const busy = ACTIVE.has(t.status) && Date.now() / 1000 - (g.last || 0) < 30;
+      const card = !lead && g.tool_use_id && this.agents.get(g.tool_use_id);
+      return h("div", { class: `agent${lead ? " lead" : ""}`, style: { "--ac": card?.color || (lead ? t.color : "var(--violet)") },
+        title: g.description || agentLabel(g.type), on: { click: () => (card ? this.focusAgent(g.tool_use_id) : lead && (this.body.scrollTop = 0)) } },
+      h("span", { class: "ic", svg: "bot" }),
+      h("span", { class: "nm" },
+        h("b", {}, lead ? (t.team ? "Chef d'équipe" : "Agent principal") : agentLabel(g.type),
+          g.models[0] ? h("span", { class: "mdl" }, g.models.map(modelName).join(", ")) : null),
+        h("small", {}, [!lead && g.description, `${g.calls} appel${g.calls > 1 ? "s" : ""}`, `${fmtTokens(g.read)} relus`,
+          g.last ? ago(g.last) : ""].filter(Boolean).join(" · ")),
+        Object.keys(g.tools).length ? toolChips(g.tools) : h("small", { class: "muted" }, "aucun outil utilisé")),
+      h("span", { class: "st" }, busy ? h("span", { class: "spin" }) : svg("check", "ok-ic")));
+    });
+    return h("section", { class: "insp-sec" }, h("h4", {}, "Agents", h("span", { class: "n" }, String(act.agents.length))), ...rows);
+  }
+
+  /** MCP servers Claude really used in the session (the full list sits behind the MCP chip). */
+  mcpSection(act) {
+    const status = new Map((this.task.mcp || []).map((s) => [serverKey(s.name), s.status]));
+    const names = Object.keys(act.mcp || {}).filter((n) => act.mcp[n] > 0).sort();
+    if (!names.length) return null;
+    return h("section", { class: "insp-sec" }, h("h4", {}, "Serveurs MCP"),
+      ...names.map((n) => {
+        const calls = act.mcp[n];
+        return h("div", { class: "mcp-use" }, h("i", { class: mcpCls(status.get(n) || "connected") }),
+          h("span", {}, n.replace(/^claude_ai_/, "claude.ai · ")),
+          h("em", {}, `${calls} appel${calls > 1 ? "s" : ""}`));
+      }));
+  }
+
+  /** The latest tool calls, all agents together. */
+  recentSection(act) {
+    if (!act.recent?.length) return null;
+    return h("section", { class: "insp-sec" }, h("h4", {}, "Derniers appels d'outils"),
+      h("div", { class: "recent" }, ...act.recent.slice(0, 18).map((r) => h("div", { class: `rc${r.tool.startsWith("mcp__") ? " mcp" : ""}`, title: r.target || r.tool },
+        h("span", { class: "tm" }, new Date(r.ts * 1000).toLocaleTimeString("fr-FR")),
+        h("span", { class: `who${r.agent === "chef" ? " lead" : ""}` }, agentLabel(r.agent)),
+        h("span", { class: "tl" }, toolLabel(r.tool)),
+        h("span", { class: "tg" }, r.target || "")))));
   }
 
   rootTools() {
@@ -369,6 +610,28 @@ export class TaskWindow {
     return h("div", { class: `line ${cls}` }, ico ? svg(ico) : null, h("span", {}, text));
   }
 
+  /** A web page Claude wants to show, on a site outside the approved domains: opened only by the user. */
+  askUrl(u) {
+    let host = u;
+    try { host = new URL(u).hostname; } catch { /* shown as is */ }
+    const open = () => openPreview({ url: u, kind: "web", color: this.task.color });
+    const trust = async () => {
+      try {
+        const r = await api("/api/security/trust", { method: "POST", body: { domain: host } });
+        toast(`${r.domain} ajouté aux domaines approuvés (Configuration › Sécurité).`);
+        open();
+      } catch (e) { toast(e.message, "err"); }
+    };
+    const btn = (label, fn, cls = "") => h("button", { type: "button", class: `btn small ${cls}`, on: { click: fn } }, label);
+    return h("div", { class: "askurl" },
+      h("div", { class: "askurl-head" }, svg("globe"), h("span", {}, "Claude veut ouvrir ", h("b", {}, host))),
+      h("div", { class: "askurl-url", title: u }, u),
+      h("div", { class: "askurl-actions" },
+        btn("Ouvrir", open, "primary"),
+        btn(`Toujours autoriser ${host}`, trust),
+        btn("Copier le lien", () => copyText(u), "ghost")));
+  }
+
   /** Markdown with previews: thumbnails for local images, web images on demand. */
   md(text, cls = "md") {
     const node = mdElement(text, cls);
@@ -393,6 +656,7 @@ export class TaskWindow {
       for (const ev of buf) this.apply(ev, true);
       this.body.scrollTop = this.body.scrollHeight;
       if (this.inspOpen) this.renderInspector();
+      this.refreshActivity();  // context and tools of a session that has not answered since the console started
     }
   }
 
@@ -461,12 +725,37 @@ export class TaskWindow {
         const refs = [...(d.files || []).map((p) => h("a", { href: "#", class: `fileref${IMG_FILE.test(p) ? " img" : ""}`, "data-path": p, title: `Aperçu : ${p}` },
           p.split(/[\\/]/).pop())),
         ...(d.urls || []).map((u) => h("a", { href: "#", class: "showurl", title: u,
-          on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.task.color }); } } }, u.replace(/^https:\/\//, "")))];
+          on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.task.color }); } } }, u.replace(/^https:\/\//, ""))),
+        ...(d.results || []).map((r) => h("a", { href: "#", class: "showurl", title: `Résultat de ${r.tool}`,
+          on: { click: (e) => { e.preventDefault(); openPreview({ taskId: this.id, result: r, color: this.task.color }); } } },
+          `${r.kind === "mail" ? "mail" : "résultat"} « ${r.title} »`))];
         const list = [];
         refs.forEach((r, i) => list.push(...(i ? [", ", r] : [r])));
-        this.push(h("div", { class: "line shown" }, svg("eye"), h("span", {}, "Affiché : ", ...list)), parent);
+        if (refs.length) this.push(h("div", { class: "line shown" }, svg("eye"), h("span", {}, "Affiché : ", ...list)), parent);
+        for (const u of d.ask || []) this.push(this.askUrl(u), parent);
         break;
       }
+      case "display": {
+        // a display composed by Claude (tool presenter): drawn in the conversation, or a line that reopens
+        // its window or modal. An update (same key) redraws it where it already is.
+        setDoc(this.id, d);
+        this.displayCards = this.displayCards || new Map();
+        if (this.displayCards.get(d.key)?.isConnected) break;
+        const color = this.task.color;
+        const card = d.ou === "conversation"
+          ? renderDisplay(this.id, d.key, { mode: "conversation", color })
+          : h("div", { class: "line shown" }, svg("sparkle"), h("span", {}, d.ou === "modale" ? "Affiché au premier plan : " : "Affiché dans une fenêtre : ",
+            h("a", { href: "#", class: "showurl", on: { click: (e) => {
+              e.preventDefault();
+              if (d.ou === "modale") openDisplayModal(this.id, d.key, color); else openDisplayWindow(this.id, d.key, color);
+            } } }, `« ${d.titre} »`)));
+        this.displayCards.set(d.key, card);
+        this.push(card, parent);
+        break;
+      }
+      case "display_answer":
+        setAnswer(this.id, d);
+        break;
       case "policy":
         this.push(this.line(`Refusé : ${toolLabel(d.tool)}${d.target ? ` — ${d.target}` : ""}. ${d.reason || ""}`, "policy", "shield"), parent);
         break;
@@ -552,14 +841,15 @@ export class TaskWindow {
     if (parent && this.agents.has(parent)) this.agents.get(parent).tools += 1;
     this.toolCounts.set("Sous-agent", (this.toolCounts.get("Sous-agent") || 0) + 1);
     const sm = h("span", { class: "sm" }, h("span", { class: "spin" }));
+    const live = h("span", { class: "alive" });
     const body = h("div", { class: "ab" });
     const card = h("details", { class: "agentcard", open: true, style: { "--ac": color } },
       h("summary", { on: { click: () => { card.dataset.touched = "1"; } } },
         h("span", { class: "ic", svg: "bot" }),
-        h("span", { class: "hd" }, h("b", {}, `Sous-agent · ${type}`, model ? h("span", { class: "mdl" }, model) : null), h("small", { title: desc }, desc)), sm),
+        h("span", { class: "hd" }, h("b", {}, `Sous-agent · ${type}`, model ? h("span", { class: "mdl" }, model) : null), h("small", { title: desc }, desc), live), sm),
       body);
     if (inp.prompt) body.append(h("details", { class: "thinking" }, h("summary", {}, svg("list"), "Consigne reçue"), h("div", {}, String(inp.prompt).slice(0, 4000))));
-    this.agents.set(d.id, { id: d.id, parent, type, desc, model, color, status: "running", tools: 0, started: ts, ended: null, card, body, sm });
+    this.agents.set(d.id, { id: d.id, parent, type, desc, model, color, status: "running", tools: 0, started: ts, ended: null, card, body, sm, live });
     this.push(card, parent);
     // The first subagent opens the side panel, unless the user chose to keep it closed.
     if (this.isLive && !this.inspOpen && wm.flag(this.id, "insp") === undefined) this.setInspector(true, false);
@@ -725,10 +1015,26 @@ export class TaskWindow {
     const files = this.att.ids();
     if (!text && !files.length && !this.att.busy()) return;
     if (!this.att.ready()) return;
+    // A big session idle for more than an hour: its cache has expired, the follow-up re-sends it all.
+    let compact = false;
+    const c = this.contextInfo();
+    if (c.size >= BIG_CONTEXT && c.cold && this.task.resumable && !ACTIVE.has(this.task.status)) {
+      const v = await dialog({
+        title: "Reprendre une grosse discussion ?",
+        body: `Cette discussion porte ${fmtTokens(c.size)} tokens de contexte et sa dernière activité date de ${fmtDuration(c.idle * 1000)} : `
+          + "le cache a expiré, la suite renverra tout ce contexte, puis chaque action de Claude le relira. "
+          + this.compactCost(c)
+          + (c.limit && c.size > c.limit ? ` Au-delà de ${fmtTokens(c.limit)}, Claude Code compactera de toute façon au premier message.` : ""),
+        buttons: [{ label: "Annuler", value: null }, { label: "Envoyer tel quel", value: "send" },
+          { label: "Compacter puis envoyer", value: "compact", cls: "primary" }],
+      });
+      if (!v) return;
+      compact = v === "compact";
+    }
     this.input.value = "";
     autoGrow(this.input, 120);
     try {
-      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text, attachments: files } });
+      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text, attachments: files, compact } });
       this.att.sent(files);
     } catch (e) {
       toast(e.message, "err");
@@ -744,6 +1050,25 @@ export class TaskWindow {
     const on = wm.togglePin(this.id);
     this.pinBtn.classList.toggle("on", on);
     try { await api(`/api/tasks/${this.id}`, { method: "PATCH", body: { pinned: on } }); } catch { /* local state is enough */ }
+  }
+
+  /** Claude reads the session (first request, latest exchanges, files) and gives it a title. */
+  async aiRename() {
+    if (this.renaming) return;
+    const before = this.task.title;
+    this.renaming = true;
+    this.el.classList.add("renaming");
+    toast("Claude cherche un titre…");
+    try {
+      const t = await api(`/api/tasks/${this.id}/ai-title`, { method: "POST" });
+      if (t.title !== before) toast(`Renommée : « ${t.title} »`);
+      else toast("Claude garde le même titre.");
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      this.renaming = false;
+      this.el.classList.remove("renaming");
+    }
   }
 
   async close() {
@@ -780,6 +1105,7 @@ export class TaskWindow {
           buttons: [{ label: "Annuler", value: null }, { label: "Renommer", value: true, cls: "primary" }] });
         if (v && v.trim()) api(`/api/tasks/${this.id}`, { method: "PATCH", body: { title: v.trim() } }).catch((e) => toast(e.message, "err"));
       } },
+      { label: "Renommer avec l'IA", disabled: this.renaming, run: () => this.aiRename() },
       { label: this.inspOpen ? "Masquer le panneau" : "Afficher le panneau", run: () => this.toggleInspector() },
       "-",
       { label: "Supprimer de l'historique", danger: true, disabled: ACTIVE.has(t.status), run: async () => {

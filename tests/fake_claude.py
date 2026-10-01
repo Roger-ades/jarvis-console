@@ -10,19 +10,57 @@ The user message drives the scenario, one directive per line:
   FILES                      create an image, a PDF and a CSV, then answer with previews
   IMAGES                     write two images in images/, then name them without their folder
   SHOW <path> | <path>…      call the console's own "afficher" tool (in-process MCP server)
+  MAIL <subject>             a connector returns a mail (Office 365 format); BIGMAIL: too long, saved to a file
+  RESULT <json arguments>    call the console's "afficher_resultat" tool
+  PRESENT <json arguments>   call the console's "presenter" tool (a display made of blocks)
+  VITRINE [ou]               a display with every kind of block (images, results, table, chart…)
+  CTX <tokens>               the session's context now weighs that much (usage of the next calls)
+  /compact                   compact the context, as Claude Code does
 Anything else is echoed back.
 """
 import json
 import os
+import re
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 
 sys.stdout.reconfigure(encoding="utf-8")  # the real CLI (Node) speaks UTF-8 on its pipes
 sys.stdin.reconfigure(encoding="utf-8")
 ARGS = sys.argv[1:]
 _pending: list[dict] = []
 SDK_SERVERS: dict[str, list[str]] = {}  # SDK-hosted MCP servers dialed at start -> tool names
+# Like the real CLI: the context grows with each turn, total_cost_usd and modelUsage add up over the process.
+STATE = {"ctx": 20000, "cost": 0.0, "usage": {}}
+
+
+def spend(model="fake-model", read=0, written=500, output=5, cost=0.01, window=1_000_000):
+    u = STATE["usage"].setdefault(model, {"inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0,
+                                          "cacheCreationInputTokens": 0, "costUSD": 0.0, "contextWindow": window})
+    u["inputTokens"] += 10
+    u["outputTokens"] += output
+    u["cacheReadInputTokens"] += read
+    u["cacheCreationInputTokens"] += written
+    u["costUSD"] = round(u["costUSD"] + cost, 6)
+    STATE["cost"] = round(STATE["cost"] + cost, 6)
+
+
+def log(entry: dict, agent: str | None = None):
+    """Like the real CLI: the session's transcript, one file per sub-agent next to it."""
+    base = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not base or "--no-session-persistence" in ARGS:
+        return
+    d = os.path.join(base, "projects", re.sub(r"[^A-Za-z0-9]", "-", os.getcwd()))
+    if agent:
+        d = os.path.join(d, SESSION, "subagents")
+    os.makedirs(d, exist_ok=True)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    with open(os.path.join(d, f"agent-{agent}.jsonl" if agent else f"{SESSION}.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"timestamp": stamp, "sessionId": SESSION, **({"isSidechain": True} if agent else {}), **entry},
+                           ensure_ascii=False) + "\n")
+
+
 _n = 0
 
 
@@ -38,6 +76,8 @@ SESSION = opt("--resume") or opt("--session-id") or str(uuid.uuid4())
 def out(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+    if obj.get("type") == "assistant" and not obj.get("parent_tool_use_id"):
+        log({"type": "assistant", "message": obj.get("message") or {}})
 
 
 def read():
@@ -105,7 +145,9 @@ Source : https://example.com/doc."""
 def _call(name, inp, parent=None, result="ok"):
     tid = f"toolu_{uuid.uuid4().hex[:8]}"
     out({"type": "assistant", "parent_tool_use_id": parent,
-         "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+         "message": {"id": f"msg_{uuid.uuid4().hex[:8]}", "model": "fake-model",
+                     "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}],
+                     "usage": {"input_tokens": 10, "cache_read_input_tokens": STATE["ctx"], "cache_creation_input_tokens": 200, "output_tokens": 20}}})
     ok, why = use_tool(name, inp)
     time.sleep(0.15)
     out({"type": "user", "parent_tool_use_id": parent, "message": {"content": [
@@ -245,20 +287,102 @@ def dial_sdk_servers(names):
         SDK_SERVERS[name] = [t["name"] for t in ((tools.get("mcp_response") or {}).get("result") or {}).get("tools") or []]
 
 
+def background_team(delay: float):
+    """Two background sub-agents (team mode): their tool calls only reach their transcripts, as with the
+    real CLI, whose stream forwards nothing of them."""
+    crew = (("eclaireur", "Inventaire du firmware", "claude-haiku-4-5-20251001",
+             [("mcp__codegraph__codegraph_explore", {"query": "onboarding firmware"}), ("Read", {"file_path": "main.c"}),
+              ("Grep", {"pattern": "firmware", "path": "."})]),
+            ("executant", "Étape choix du boîtier", "claude-sonnet-5-5",
+             [("Read", {"file_path": "Onboarding.kt"}), ("Edit", {"file_path": "Onboarding.kt"}),
+              ("Bash", {"command": "gradlew test"})]))
+    for kind, desc, model, tools in crew:
+        tid = f"toolu_{uuid.uuid4().hex[:8]}"
+        inp = {"subagent_type": kind, "description": desc, "prompt": f"{desc}.", "run_in_background": True}
+        out({"type": "assistant", "parent_tool_use_id": None, "message": {"id": f"msg_{uuid.uuid4().hex[:8]}", "model": "fake-model",
+             "content": [{"type": "tool_use", "id": tid, "name": "Agent", "input": inp}]}})
+        out({"type": "user", "parent_tool_use_id": None, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": False, "content": "Agent lancé en arrière-plan."}]}})
+        agent = uuid.uuid4().hex[:16]
+        d = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "."), "projects", re.sub(r"[^A-Za-z0-9]", "-", os.getcwd()),
+                         SESSION, "subagents")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"agent-{agent}.meta.json"), "w", encoding="utf-8") as f:
+            json.dump({"agentType": kind, "description": desc, "toolUseId": tid, "requestShape": "background"}, f)
+        for name, tin in tools:
+            time.sleep(delay)
+            log({"type": "assistant", "message": {"id": f"msg_{uuid.uuid4().hex[:8]}", "model": model,
+                 "content": [{"type": "tool_use", "id": f"toolu_{uuid.uuid4().hex[:8]}", "name": name, "input": tin}],
+                 "usage": {"input_tokens": 10, "cache_read_input_tokens": 30000, "cache_creation_input_tokens": 900, "output_tokens": 60}}},
+                agent)
+    return "2 sous-agents lancés en arrière-plan"
+
+
+def showcase(where: str) -> str:
+    images()
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 90"><rect x="4" y="20" width="90" height="50" rx="8" '
+           'fill="none" stroke="#3987e5" stroke-width="2"/><text x="49" y="50" font-size="13" text-anchor="middle" '
+           'fill="#3987e5">Caméras</text><path d="M94 45h60" stroke="#888" stroke-width="2"/><rect x="154" y="20" width="90" '
+           'height="50" rx="8" fill="none" stroke="#199e70" stroke-width="2"/><text x="199" y="50" font-size="13" '
+           'text-anchor="middle" fill="#199e70">NVR</text><path d="M244 45h40" stroke="#888" stroke-width="2"/>'
+           '<circle cx="300" cy="45" r="14" fill="none" stroke="#c98500" stroke-width="2"/></svg>')
+    return console_tool("presenter", {"titre": "Point télésurveillance — client Dupont", "ou": where, "blocs": [
+        {"type": "chiffres", "elements": [
+            {"libelle": "CA septembre", "valeur": "48 200 €", "evolution": "+12 %", "detail": "vs août"},
+            {"libelle": "Devis ouverts", "valeur": 7, "evolution": "-2"},
+            {"libelle": "Délai moyen", "valeur": "3,4 j", "evolution": "+0,3 j"}]},
+        {"type": "texte", "texte": "Le client demande **3 postes** de télésurveillance. Voici les éléments utiles."},
+        {"type": "images", "titre": "Visuels", "images": [
+            {"source": "images/logo-jarvis.png", "legende": "Logo"}, {"source": "images/banniere.png", "legende": "Bannière"},
+            {"source": "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png",
+             "legende": "Image du web"}]},
+        {"type": "resultats", "titre": "Recherche : caméras dôme 4 MP", "elements": [
+            {"titre": "Caméra dôme IP 4 MP — fiche technique", "url": "https://example.com/camera-dome",
+             "extrait": "Vision nocturne 30 m, IP67, PoE, compression H.265.", "source": "example.com"},
+            {"titre": "Comparatif 2026 des caméras de surveillance", "url": "https://www.example.org/comparatif",
+             "extrait": "Douze modèles testés en conditions réelles.", "source": "example.org"}]},
+        {"type": "graphique", "titre": "Ventes par trimestre", "forme": "barres", "unite": "k€",
+         "etiquettes": ["T1", "T2", "T3", "T4"],
+         "series": [{"nom": "2025", "valeurs": [32, 41, 38, 45]}, {"nom": "2026", "valeurs": [36, 44, 48, None]}]},
+        {"type": "graphique", "titre": "Appels reçus", "forme": "courbe", "etiquettes": ["lun", "mar", "mer", "jeu", "ven"],
+         "series": [{"nom": "Alarmes", "valeurs": [12, 18, 9, 22, 15]}, {"nom": "Levées de doute", "valeurs": [5, 7, 4, 9, 6]}]},
+        {"type": "graphique", "titre": "Répartition du parc", "forme": "secteurs",
+         "etiquettes": ["Caméras", "Détecteurs", "Sirènes", "Claviers"], "series": [{"nom": "Parc", "valeurs": [48, 31, 12, 9]}]},
+        {"type": "tableau", "titre": "Tarifs", "colonnes": ["Référence", "Désignation", "Prix HT"],
+         "lignes": [["CAM-01", "Caméra dôme 4 MP", 189], ["NVR-08", "Enregistreur 8 voies", 412.5], ["SIR-02", "Sirène extérieure", 96]]},
+        {"type": "fiche", "titre": "Client", "champs": [{"libelle": "Nom", "valeur": "Dupont SARL"},
+                                                         {"libelle": "Contact", "valeur": "M. Dupont"},
+                                                         {"libelle": "Devis", "valeur": "S00012 — 3 200 € HT"}],
+         "lien": "https://example.com/odoo/sales/12"},
+        {"type": "chronologie", "titre": "Agenda", "elements": [
+            {"quand": "2026-10-02T09:00", "titre": "Visite technique", "texte": "Sur site, 1 h"},
+            {"quand": "2026-10-06T14:30", "titre": "Rendez-vous signature"}]},
+        {"type": "progression", "valeur": 65, "texte": "Installation : 2 postes sur 3"},
+        {"type": "schema", "titre": "Architecture", "svg": svg},
+        {"type": "choix", "question": "Quelle offre proposer ?", "options": ["Standard", "Premium", "Sur mesure"]},
+        {"type": "actions", "boutons": [{"libelle": "Préparer le devis", "message": "Prépare le devis Premium."},
+                                        {"libelle": "Ouvrir la fiche", "url": "https://example.com/odoo/sales/12"}]},
+    ]})
+
+
 def show(items):
     """The model calls mcp__jarvis__afficher: PreToolUse hook, then tools/call to the in-process server."""
-    name, inp = "mcp__jarvis__afficher", {"fichiers": items}
+    return console_tool("afficher", {"fichiers": items})
+
+
+def console_tool(tool: str, inp: dict) -> str:
+    name = f"mcp__jarvis__{tool}"
     tid = f"toolu_{uuid.uuid4().hex[:8]}"
     out({"type": "assistant", "parent_tool_use_id": None,
          "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
-    if "afficher" not in SDK_SERVERS.get("jarvis", []):
+    if tool not in SDK_SERVERS.get("jarvis", []):
         text, err = f"No such tool available: {name}", True
     else:
         ok, text = use_tool(name, inp)
         err = not ok
         if ok:
             r = request({"subtype": "mcp_message", "server_name": "jarvis", "message": {
-                "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "afficher", "arguments": inp}}})
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": inp}}})
             res = (r.get("mcp_response") or {}).get("result") or {}
             text = " ".join(c.get("text", "") for c in res.get("content") or [])
             err = bool(res.get("isError"))
@@ -267,9 +391,69 @@ def show(items):
     return ("affichage refusé : " if err else "") + text
 
 
+def mail(subject: str, big: bool = False) -> str:
+    """A connector's tool returns a mail, as the Office 365 one does (read_resource); a long one is
+    saved by the CLI in the session's tool-results folder, the model only gets its path."""
+    m = {"id": "AAMk" + uuid.uuid4().hex, "subject": subject, "bodyPreview": "Bonjour, voici le devis.",
+         "body": {"contentType": "html", "content": '<html><head><style>.t{color:#c00}</style></head><body>'
+                  '<p class="t">Bonjour,</p><p style="font-weight:bold">Voici le devis.</p>'
+                  '<img src="https://pixel.example.com/open.gif"><img src="cid:logo@x"></body></html>'},
+         "sender": {"name": "Alice Martin", "address": "alice@example.com"},
+         "toRecipients": [{"name": "Roger", "address": "roger@example.com"}], "ccRecipients": [],
+         "receivedDateTime": "2026-09-30T08:15:00Z", "hasAttachments": True,
+         "attachments": [{"name": "devis.pdf", "size": 48213, "isInline": False}, {"name": "logo.png", "isInline": True}],
+         "webLink": "https://outlook.office365.com/owa/?ItemID=AAMk"}
+    name, inp = "mcp__o365__read_resource", {"uri": "mail:///messages/AAMk"}
+    tid = f"toolu_{uuid.uuid4().hex[:8]}"
+    out({"type": "assistant", "parent_tool_use_id": None,
+         "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
+    text = json.dumps(m, ensure_ascii=False)
+    if big:
+        d = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "."), "projects", re.sub(r"[^A-Za-z0-9]", "-", os.getcwd()),
+                         SESSION, "tool-results")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"mcp-o365-read_resource-{int(time.time() * 1000)}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        text = (f"Error: result ({len(text)} characters across 1 line) exceeds maximum allowed tokens. Output has been "
+                f"saved to {path}.\nFormat: Plain text\nUse offset and limit parameters to read specific portions of the file")
+    result = {"type": "user", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": big, "content": [{"type": "text", "text": text}]}]}}
+    out(result)
+    log(result)
+    return f"mail lu : {subject}"
+
+
+def title_turn(text: str):
+    """The console asks for a title (one-shot): the first words of the first request, dressed up the
+    way a model might answer (quotes, "Titre :", final period)."""
+    extracts = text.split("<extraits>", 1)[1]
+    first = extracts.split("Première demande :", 1)[-1].strip().splitlines()[0] if extracts.strip() else ""
+    if "TITRE_ECHEC" in first:
+        out({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "Erreur simulée"})
+        return
+    out({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
+        "status": "allowed", "resetsAt": int(time.time()) + 7200, "rateLimitType": "five_hour", "utilization": 0.3}})
+    words = " ".join(first.split()[:5])
+    out({"type": "result", "subtype": "success", "is_error": False, "result": f"Titre : « {words} ».", "num_turns": 1,
+         "session_id": SESSION, "usage": {"input_tokens": len(text) // 4, "output_tokens": 6}})
+
+
 def turn(text: str):
     if text.strip().startswith("{") and '"action"' in text:
         return relay_turn(json.loads(text))
+    if text.strip() == "/compact":
+        pre, STATE["ctx"] = STATE["ctx"], 12000
+        out({"type": "system", "subtype": "compact_boundary", "session_id": SESSION,
+             "compact_metadata": {"trigger": "manual", "pre_tokens": pre, "post_tokens": 12000}})
+        spend(read=pre, written=12000, output=800)
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "", "num_turns": 0,
+             "total_cost_usd": STATE["cost"], "modelUsage": STATE["usage"], "duration_ms": 5, "session_id": SESSION,
+             "usage": {"input_tokens": 10, "output_tokens": 800}})
+        return
+    if "<extraits>" in text:
+        return title_turn(text)
+    log({"type": "attachment", "attachment": {"type": "mcp_instructions_delta", "addedNames": ["odoo", "codegraph"]}})
     out({"type": "system", "subtype": "init", "session_id": SESSION, "model": "fake-model",
          "tools": ["Read", "Write", "Bash", *(f"mcp__{s}__{t}" for s, ts in SDK_SERVERS.items() for t in ts)],
          "permissionMode": MODE, "mcp_servers": [{"name": "odoo", "status": "connected"},
@@ -326,12 +510,24 @@ def turn(text: str):
             out({"type": "rate_limit_event", "session_id": SESSION, "rate_limit_info": {
                 "status": parts[2] if len(parts) > 2 else "allowed", "rateLimitType": "five_hour",
                 "utilization": float(parts[1]), "resetsAt": int(time.time()) + 600}})
+        elif cmd == "AGENTS":
+            lines.append(background_team(float(parts[1]) if len(parts) > 1 else 0.8))
+        elif cmd == "CTX":
+            STATE["ctx"] = int(parts[1])
         elif cmd == "FILES":
             lines.append(files())
         elif cmd == "IMAGES":
             lines.append(images())
         elif cmd == "SHOW":
             lines.append(show([x.strip() for x in raw.strip()[4:].split("|") if x.strip()]))
+        elif cmd in ("MAIL", "BIGMAIL"):
+            lines.append(mail(raw.strip()[len(cmd):].strip() or "Devis", big=cmd == "BIGMAIL"))
+        elif cmd == "PRESENT":
+            lines.append(console_tool("presenter", json.loads(raw.strip()[7:].strip() or "{}")))
+        elif cmd == "VITRINE":
+            lines.append(showcase(parts[1] if len(parts) > 1 else "conversation"))
+        elif cmd == "RESULT":
+            lines.append(console_tool("afficher_resultat", json.loads(raw.strip()[6:].strip() or "{}")))
         elif cmd == "DEMO":
             demo()
             lines.append(DEMO_TEXT)
@@ -342,10 +538,17 @@ def turn(text: str):
         if chunk:
             out({"type": "stream_event", "parent_tool_use_id": None,
                  "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": chunk}}})
-    out({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "text", "text": result}]}})
+    STATE["ctx"] += 1500
+    call = {"input_tokens": 10, "cache_read_input_tokens": STATE["ctx"] - 500, "cache_creation_input_tokens": 500, "output_tokens": 5}
+    out({"type": "assistant", "parent_tool_use_id": None,
+         "message": {"id": f"msg_{uuid.uuid4().hex[:8]}", "model": "fake-model", "content": [{"type": "text", "text": result}], "usage": call}})
+    spend(read=STATE["ctx"] - 500)
+    if "TEAM" in text or "BG" in text:  # sub-agents on cheaper models
+        spend("claude-haiku-4-5-20251001", read=40000, written=8000, output=300, cost=0.004, window=200000)
     out({"type": "result", "subtype": "success", "is_error": error, "result": result, "num_turns": 1,
-         "total_cost_usd": 0.01, "duration_ms": 5, "session_id": SESSION,
-         "usage": {"input_tokens": 10, "output_tokens": 5}})
+         "total_cost_usd": STATE["cost"], "modelUsage": STATE["usage"], "duration_ms": 5, "session_id": SESSION,
+         "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": call["cache_read_input_tokens"],
+                   "cache_creation_input_tokens": call["cache_creation_input_tokens"]}})
     if BACKGROUND:
         background_work(*BACKGROUND.pop())
 

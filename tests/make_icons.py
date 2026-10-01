@@ -45,61 +45,112 @@ def clamp(v, lo=0.0, hi=1.0):
     return lo if v < lo else hi if v > hi else v
 
 
-def seg_dist(px, py, ax, ay, bx, by):
-    dx, dy = bx - ax, by - ay
-    t = clamp(((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy))
-    return math.hypot(px - ax - t * dx, py - ay - t * dy)
+def hexc(h):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def mix(a, b, t):
+    return tuple(a[k] + (b[k] - a[k]) * t for k in range(3))
+
+
+def ramp(stops, t):
+    """Colour of a gradient (list of (offset, colour)) at t."""
+    t = clamp(t)
+    for (o0, c0), (o1, c1) in zip(stops, stops[1:]):
+        if t <= o1:
+            return mix(c0, c1, clamp((t - o0) / ((o1 - o0) or 1)))
+    return stops[-1][1]
+
+
+# Same drawing as static/img/favicon.svg: an arc reactor centred on 0,0 (scaled 1.12 on a 64-unit tile).
+ACCENT, ACCENT2, HOT, DEEP = hexc("#72c9ff"), hexc("#3aa6f0"), hexc("#e6f7ff"), hexc("#1c7fd6")
+WHITE, RIM, EDGE, GAP, BOLT, BOLT_EDGE = (255, 255, 255), hexc("#9fdcff"), hexc("#d9f4ff"), hexc("#04101a"), hexc("#0b131c"), hexc("#a9b9ca")
+TILE = [(0, hexc("#11233a")), (.55, hexc("#070e17")), (1, hexc("#020407"))]
+METAL = [(0, hexc("#d2dde8")), (.28, hexc("#63768b")), (.55, hexc("#1b2531")), (.78, hexc("#52657a")), (1, hexc("#a9b9ca"))]
+COIL = [(0, HOT), (.62, HOT), (.8, ACCENT), (1, DEEP)]
+CORE = [(0, WHITE), (.45, HOT), (.8, ACCENT), (1, ACCENT2)]
+R0, R1, W1, W0 = 12.6, 19.4, math.radians(12.5), math.radians(10)  # coils: radii, half-widths at the rim / inside
+
+
+def coil_dist(x, y):
+    """Signed distance to the nearest of the ten coils (annular sectors, narrower inside)."""
+    rho = math.hypot(x, y)
+    ang = math.atan2(x, -y)                               # 0 at the top, clockwise
+    step = 2 * math.pi / 10
+    d_ang = abs((ang + step / 2) % step - step / 2)       # angle to the nearest coil's axis
+    half = W0 + (W1 - W0) * clamp((rho - R0) / (R1 - R0))
+    return max(R0 - rho, rho - R1, (d_ang - half) * max(rho, 1e-6))
 
 
 def render(size: int, maskable: bool) -> bytearray:
     px = bytearray(size * size * 4)
-    unit = size / 64.0                       # drawing in a 64-unit box
-    scale = 0.74 if maskable else 1.0        # maskable: keep the artwork in the safe zone
-    bg = (11, 17, 25)
-    tri = [(32, 15.5), (46.5, 40.5), (17.5, 40.5)]
+    unit = size / 64.0                                    # drawing in a 64-unit box
+    small = size <= 32 and not maskable                   # tiny icons: bigger reactor, no hairlines
+    k = 1.0 if maskable else 1.24 if small else 1.12      # maskable: stay in the safe zone
+    aa = 1.0 / (unit * k)                                 # one pixel in emblem units
+    bolts = [(23 * math.sin(math.radians(a)), -23 * math.cos(math.radians(a))) for a in (45, 135, 225, 315)]
     for y in range(size):
         for x in range(size):
-            u = ((x + .5) / unit - 32) / scale + 32
-            v = ((y + .5) / unit - 32) / scale + 32
-            aa = 1.0 / (unit * scale)        # one pixel in drawing units
-            # background: full bleed for maskable, rounded square otherwise
+            tx, ty = (x + .5) / unit, (y + .5) / unit
+            col = ramp(TILE, math.hypot(tx - 32, ty - 28.8) / 46.5)
             if maskable:
-                cov_bg = 1.0
-            else:
-                qx, qy = abs((x + .5) / unit - 32) - 32 + 13, abs((y + .5) / unit - 32) - 32 + 13
-                d = math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - 13
-                cov_bg = clamp(.5 - d * unit)
-            r_, g_, b_ = bg
-            a_ = cov_bg
-            dist = math.hypot(u - 32, v - 32)
-            # soft glow
-            glow = max(0.0, 1 - dist / 30) ** 2 * .35
-            r_, g_, b_ = r_ + (64 - r_) * glow, g_ + (220 - g_) * glow, b_ + (255 - b_) * glow
+                alpha = 1.0
+            else:  # rounded tile with a hairline border
+                qx, qy = abs(tx - 32) - 31 + 14, abs(ty - 32) - 31 + 14
+                d = math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - 14
+                alpha = clamp(.5 - d * unit)
+                col = mix(col, hexc("#8fd4ff"), clamp(.5 - (abs(d + .5) - .5) * unit) * .22)
 
-            def over(col, cov):
-                nonlocal r_, g_, b_
-                r_, g_, b_ = r_ + (col[0] - r_) * cov, g_ + (col[1] - g_) * cov, b_ + (col[2] - b_) * cov
+            def over(c, dist, a=1.0):
+                nonlocal col
+                col = mix(col, c, clamp(.5 - dist / aa) * a)
 
-            # dashed outer ring
-            ring = abs(dist - 26.5) - 1.5
-            ang = (math.atan2(v - 32, u - 32) + math.pi) * 26.5
-            dash = (ang % 15.2) < 11
-            if dash:
-                over((64, 220, 255), clamp(.5 - ring / aa) * .9)
-            # amber ring
-            over((255, 179, 71), clamp(.5 - (abs(dist - 19.5) - .85) / aa) * .85)
-            # triangle outline
-            dtri = min(seg_dist(u, v, *tri[i], *tri[(i + 1) % 3]) for i in range(3)) - .85
-            over((64, 220, 255), clamp(.5 - dtri / aa) * .75)
-            # core with radial gradient
-            core = dist - 10.5
-            if core < aa:
-                t = dist / 10.5
-                col = (242 + (64 - 242) * min(1, t / .45), 253 + (220 - 253) * min(1, t / .45), 255) if t < .45 else \
-                      (64 + (11 - 64) * (t - .45) / .55, 220 + (42 - 220) * (t - .45) / .55, 255 + (68 - 255) * (t - .45) / .55)
-                over(col, clamp(.5 - core / aa))
+            def glow(c, dist, reach, a):
+                nonlocal col
+                if dist > 0:
+                    col = mix(col, c, a * math.exp(-(dist / reach) ** 2))
+
+            ex, ey = (tx - 32) / k, (ty - 32) / k
+            rho = math.hypot(ex, ey)
+            if rho < 30:
+                col = mix(col, ACCENT, .30 * (1 - rho / 30) ** 1.6)                              # ambient light
+            if rho < 27:
+                if not small:
+                    over(RIM, abs(rho - 24.9) - .175, .45)                                       # rim
+                dm = abs(rho - 23) - 1.8
+                if dm < aa:
+                    t = clamp(((ex + 22) * 42 + (ey + 24) * 48) / (42 * 42 + 48 * 48))
+                    over(ramp(METAL, t), dm)                                                     # brushed metal ring
+                if not small:
+                    for bx, by in bolts:
+                        db = math.hypot(ex - bx, ey - by)
+                        over(BOLT_EDGE, db - 1.125)
+                        over(BOLT, db - .775)                                                    # bolts
+                    over(ACCENT, abs(rho - 21.1) - .25, .6)                                      # inner line
+                dc = coil_dist(ex, ey)
+                glow(ACCENT, dc, 1.4, .45)                                                       # coils' light
+                if dc < aa:
+                    over(ramp(COIL, rho / 19.4), dc, .95)                                        # coils
+                    if not small:
+                        over(EDGE, abs(dc) - .175, .7)
+                over(GAP, abs(rho - 11) - .7)                                                    # dark gap
+                if rho < 14:
+                    t = rho / 14
+                    c = mix(HOT, ACCENT, clamp(t / .42))
+                    col = mix(col, c, .95 * (1 - t / .42) + (1 - t) * .42 if t < .42 else .42 * (1 - (t - .42) / .58))  # halo
+                dco = rho - 8.6
+                glow(HOT, dco, 1.2, .5)
+                if dco < aa:
+                    over(ramp(CORE, math.hypot(ex + 1.03, ey + 1.72) / 11.0), dco)               # core
+                if not small:
+                    over(WHITE, abs(rho - 5) - .3, .5)                                           # core ring
+                    sx, sy = ex + 2.7, ey + 3.1                                                  # shine, tilted -35°
+                    ca, sa = math.cos(math.radians(35)), math.sin(math.radians(35))
+                    u, v = sx * ca - sy * sa, sx * sa + sy * ca
+                    over(WHITE, (math.hypot(u / 1.9, v / 1.3) - 1) * 1.3, .75)
             i = (y * size + x) * 4
-            px[i:i + 4] = bytes((int(clamp(r_ / 255) * 255), int(clamp(g_ / 255) * 255), int(clamp(b_ / 255) * 255), int(a_ * 255)))
+            px[i:i + 4] = bytes((int(clamp(col[0] / 255) * 255), int(clamp(col[1] / 255) * 255),
+                                 int(clamp(col[2] / 255) * 255), int(alpha * 255)))
     return px
 
 

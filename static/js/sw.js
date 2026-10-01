@@ -1,6 +1,6 @@
 // Service worker: makes the console installable and shows a clear page when the
 // local server is not running. It never caches or touches API calls.
-const CACHE = "jarvis-shell-v1";
+const CACHE = "jarvis-shell-v4";
 const OFFLINE = "/static/offline.html";
 const SHELL = [OFFLINE, "/static/css/app.css", "/static/img/favicon.svg", "/static/img/icon-192.png"];
 

@@ -22,10 +22,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import activity as activity_mod
 from . import attachments as att
-from . import claude_cli, cloud, library, mcp
+from . import display as display_mod
+from . import claude_cli, cloud, content, library, mcp
+from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
-                     expand_path)
+                     expand_path, trusted_url, web_domain)
 from .permissions import (INTERACTIVE_TOOLS, Policy, cli_permission_args, is_mcp, norm, parse_rule,
                           policy_context, project_rule_problem, suggest_rules, summarize_target, within)
 from . import team as team_mod
@@ -35,6 +38,11 @@ from .store import Store
 ACTIVE = {"queued", "running", "awaiting"}
 TERMINAL = {"done", "error", "cancelled", "interrupted"}
 HOOK_ID = "console_pretool"
+# Keeping a session's prompt cache warm: the cache lasts about an hour on Claude plans and each read
+# restarts it, so a throwaway copy of the session reads it every 50 minutes while the session is idle.
+WARM_EVERY = 50 * 60
+WARM_MAX_HOURS = 12
+WARM_PROMPT = "Maintien du cache de la console : réponds seulement « ok », sans utiliser d'outil."
 # The console's own MCP server, hosted in this process (the CLI reaches it over the control protocol).
 CONSOLE_MCP = "jarvis"
 SHOW_TOOL = f"mcp__{CONSOLE_MCP}__afficher"
@@ -46,7 +54,10 @@ SHOW_SPEC = {
         "avec leur application). À utiliser dès que l'utilisateur demande d'afficher, de montrer, d'ouvrir ou de "
         "voir un fichier, et pour lui présenter un fichier que tu viens de créer quand il veut le voir. Chemins "
         "absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché dans les dossiers de la "
-        "tâche. Les adresses https:// s'ouvrent dans un aperçu web."),
+        "tâche. Une adresse https:// d'un domaine approuvé par l'utilisateur s'ouvre dans un aperçu web ; pour les "
+        "autres, la console lui propose de l'ouvrir et il décide. Pour montrer le résultat d'un outil déjà reçu "
+        "(un mail, un enregistrement…), utilise plutôt afficher_resultat ; pour composer un affichage (galerie, "
+        "résultats de recherche, tableau, graphique, fiche, choix à cliquer…), presenter."),
     "inputSchema": {
         "type": "object",
         "properties": {"fichiers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
@@ -54,6 +65,32 @@ SHOW_SPEC = {
         "required": ["fichiers"],
     },
 }
+RESULT_TOOL = f"mcp__{CONSOLE_MCP}__afficher_resultat"
+RESULT_SPEC = {
+    "name": "afficher_resultat",
+    "description": (
+        "Montre à l'utilisateur, dans une fenêtre de la console JARVIS, le résultat d'un outil que tu as déjà reçu "
+        "(un mail lu avec le connecteur Office 365, un enregistrement Odoo, une page renvoyée par un connecteur…), "
+        "tel quel : ne recopie pas son contenu, désigne-le seulement. Un mail s'affiche avec sa mise en forme, son "
+        "expéditeur, ses destinataires et sa date ; du HTML comme une page ; le reste en JSON ou en texte. Marche aussi "
+        "pour un résultat trop long que tu n'as pas pu lire en entier. Sans paramètre : le dernier résultat reçu."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "outil": {"type": "string", "description": "Nom, ou partie du nom, de l'outil qui a donné le résultat "
+                                                       "(ex. « read_resource », « get_record »)."},
+            "contient": {"type": "string", "description": "Un texte que contient le résultat voulu, ou l'élément voulu "
+                                                          "d'une liste (sujet ou identifiant d'un mail, nom d'un devis…)."},
+            "rang": {"type": "integer", "minimum": 1, "maximum": 50,
+                     "description": "1 = le plus récent des résultats qui correspondent (par défaut), 2 = le précédent…"},
+            "id": {"type": "string", "description": "Identifiant de l'appel d'outil (toolu_…), si tu le connais."},
+        },
+    },
+}
+PRESENT_TOOL = f"mcp__{CONSOLE_MCP}__presenter"
+PRESENT_SPEC = display_mod.TOOL_SPEC
+CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL}
+KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
 
 class TaskError(Exception):
@@ -157,6 +194,30 @@ class Run:
     background: set = field(default_factory=set)
     had_background: bool = False
     last_output: float = field(default_factory=time.time)
+    # the CLI's total_cost_usd and modelUsage add up over the life of its process: the task's totals
+    # are what earlier processes (earlier follow-ups) used plus the latest figures of this one
+    cost_base: float = 0.0
+    usage_base: dict = field(default_factory=dict)
+
+
+def _ktok(n: int) -> str:
+    return f"{n / 1000:.1f} k".replace(".", ",") if n < 10000 else f"{round(n / 1000)} k"
+
+
+USAGE_KEYS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD")
+
+
+def _merge_usage(base: dict, cur: dict) -> dict:
+    """Per-model usage of earlier processes plus the current one (modelUsage of the CLI's result)."""
+    out = {m: dict(v) for m, v in (base or {}).items()}
+    for model, u in (cur or {}).items():
+        if not isinstance(u, dict):
+            continue
+        acc = out.setdefault(model, {})
+        for k in USAGE_KEYS:
+            acc[k] = round(acc.get(k, 0) + (u.get(k) or 0), 6) if k == "costUSD" else int(acc.get(k, 0) + (u.get(k) or 0))
+        acc["contextWindow"] = max(int(acc.get("contextWindow") or 0), int(u.get("contextWindow") or 0))
+    return out
 
 
 def _clip_json(value, limit: int):
@@ -169,6 +230,18 @@ def _clip_json(value, limit: int):
 def _clip(s: str, limit: int) -> str:
     s = s or ""
     return s if len(s) <= limit else s[:limit] + f"\n… ({len(s) - limit} caractères de plus)"
+
+
+def _clean_title(text: str) -> str:
+    """The title Claude proposed, without markdown, quotes, "Titre :" or a final period."""
+    for line in str(text or "").splitlines():
+        line = re.sub(r"^\s*(?:#+\s*|[-*•]\s+)", "", line)
+        line = line.strip().strip("*_`").strip()
+        line = re.sub(r"^(?:titre|title)\s*:\s*", "", line, flags=re.I).strip()
+        line = re.sub(r"\s+", " ", line).strip("\"'«»“”‘’`*_ \u00a0\u202f.;:,!").strip()
+        if line:
+            return line if len(line) <= 80 else line[:80].rsplit(" ", 1)[0]
+    return ""
 
 
 def _title(prompt: str) -> str:
@@ -215,6 +288,8 @@ class Engine:
         self.bus = Bus()
         self._cli_override = cli_command
         self._lock = threading.RLock()
+        self._warm_checked = 0.0
+        self._warming: set[str] = set()
         self._wake = threading.Event()
         self._stop = False
         self.tasks: dict[str, dict] = {}
@@ -225,6 +300,11 @@ class Engine:
         self.probes: dict = store.kv_get("probes", {}) or {}
         self.limits: dict = store.kv_get("limits", {}) or {}  # plan usage limits, per profile
         self._limits_busy: set[str] = set()
+        self.contents = content.ContentStore()  # pages served on the preview origin
+        self._calls: dict[str, dict[str, dict]] = {}  # task -> recent tool calls and their results
+        self._calls_lock = threading.Lock()
+        self._displays: dict[str, dict[str, dict]] = {}  # task -> displays composed by Claude (tool "presenter")
+        self._displays_lock = threading.Lock()
         self.routines: dict[str, Routine] = {}
         for raw in store.kv_get("routines", []) or []:
             try:
@@ -298,6 +378,8 @@ class Engine:
             seq = self._next_seq(tid)
             self.store.add_event(tid, seq, ts, kind, data)
         self.bus.publish("ev", {"task_id": tid, "seq": seq, "ts": ts, "kind": kind, "data": data})
+        if kind in ("status", "approval", "approval_done"):
+            self.bus.publish("state", self.state())   # top bar counters and the emblem follow every transition
 
     def _audit(self, kind: str, detail: dict, t: dict | None = None):
         if not self.cfg.security.audit:
@@ -640,10 +722,13 @@ class Engine:
         return t
 
     # -------------------------------------------------------- follow-ups
-    def followup(self, tid: str, text: str, attachments: list[str] | None = None) -> dict:
+    def followup(self, tid: str, text: str, attachments: list[str] | None = None, compact: bool = False) -> dict:
+        """compact: have Claude Code compact the session first (/compact), then send the message if any."""
         text = (text or "").strip()
-        if not text and not attachments:
+        if not text and not attachments and not compact:
             raise TaskError("Message vide.")
+        if compact and not text and not attachments:
+            return self._send_or_queue(tid, ["/compact"], "Compactage du contexte demandé.")
         text = text or "Voici des pièces jointes."
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif.", 423)
@@ -663,21 +748,40 @@ class Engine:
                 if run and run.policy and adir not in run.policy.ctx.add_dirs:
                     run.policy.ctx.add_dirs.append(adir)  # the live session may read it at once
             sent = att.message(text, files)
+            if compact:
+                self._event(tid, "info", {"text": "Compactage du contexte avant d'envoyer la suite…"})
             self._event(tid, "user", {"text": text, **({"files": files} if files else {})})
-            self._audit("message de suite", {"texte": _clip(text, 2000),
+            self._audit("message de suite", {"texte": _clip(text, 2000), **({"compactage": True} if compact else {}),
                                              **({"pièces jointes": [f["path"] for f in files]} if files else {})}, t)
-            if run and run.proc and not run.stdin_closed and t["status"] in ("running", "awaiting"):
-                self._send_user(run, sent)
-            else:
-                t.setdefault("queued_messages", []).append(sent)
-                if t["status"] in TERMINAL:
-                    t["status"] = "queued"
-                    t["error"] = ""
-                    self.queue.append(tid)
-                    self._event(tid, "status", {"status": "queued"})
+            self._deliver(tid, t, run, ["/compact", sent] if compact else [sent])
             self._save(t)
         self._wake.set()
         return self.public(t)
+
+    def _send_or_queue(self, tid: str, messages: list[str], info: str) -> dict:
+        with self._lock:
+            t = self._get(tid)
+            if not t.get("session_started"):
+                raise TaskError("Rien à compacter : la session n'a pas encore démarré.")
+            self._event(tid, "info", {"text": info})
+            self._audit("compactage demandé", {}, t)
+            self._deliver(tid, t, self.runs.get(tid), messages)
+            self._save(t)
+        self._wake.set()
+        return self.public(t)
+
+    def _deliver(self, tid: str, t: dict, run: Run | None, messages: list[str]):
+        """Into the live session, else queued for the next run (which resumes the session)."""
+        if run and run.proc and not run.stdin_closed and t["status"] in ("running", "awaiting"):
+            for m in messages:
+                self._send_user(run, m)
+            return
+        t.setdefault("queued_messages", []).extend(messages)
+        if t["status"] in TERMINAL:
+            t["status"] = "queued"
+            t["error"] = ""
+            self.queue.append(tid)
+            self._event(tid, "status", {"status": "queued"})
 
     def _send_user(self, run: Run, text: str):
         msg = {"type": "user", "session_id": "", "parent_tool_use_id": None,
@@ -946,7 +1050,8 @@ class Engine:
                     if sum(1 for b in busy if b["profile"] == t["profile"]) >= per:
                         continue
                     self.queue.remove(tid)
-                    run = Run()
+                    run = Run(cost_base=float(t.get("cost_usd") or 0),
+                              usage_base={m: dict(u) for m, u in (t.get("model_usage") or {}).items()})
                     self.runs[tid] = run
                     busy.append(t)
                     t["status"] = "running"
@@ -963,6 +1068,9 @@ class Engine:
             now = time.time()
             with self._lock:
                 runs = list(self.runs.items())
+            if now - self._warm_checked >= 30:
+                self._warm_checked = now
+                self._keep_warm_tick(now)
             for tid, run in runs:
                 waiting = run.awaiting_total + ((now - run.awaiting_since) if run.awaiting_since else 0)
                 if run.stop_status is None and now - run.started - waiting > g.task_timeout_min * 60:
@@ -1347,12 +1455,26 @@ class Engine:
                                       "permission_mode": msg.get("permissionMode"),
                                       "skills": len(msg.get("slash_commands") or msg.get("skills") or [])})
         elif st == "compact_boundary":
-            self._event(tid, "info", {"text": "Contexte compacté par Claude Code."})
+            meta = msg.get("compact_metadata") or {}
+            pre, post = int(meta.get("pre_tokens") or 0), int(meta.get("post_tokens") or 0)
+            how = "automatiquement" if meta.get("trigger") == "auto" else "à ta demande"
+            if post:
+                with self._lock:
+                    t["context_tokens"], t["context_at"] = post, time.time()
+                    self._save(t)
+            size = f" : {_ktok(pre)} → {_ktok(post)} tokens." if pre and post else f" ({_ktok(pre)} tokens avant)." if pre else "."
+            self._event(tid, "info", {"text": f"Contexte compacté {how}{size}"})
         elif st and "retry" in st:
             self._event(tid, "info", {"text": f"Nouvelle tentative de l'API ({msg.get('attempt', '?')})…"})
 
     def _on_assistant(self, tid: str, t: dict, msg: dict):
         parent = msg.get("parent_tool_use_id")
+        u = (msg.get("message") or {}).get("usage") or {}
+        size = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        if size and not parent and size != t.get("context_tokens"):
+            with self._lock:
+                t["context_tokens"], t["context_at"] = size, time.time()
+                self._save(t)
         for block in (msg.get("message") or {}).get("content") or []:
             kind = block.get("type")
             if kind == "text" and block.get("text"):
@@ -1361,6 +1483,7 @@ class Engine:
                 self._event(tid, "thinking", {"text": _clip(block["thinking"], 6000), "parent": parent})
             elif kind in ("tool_use", "server_tool_use"):
                 name, inp = block.get("name", ""), block.get("input") or {}
+                self._remember_call(tid, block.get("id"), name, inp)
                 self._event(tid, "tool", {"id": block.get("id"), "name": name, "parent": parent,
                                           "target": _clip(summarize_target(name, inp), 400),
                                           "input": _clip_json(inp, 8000)})
@@ -1376,6 +1499,7 @@ class Engine:
             return
         for block in content:
             if isinstance(block, dict) and block.get("type") == "tool_result":
+                self._remember_result(tid, block.get("tool_use_id"), block.get("content"), bool(block.get("is_error")))
                 self._event(tid, "tool_result", {"id": block.get("tool_use_id"),
                                                  "is_error": bool(block.get("is_error")),
                                                  "preview": _clip(_tool_result_text(block.get("content")), 4000),
@@ -1398,9 +1522,16 @@ class Engine:
                        "error_during_execution": "Erreur pendant l'exécution."}.get(msg.get("subtype"), "")
         with self._lock:
             t["turns"] += int(msg.get("num_turns") or 0)
-            t["cost_usd"] = round(t.get("cost_usd", 0) + float(msg.get("total_cost_usd") or 0), 6)
+            t["cost_usd"] = round(run.cost_base + float(msg.get("total_cost_usd") or 0), 6)
+            mu = msg.get("modelUsage")
+            if isinstance(mu, dict) and mu:
+                t["model_usage"] = _merge_usage(run.usage_base, mu)
+                win = int((mu.get(t.get("model_resolved") or "") or {}).get("contextWindow") or 0)
+                k = self.cfg.general.compact_at_k * 1000
+                t["context_limit"] = min(x for x in (win, k) if x) if (win or k) else 0
             t["duration_ms"] += int(msg.get("duration_ms") or 0)
-            t["result"] = _clip(text, 200000)
+            if text or is_error or not t.get("result"):  # a /compact ends with an empty result: keep the last answer
+                t["result"] = _clip(text, 200000)
             t["is_error"] = is_error
             if is_error:
                 t["error"] = hint or subtype_msg or _clip(text, 500)
@@ -1447,8 +1578,9 @@ class Engine:
             if hin.get("hook_event_name", "PreToolUse") != "PreToolUse":
                 return self._respond(run, rid, {})
             tool, tin = hin.get("tool_name", ""), hin.get("tool_input") or {}
-            if tool == SHOW_TOOL:
-                # Only shows files to the user; each one is checked like a preview (task folders, protected paths).
+            if tool in CONSOLE_TOOLS:
+                # Only shows things to the user; each file is checked like a preview (task folders, protected
+                # paths) and a web address outside the approved domains waits for the user's click.
                 return self._respond(run, rid, _hook("allow", "Affichage dans la console."))
             v = pol.evaluate(tool, tin)
             target = summarize_target(tool, tin)
@@ -1525,7 +1657,7 @@ class Engine:
         self._respond(run, rid, error=f"Requête non prise en charge par la console : {sub}")
 
     # -------------------------------------------------------- the console's own MCP server
-    def _console_mcp(self, tid: str, server: str | None, msg: dict) -> dict:
+    def _console_mcp(self, tid: str, server: str | None, msg: dict, silent: bool = False) -> dict:
         """JSON-RPC answer of the in-process "jarvis" server (the CLI dials it at start)."""
         mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
 
@@ -1538,11 +1670,19 @@ class Engine:
             return ok({"protocolVersion": params.get("protocolVersion") or "2024-11-05", "capabilities": {"tools": {}},
                        "serverInfo": {"name": CONSOLE_MCP, "version": "1.0.0"}})
         if method == "tools/list":
-            return ok({"tools": [SHOW_SPEC]})
+            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC]})
         if method == "tools/call":
-            if params.get("name") != SHOW_SPEC["name"]:
-                return ok({"content": [{"type": "text", "text": f"Outil inconnu : {params.get('name')}"}], "isError": True})
-            text, failed = self.show_files(tid, (params.get("arguments") or {}).get("fichiers"))
+            if silent:
+                return ok({"content": [{"type": "text", "text": "Indisponible pendant un maintien du cache."}], "isError": True})
+            args = params.get("arguments") or {}
+            if params.get("name") == SHOW_SPEC["name"]:
+                text, failed = self.show_files(tid, args.get("fichiers"))
+            elif params.get("name") == RESULT_SPEC["name"]:
+                text, failed = self.show_result(tid, args)
+            elif params.get("name") == PRESENT_SPEC["name"]:
+                text, failed = self.present(tid, args)
+            else:
+                text, failed = f"Outil inconnu : {params.get('name')}", True
             return ok({"content": [{"type": "text", "text": text}], "isError": failed})
         if method and method.startswith("notifications/"):
             return {"jsonrpc": "2.0", "result": {}}
@@ -1555,26 +1695,266 @@ class Engine:
         items = [str(x).strip().strip('"') for x in (items or []) if str(x).strip()][:12]
         if not items:
             return "Aucun fichier indiqué.", True
-        files, urls, errors = [], [], []
+        files, urls, ask, errors = [], [], [], []
+        trusted = self.cfg.security.trusted_domains
         for item in items:
             if re.match(r"^https?://", item, re.I):
-                if item.lower().startswith("https://"):
-                    urls.append(item)
-                else:
+                if not item.lower().startswith("https://"):
                     errors.append(f"{item} : seules les adresses https:// s'affichent")
+                elif not web_domain(item):
+                    errors.append(f"{item} : adresse invalide")
+                else:
+                    (urls if trusted_url(item, trusted) else ask).append(item)
                 continue
             try:
                 files.append(str(self.task_file(tid, item)))
             except TaskError as exc:
                 errors.append(f"{item} : {exc}")
-        if files or urls:
-            self._event(tid, "show", {"files": files, "urls": urls})
+        if files or urls or ask:
+            self._event(tid, "show", {"files": files, "urls": urls, "ask": ask})
         lines = []
         if files or urls:
             lines.append("Affiché dans la console JARVIS : " + ", ".join([*files, *urls]))
+        if ask:
+            lines.append("Proposé à l'utilisateur, qui l'ouvrira s'il le souhaite (domaine non approuvé dans la "
+                         "configuration de la console) : " + ", ".join(ask))
         if errors:
             lines.append("Non affiché : " + " ; ".join(errors))
-        return "\n".join(lines), not (files or urls)
+        return "\n".join(lines), not (files or urls or ask)
+
+    # -------------------------------------------------------- displays composed by Claude (tool "presenter")
+    def _display(self, tid: str, key: str) -> dict | None:
+        """{doc, rev, answers} of a display: from memory, or rebuilt from the stored events after a restart."""
+        with self._displays_lock:
+            d = self._displays.get(tid, {}).get(key)
+        if d is not None:
+            return d
+        found = None
+        after = 0
+        while True:
+            evs = self.store.events(tid, after=after)
+            for ev in evs:
+                data = ev["data"] or {}
+                if data.get("key") != key:
+                    continue
+                if ev["kind"] == "display":
+                    found = {"doc": {k: data[k] for k in ("titre", "ou", "blocs")}, "rev": data.get("rev", 1), "answers": {}}
+                elif ev["kind"] == "display_answer" and found and data.get("rev", found["rev"]) == found["rev"]:
+                    if data.get("annule"):
+                        found["answers"].pop(int(data.get("bloc", -1)), None)
+                    else:
+                        found["answers"][int(data.get("bloc", -1))] = data.get("labels") or []
+            if len(evs) < 5000:
+                break
+            after = evs[-1]["seq"]
+        if found:
+            with self._displays_lock:
+                self._displays.setdefault(tid, {}).setdefault(key, found)
+        return found
+
+    def present(self, tid: str, args: dict) -> tuple[str, bool]:
+        """Claude composes a display: blocks checked (files like a preview, web addresses), then drawn by the UI."""
+        t = self._get(tid)
+        args = args if isinstance(args, dict) else {}
+        key = display_mod.key_of(args.get("id")) if str(args.get("id") or "").strip() else display_mod.key_of(None)
+        prev = self._display(tid, key) if args.get("id") else None
+        doc, problems, waiting = display_mod.check(
+            args, lambda p: str(self.task_file(tid, p)), self.cfg.security.trusted_domains,
+            previous=prev["doc"] if prev else None)
+        if doc is None:
+            return "Rien d'affiché. " + " ; ".join(problems), True
+        rev = (prev["rev"] + 1) if prev else 1
+        with self._displays_lock:
+            per_task = self._displays.setdefault(tid, {})
+            per_task[key] = {"doc": doc, "rev": rev, "answers": {}}
+            while len(per_task) > 100:  # old ones are rebuilt from the events if Claude reuses them
+                per_task.pop(next(iter(per_task)))
+        self._event(tid, "display", {"key": key, "rev": rev, **doc})
+        self._audit("affichage", {"titre": _clip(doc["titre"], 200), "où": doc["ou"], "id": key,
+                                  "blocs": [b["type"] for b in doc["blocs"]], **({"mise à jour": rev} if rev > 1 else {})}, t)
+        where = {"conversation": "dans la conversation", "fenetre": "dans une fenêtre", "modale": "au premier plan"}[doc["ou"]]
+        lines = [f"{'Mis à jour' if prev else 'Affiché'} {where} de la console JARVIS : « {doc['titre']} » "
+                 f"({display_mod.summary(doc)}). Identifiant : {key} (à passer en id pour le modifier)."]
+        if any(b["type"] in ("choix", "actions") for b in doc["blocs"]):
+            lines.append("Les réponses de l'utilisateur t'arriveront comme un nouveau message, préfixé par "
+                         f"« [Affichage « {doc['titre']} »] » : termine ton tour sans les attendre.")
+        if waiting:
+            lines.append(f"{waiting} image(s) du web hors des domaines approuvés : l'utilisateur les charge d'un clic.")
+        if problems:
+            lines.append("Ignoré : " + " ; ".join(problems))
+        return "\n".join(lines), False
+
+    def display_answer(self, tid: str, key: str, index: int, choice: list[int] | None = None,
+                       other: str = "", button: int | None = None) -> dict:
+        """A click in a display (a choice, a button): the message is built here from the stored display, then
+        sent to the session like a follow-up."""
+        t = self._get(tid)
+        d = self._display(tid, key)
+        if not d:
+            raise TaskError("Affichage introuvable.", 404)
+        if index in d["answers"]:
+            raise TaskError("Déjà répondu.", 409)
+        try:
+            message, labels = display_mod.answer_text(d["doc"], index, choice, other, button)
+        except ValueError as exc:
+            raise TaskError(str(exc)) from exc
+        d["answers"][index] = labels
+        self._event(tid, "display_answer", {"key": key, "rev": d["rev"], "bloc": index, "labels": labels})
+        try:
+            out = self.followup(tid, message)
+        except TaskError:
+            d["answers"].pop(index, None)
+            self._event(tid, "display_answer", {"key": key, "rev": d["rev"], "bloc": index, "labels": [], "annule": True})
+            raise
+        self._audit("réponse à un affichage", {"titre": _clip(d["doc"]["titre"], 200), "réponse": labels}, t)
+        return out
+
+    # -------------------------------------------------------- results of tools, shown as they are
+    def _remember_call(self, tid: str, cid: str | None, name: str, inp: dict):
+        if not cid or name in CONSOLE_TOOLS:
+            return
+        with self._calls_lock:
+            calls = self._calls.setdefault(tid, {})
+            calls[cid] = {"id": cid, "name": name, "input": inp, "content": None, "is_error": False, "ts": time.time()}
+            while len(calls) > KEEP_CALLS:
+                calls.pop(next(iter(calls)))
+
+    def _remember_result(self, tid: str, cid: str | None, result, is_error: bool):
+        with self._calls_lock:
+            c = (self._calls.get(tid) or {}).get(cid or "")
+            if c is not None:
+                c["content"], c["is_error"] = result, is_error
+
+    def _tool_calls(self, t: dict, transcript: bool) -> list[dict]:
+        """The task's tool calls with a result, newest first: those seen since the console started, then
+        (transcript=True) the older ones of its session's transcript."""
+        with self._calls_lock:
+            seen = [c for c in (self._calls.get(t["id"]) or {}).values() if c["content"] is not None]
+        prof = self.cfg.profile(t.get("profile") or "")
+        if transcript and prof and t.get("session_id"):
+            main = activity_mod.transcript(prof, t["workdir"], t["session_id"])
+            if not main.is_file():
+                main = library.find_transcript(prof, t["session_id"]) or main
+            sub = main.with_suffix("") / "subagents"
+            paths = [main, *(sorted(sub.glob("*.jsonl")) if sub.is_dir() else [])]
+            known = {c["id"] for c in seen}
+            seen = [c for c in results_mod.from_transcript(paths) if c["id"] not in known
+                    and c["name"] not in CONSOLE_TOOLS] + seen
+        return seen[::-1]
+
+    def _find_call(self, t: dict, args: dict) -> tuple[dict | None, int]:
+        """The tool call that Claude designates (afficher_resultat), and how many matched."""
+        want_id = str(args.get("id") or "").strip()
+        tool = str(args.get("outil") or "").strip().lower()
+        needle = str(args.get("contient") or "").strip().lower()
+        try:
+            rank = max(1, min(50, int(args.get("rang") or 1)))
+        except (TypeError, ValueError):
+            rank = 1
+        matched = []
+        for transcript in (False, True):
+            matched = []
+            for c in self._tool_calls(t, transcript):
+                if want_id and c["id"] != want_id:
+                    continue
+                if tool and tool not in c["name"].lower():
+                    continue
+                text = results_mod.text_of(c["content"])
+                if c["is_error"] and not results_mod.SAVED.search(text):
+                    continue
+                if needle and needle not in text.lower() and needle not in self._saved_text(t, text).lower():
+                    continue
+                matched.append(c)
+                if len(matched) >= rank:
+                    return c, len(matched)
+        return None, len(matched)
+
+    def _saved_text(self, t: dict, text: str) -> str:
+        prof = self.cfg.profile(t.get("profile") or "")
+        p = results_mod.saved_file(text, library.config_dir(prof)) if prof else None
+        try:
+            return p.read_text(encoding="utf-8", errors="replace") if p else ""
+        except OSError:
+            return ""
+
+    def show_result(self, tid: str, args: dict) -> tuple[str, bool]:
+        """Claude shows a result it already received: the console finds it and opens it in a window."""
+        t = self._get(tid)
+        args = args if isinstance(args, dict) else {}
+        call, n = self._find_call(t, args)
+        if not call:
+            what = " ; ".join(f"{k} = {args[k]}" for k in ("outil", "contient", "rang", "id") if args.get(k))
+            return (f"Aucun résultat d'outil ne correspond{f' ({what})' if what else ''}"
+                    f"{f' : seulement {n} trouvé(s)' if n else ''}."), True
+        needle = str(args.get("contient") or "")
+        try:
+            v = self._view(t, call, needle)
+        except (OSError, ValueError) as exc:
+            return f"Résultat illisible : {exc}", True
+        label = {"mail": "mail", "html": "page", "json": "données", "text": "texte", "image": "image"}.get(v["kind"], "résultat")
+        self._event(tid, "show", {"files": [], "urls": [], "ask": [], "results": [
+            {"id": call["id"], "tool": call["name"], "kind": v["kind"], "title": v["title"], "contient": needle}]})
+        self._audit("résultat affiché", {"outil": call["name"], "type": v["kind"], "titre": _clip(v["title"], 200)}, t)
+        return f"Affiché dans la console JARVIS : {label} « {v['title']} » (résultat de `{call['name']}`).", False
+
+    def _view(self, t: dict, call: dict, needle: str) -> dict:
+        prof = self.cfg.profile(t.get("profile") or "")
+        return results_mod.view(call["content"], needle=needle, config_dir=library.config_dir(prof) if prof else None)
+
+    def content_url(self, cid: str) -> str:
+        return f"http://{content.HOST}:{self.port}/v/{cid}/"
+
+    def result_view(self, tid: str, call_id: str, needle: str = "", remote: bool = False) -> dict:
+        """A result shown by Claude, for its window: the HTML goes to the preview origin."""
+        t = self._get(tid)
+        call, _ = self._find_call(t, {"id": call_id})
+        if not call:
+            raise TaskError("Ce résultat n'est plus disponible (session introuvable ou effacée).", 404)
+        v = self._view(t, call, needle)
+        out = {**{k: x for k, x in v.items() if k != "page"}, "tool": call["name"], "id": call["id"]}
+        if "text" in out:
+            out["text"] = _clip(out["text"], 2_000_000)
+        if v.get("page"):
+            try:
+                cid = self.contents.put(v["page"], remote=remote, style=content.MAIL_STYLE)
+            except ValueError as exc:
+                raise TaskError(str(exc), 413) from exc
+            out.update(url=self.content_url(cid), remote=content.remote_refs(v["page"]))
+        return out
+
+    def _html_frame(self, p: Path, allowed, remote: bool) -> dict:
+        """A local HTML file on the preview origin, with the files next to it (images, styles)."""
+        if p.suffix.lower() not in (".html", ".htm", ".xhtml"):
+            raise TaskError("Ce fichier n'est pas une page HTML.")
+        page = content.decode_html(p.read_bytes())
+        base = str(p.parent)
+
+        def resolve(rest: str) -> Path | None:
+            real = os.path.realpath(os.path.join(base, rest))
+            return Path(real) if within(real, [base]) and os.path.isfile(real) and allowed(real) else None
+
+        try:
+            cid = self.contents.put(page, remote=remote, resolve=resolve)
+        except ValueError as exc:
+            raise TaskError(str(exc), 413) from exc
+        return {"url": self.content_url(cid), "remote": content.remote_refs(page), "path": str(p)}
+
+    def _task_guard(self, t: dict) -> Policy:
+        spec = t.get("spec") or {}
+        ctx = policy_context(t["workdir"], t.get("add_dirs") or [], spec.get("forbidden") or self.cfg.security.forbidden_paths,
+                             str(self.data_dir), [self.port])
+        return Policy(Preset.model_validate(spec["preset"]) if spec.get("preset") else self.cfg.presets[0], [], [], ctx)
+
+    def task_frame(self, tid: str, path: str, remote: bool = False) -> dict:
+        p = self.task_file(tid, path)
+        guard = self._task_guard(self._get(tid))
+        return self._html_frame(p, lambda real: not guard.forbidden_hit({"file_path": real}, "Read"), remote)
+
+    def workspace_frame(self, pid: str | None, folder: str | None, path: str, remote: bool = False) -> dict:
+        p = self.workspace_file(pid, folder, path)
+        _, wd = self._ws_folder(pid, folder)
+        guard = self._guard(wd)
+        return self._html_frame(p, lambda real: within(real, [wd]) and not guard.forbidden_hit({"file_path": real}, "Read"), remote)
 
     # -------------------------------------------------------- misc actions
     def update_task(self, tid: str, patch: dict) -> dict:
@@ -1584,11 +1964,241 @@ class Engine:
                 t["pinned"] = bool(patch["pinned"])
             if "closed" in patch:
                 t["closed"] = bool(patch["closed"])
+                if t["closed"] and t.get("keep_warm_until"):
+                    self._stop_warm(t, "fenêtre fermée")
             if "title" in patch and str(patch["title"]).strip():
                 t["title"] = str(patch["title"]).strip()[:120]
             self.tasks[tid] = t
             self._save(t)
             return self.public(t)
+
+    # -------------------------------------------------------- a title found by Claude
+    TITLE_PROMPT = (
+        "Voici des extraits d'une session de travail entre un utilisateur et Claude Code. Donne-lui un titre "
+        "court et précis, dans la langue de l'utilisateur : 3 à 7 mots, sans guillemets ni point final, qui dit "
+        "de quoi parle la session (sujet, client, livrable…) plutôt que ce qui a été demandé en premier. "
+        "Réponds uniquement par le titre.\n\n<extraits>\n{context}\n</extraits>")
+
+    def _title_context(self, t: dict, budget: int = 6000) -> str:
+        """The first request, then the latest exchanges and actions of the session, within a budget."""
+        def short(x, n):
+            x = re.sub(r"\s+", " ", str(x or "")).strip()
+            return x if len(x) <= n else x[:n] + "…"
+
+        first = f"Première demande : {short(t.get('prompt'), 1500)}"
+        lines = [f"{'Utilisateur' if i.get('role') == 'user' else 'Assistant'} (avant la reprise) : {short(i.get('text'), 500)}"
+                 for i in (t.get("history") or [])[-30:] if i.get("text") and i.get("role") in ("user", "assistant")]
+        for e in self.store.events(t["id"], limit=100_000):
+            d = e["data"] or {}
+            if e["kind"] == "user" and not d.get("first") and d.get("text"):
+                lines.append(f"Utilisateur : {short(d['text'], 600)}")
+            elif e["kind"] == "text" and not d.get("parent") and d.get("text"):
+                lines.append(f"Assistant : {short(d['text'], 600)}")
+            elif e["kind"] == "tool" and not d.get("parent") and d.get("target"):
+                lines.append(f"Action : {d.get('name')} {short(d['target'], 200)}")
+        keep, size = [], len(first)
+        for line in reversed(lines):
+            if size + len(line) + 1 > budget:
+                break
+            keep.append(line)
+            size += len(line) + 1
+        return "\n".join([first, *(["[…]"] if len(keep) < len(lines) else []), *reversed(keep)])
+
+    # -------------------------------------------------------- keeping the prompt cache warm
+    def keep_warm(self, tid: str, hours: float) -> dict:
+        """Keep the session's cache warm for `hours` (0 stops)."""
+        hours = float(hours or 0)
+        if hours < 0 or hours > WARM_MAX_HOURS:
+            raise TaskError(f"Durée entre 0 et {WARM_MAX_HOURS} heures.")
+        with self._lock:
+            t = self._get(tid)
+            if hours and not t.get("session_started"):
+                raise TaskError("La session n'a pas encore démarré : il n'y a pas de cache à garder.")
+            if hours:
+                t["keep_warm_until"] = time.time() + hours * 3600
+                t.setdefault("warm", {"pings": 0, "read": 0, "written": 0, "output": 0, "last": 0, "misses": 0})
+                until = time.strftime("%H:%M", time.localtime(t["keep_warm_until"]))
+                self._event(tid, "info", {"text": f"Cache gardé au chaud jusqu'à {until} (un maintien toutes les 50 min tant que la discussion est inactive)."})
+                self._audit("maintien du cache activé", {"jusqu'à": until}, t)
+                self._save(t)
+            elif t.get("keep_warm_until"):
+                self._stop_warm(t, "arrêté à ta demande")
+        self._wake.set()
+        return self.public(t)
+
+    def _stop_warm(self, t: dict, why: str):
+        with self._lock:
+            if not t.get("keep_warm_until"):
+                return
+            t["keep_warm_until"] = 0
+            self._event(t["id"], "info", {"text": f"Maintien du cache arrêté : {why}."})
+            self._save(t)
+
+    def _near_limit(self, pid: str) -> bool:
+        cur = self.limits.get(pid) or {}
+        return cur.get("status") == "rejected" or any((w.get("used") or 0) >= 0.9 for w in (cur.get("windows") or {}).values())
+
+    def _keep_warm_tick(self, now: float):
+        for tid, t in list(self.tasks.items()):
+            until = t.get("keep_warm_until") or 0
+            if not until:
+                continue
+            if now >= until:
+                self._stop_warm(t, "fin de la durée choisie")
+            elif t.get("closed"):
+                self._stop_warm(t, "fenêtre fermée")
+            elif self.emergency:
+                self._stop_warm(t, "arrêt d'urgence")
+            elif tid in self.runs or tid in self._warming or t["status"] in ACTIVE:
+                continue
+            elif now - max(t.get("context_at") or 0, (t.get("warm") or {}).get("last") or 0) >= WARM_EVERY:
+                if self._near_limit(t["profile"]):
+                    self._stop_warm(t, "le quota du compte approche de sa limite")
+                    continue
+                self._warming.add(tid)
+                threading.Thread(target=self._warm, args=(tid,), name=f"warm-{tid}", daemon=True).start()
+
+    def _warm(self, tid: str):
+        """One read of the session's cache by a throwaway copy of it: same command as the session (same
+        prefix, hence the same cache), forked and not saved, auto-compaction off. Nothing reaches the
+        conversation but a line saying what it cost."""
+        t = self.tasks[tid]
+        run = Run()
+        proc = None
+        try:
+            cmd = self._command(t, run)
+            if "--fork-session" not in cmd:
+                cmd.append("--fork-session")
+            cmd.append("--no-session-persistence")
+            env = claude_cli.build_env(Profile.model_validate(t["spec"]["profile"]), self.cfg.general)
+            if (t["spec"] or {}).get("team"):
+                env["CLAUDE_CODE_SUBAGENT_MODEL"] = t["spec"]["team"].get("subagent_default") or "sonnet"
+            env["DISABLE_AUTO_COMPACT"] = "1"  # compacting a throwaway copy would be paid for nothing
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, encoding="utf-8", errors="replace", cwd=t["workdir"], env=env,
+                                    bufsize=1, **claude_cli.spawn_kwargs())
+            timer = threading.Timer(180, lambda: claude_cli.kill_tree(proc.pid))
+            timer.start()
+
+            def send(obj):
+                proc.stdin.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                proc.stdin.flush()
+
+            send({"type": "control_request", "request_id": f"warm_{tid}", "request": {
+                "subtype": "initialize", "sdkMcpServers": [CONSOLE_MCP],
+                "hooks": {"PreToolUse": [{"matcher": None, "hookCallbackIds": [HOOK_ID], "timeout": 60}]}}})
+            send({"type": "user", "session_id": "", "parent_tool_use_id": None, "message": {"role": "user", "content": WARM_PROMPT}})
+            usage, model = None, ""
+            for line in proc.stdout:
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                typ = msg.get("type")
+                if typ == "control_request":
+                    req, rid = msg.get("request") or {}, msg.get("request_id", "")
+                    sub = req.get("subtype")
+                    if sub == "mcp_message":
+                        resp = {"subtype": "success", "request_id": rid, "response": {"mcp_response": self._console_mcp(
+                            tid, req.get("server_name"), req.get("message") or {}, silent=True)}}
+                    elif sub == "hook_callback":
+                        resp = {"subtype": "success", "request_id": rid, "response": _hook("deny", "Maintien du cache : aucune action.")}
+                    elif sub == "can_use_tool":
+                        resp = {"subtype": "success", "request_id": rid, "response": {"behavior": "deny", "message": "Maintien du cache."}}
+                    else:
+                        resp = {"subtype": "error", "request_id": rid, "error": "non pris en charge"}
+                    send({"type": "control_response", "response": resp})
+                elif typ == "rate_limit_event":
+                    self._on_rate_limit(t["profile"], msg.get("rate_limit_info") or {})
+                elif typ == "system" and msg.get("subtype") == "init":
+                    model = msg.get("model") or ""
+                elif typ == "result":
+                    usage = msg.get("usage") or {}
+                    break
+            timer.cancel()
+            self._warm_done(t, usage, model)
+        except Exception as exc:  # noqa: BLE001 - a failed ping only stops the upkeep
+            self._stop_warm(t, f"échec du maintien ({exc.__class__.__name__})")
+        finally:
+            if proc:
+                try:
+                    proc.stdin.close()
+                    proc.wait(timeout=20)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    claude_cli.kill_tree(proc.pid)
+            for f in run.files:
+                mcp.remove_config(f)
+            self._warming.discard(tid)
+
+    def _warm_done(self, t: dict, usage: dict | None, model: str):
+        if usage is None:
+            self._stop_warm(t, "Claude Code n'a pas répondu")
+            return
+        read = int(usage.get("cache_read_input_tokens") or 0) + int(usage.get("input_tokens") or 0)
+        written = int(usage.get("cache_creation_input_tokens") or 0)
+        hit = read >= 0.7 * (read + written)
+        with self._lock:
+            w = t.setdefault("warm", {"pings": 0, "read": 0, "written": 0, "output": 0, "last": 0, "misses": 0})
+            w["pings"] += 1
+            w["read"] += read
+            w["written"] += written
+            w["output"] += int(usage.get("output_tokens") or 0)
+            w["last"] = time.time()
+            w["misses"] = 0 if hit else w.get("misses", 0) + 1
+            self._event(t["id"], "info", {"text": f"Maintien du cache : {_ktok(read)} tokens relus en cache"
+                                                  + (f", {_ktok(written)} réécrits" if written >= 1000 else "")
+                                                  + (" (le cache avait expiré, il est recréé)." if not hit else ".")})
+            self._audit("maintien du cache", {"relus": read, "écrits": written, "modèle": model}, t)
+            self._save(t)
+        if w["misses"] >= 2:
+            self._stop_warm(t, "le cache n'a pas pu être retrouvé deux fois de suite")
+
+    # -------------------------------------------------------- what the session did (its transcripts)
+    def activity(self, tid: str) -> dict:
+        """Tools of the lead and of every sub-agent (background ones too), tokens per model and the
+        lead's context, from the session's transcript files. Also fills the context gauge of a session
+        that has not answered since the console started."""
+        t = self._get(tid)
+        prof = self.cfg.profile(t.get("profile") or "")
+        if not prof or not t.get("session_started") or not t.get("session_id"):
+            return {"available": False}
+        a = activity_mod.session_activity(prof, t["workdir"], t["session_id"], hidden_servers=(CONSOLE_MCP,))
+        if not a:
+            return {"available": False}
+        size, at = a["context"]["tokens"], a["context"]["at"]
+        if size and at > (t.get("context_at") or 0) + 1:
+            with self._lock:
+                t["context_tokens"], t["context_at"] = size, at
+                if not t.get("context_limit") and self.cfg.general.compact_at_k:
+                    t["context_limit"] = self.cfg.general.compact_at_k * 1000
+                self._save(t)
+        return {"available": True, **a}
+
+    def ai_title(self, tid: str) -> dict:
+        """Rename a task after its content: one short Haiku request on the task's account, outside
+        the conversation (nothing is written in the session, a running task is not disturbed)."""
+        t = self._get(tid)
+        prof = self.cfg.profile(t.get("profile") or "")
+        if not prof:
+            raise TaskError("Profil inconnu.", 404)
+        cli = self.cli()
+        if not cli:
+            raise TaskError("Claude Code introuvable.", 404)
+        until = self.limit_block(prof.id)
+        if until:
+            raise TaskError(f"Limite d'utilisation atteinte pour {prof.name} jusqu'à "
+                            f"{time.strftime('%H:%M', time.localtime(until))}.", 429)
+        wd = expand_path(prof.workdir) or str(self.runtime)
+        Path(wd).mkdir(parents=True, exist_ok=True)
+        res = claude_cli.oneshot(cli, claude_cli.build_env(prof, self.cfg.general), wd,
+                                 self.TITLE_PROMPT.format(context=self._title_context(t)), timeout=90)
+        for info in res.get("events") or []:
+            self._on_rate_limit(prof.id, info)
+        title = _clean_title(res.get("text"))
+        if not title:
+            raise TaskError(res.get("error") or "Claude n'a pas proposé de titre.", 502)
+        self._audit("tâche renommée par Claude", {"titre": title, "ancien": t["title"]}, t)
+        return self.update_task(tid, {"title": title})
 
     def delete_task(self, tid: str):
         with self._lock:
@@ -1598,6 +2208,8 @@ class Engine:
             self.tasks.pop(tid, None)
             self.store.delete_task(tid)
             self._audit("tâche supprimée", {"titre": t["title"]}, t)
+        with self._calls_lock:
+            self._calls.pop(tid, None)
         self.bus.publish("deleted", {"id": tid})
 
     def list_tasks(self, include_closed: bool = True, limit: int = 500) -> list[dict]:
@@ -1737,11 +2349,7 @@ class Engine:
             real = self._relative_file(t, raw, [t["workdir"], *(t.get("add_dirs") or [])]) or real
         if not within(real, roots) and not self._cited(t, asked, real):
             raise TaskError("Aperçu limité aux dossiers de la tâche et aux fichiers cités dans sa conversation.", 403)
-        spec = t.get("spec") or {}
-        ctx = policy_context(t["workdir"], t.get("add_dirs") or [], spec.get("forbidden") or self.cfg.security.forbidden_paths,
-                             str(self.data_dir), [self.port])
-        if Policy(Preset.model_validate(spec["preset"]) if spec.get("preset") else self.cfg.presets[0], [], [], ctx) \
-                .forbidden_hit({"file_path": real}, "Read"):
+        if self._task_guard(t).forbidden_hit({"file_path": real}, "Read"):
             raise TaskError("Ce fichier est protégé par la configuration de sécurité.", 403)
         p = Path(real)
         if not p.is_file():

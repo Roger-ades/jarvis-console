@@ -94,6 +94,9 @@ class General(BaseModel):
     update_check: bool = True     # look for a new version on GitHub (git fetch) at start, then every 6 h
     setup_done: bool = True       # False on a fresh install: the first-run assistant opens
     ask_user_questions: bool = True
+    # Context size (thousands of tokens) at which Claude Code compacts a session by itself. Opus runs with
+    # a 1M window: left alone it compacts almost never, and every action re-reads the whole context.
+    compact_at_k: int = Field(200, ge=0, le=1000)  # 0: Claude Code's own threshold
     security_instructions: str = DEFAULT_SECURITY_PROMPT
     env_strip: list[str] = Field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
 
@@ -291,10 +294,43 @@ class InputConstraint(BaseModel):
         return self
 
 
+def web_domain(value: str) -> str:
+    """"https://Ades.odoo.com/web#id=3", "*.sharepoint.com" or "ades.odoo.com:443" → "ades.odoo.com"."""
+    s = str(value or "").strip().lower()
+    s = re.sub(r"^[a-z][a-z0-9+.-]*://", "", s)
+    s = re.split(r"[/\\?#\s]", s, maxsplit=1)[0]  # a browser reads "\" as "/" in a web address
+    s = s.rsplit("@", 1)[-1].split(":", 1)[0].removeprefix("*.").strip(".")
+    return s if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", s) else ""
+
+
+def trusted_url(url: str, domains: list[str]) -> bool:
+    """An https address on one of the approved domains or their subdomains."""
+    if not str(url or "").lower().startswith("https://"):
+        return False
+    host = web_domain(url)
+    return bool(host) and any(host == d or host.endswith("." + d) for d in domains)
+
+
 class Security(BaseModel):
     extra_origins: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=lambda: list(DEFAULT_FORBIDDEN))
     audit: bool = True
+    # sites that Claude may open in a preview window without asking (subdomains included)
+    trusted_domains: list[str] = Field(default_factory=list)
+
+    @field_validator("trusted_domains")
+    @classmethod
+    def _domains(cls, v: list[str]) -> list[str]:
+        out = []
+        for raw in v:
+            if not str(raw or "").strip():
+                continue
+            d = web_domain(raw)
+            if not d:
+                raise ValueError(f"domaine invalide : {raw!r} (exemple : monentreprise.odoo.com)")
+            if d not in out:
+                out.append(d)
+        return out
 
 
 class UISettings(BaseModel):
@@ -312,11 +348,20 @@ class History(BaseModel):
 
 DEFAULT_TEAM_PROMPT = """Règles du mode équipe :
 1. Planifie, arbitre et rédige toi-même la réponse finale.
+2. Chacune de tes actions relit tout ton contexte : c'est la plus chère de l'équipe. N'explore pas le code toi-même (lectures en série, sed, grep, cat) : confie l'exploration à l'éclaireur, et les modifications, compilations et tests à l'exécutant. Garde pour toi les vérifications ciblées.
+3. Pour explorer du code, un index comme CodeGraph (outil codegraph_explore, à charger avec ToolSearch s'il est différé) coûte bien moins que la lecture des fichiers : utilise-le avant toute lecture et demande-le explicitement aux sous-agents dans leur consigne.
+4. Ne délègue pas une toute petite tâche (une ou deux actions) : chaque délégation a un coût fixe.
+5. Réserve l'expert aux points réellement difficiles, avec une question précise et le contexte utile.
+6. Donne à chaque sous-agent une consigne autonome et complète (il ne voit pas la conversation) et demande un résultat court et factuel.
+7. Lance en parallèle les sous-agents dont les travaux sont indépendants."""
+# Rules shipped by earlier versions: a saved copy of them is upgraded to the current ones.
+OLD_TEAM_PROMPTS = {"""Règles du mode équipe :
+1. Planifie, arbitre et rédige toi-même la réponse finale.
 2. Délègue une étape bien définie qui demande du volume (lire beaucoup de fichiers, chercher, modifier en série, lancer des commandes) au sous-agent le moins coûteux capable de la faire.
 3. Ne délègue pas une petite tâche (moins de trois actions) : chaque délégation a un coût fixe.
 4. Réserve l'expert aux points réellement difficiles, avec une question précise et le contexte utile.
 5. Donne à chaque sous-agent une consigne autonome et complète (il ne voit pas la conversation) et demande un résultat court et factuel.
-6. Lance en parallèle les sous-agents dont les travaux sont indépendants."""
+6. Lance en parallèle les sous-agents dont les travaux sont indépendants."""}
 
 
 class TeamSettings(BaseModel):
@@ -326,6 +371,11 @@ class TeamSettings(BaseModel):
     expert_model: str = "opus"
     subagent_default: str = "sonnet"
     instructions: str = DEFAULT_TEAM_PROMPT
+
+    @field_validator("instructions")
+    @classmethod
+    def _instructions(cls, v: str) -> str:
+        return DEFAULT_TEAM_PROMPT if v.strip() in {p.strip() for p in OLD_TEAM_PROMPTS} else v
 
     @field_validator("scout_model", "worker_model", "expert_model", "subagent_default")
     @classmethod

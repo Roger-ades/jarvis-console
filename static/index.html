@@ -7,19 +7,19 @@
 <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/img/icon-192.png">
-<meta name="theme-color" content="#06080c">
+<meta name="theme-color" content="#0b0f15">
 <meta name="application-name" content="JARVIS">
 <link rel="stylesheet" href="/static/css/app.css">
 <script type="module" src="/static/js/app.js"></script>
 </head>
 <body>
   <header id="topbar">
-    <div class="brand">
-      <img src="/static/img/favicon.svg" alt="" class="brand-mark">
+    <button type="button" id="brand" class="brand" title="Réduire toutes les fenêtres">
+      <span class="brand-mark" data-logo></span>
       <span class="brand-name">JARVIS</span>
       <span class="brand-sep"></span>
       <span class="brand-sub">Console d'agents</span>
-    </div>
+    </button>
     <div id="counters" class="counters" aria-live="polite"></div>
     <div id="profile-pills" class="profile-pills"></div>
     <div class="top-actions">
@@ -32,8 +32,8 @@
       <button class="btn ghost" id="btn-project" title="Projet : consignes, mémoire, fichiers et discussions du dossier de travail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/></svg><span class="lbl">Projet</span>
       </button>
-      <button class="btn ghost" id="btn-sessions" title="Sessions Claude Code existantes (Claude Desktop, CLI, console)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Sessions</span>
+      <button class="btn ghost" id="btn-history" title="Historique des tâches">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Historique</span>
       </button>
       <button class="btn ghost" id="btn-routines" title="Routines : tâches planifiées">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M12 13v3l2 1.5"/></svg><span class="lbl">Routines</span>
@@ -53,8 +53,8 @@
           <div class="menu-note">Conversations, projets, Cowork et partage restent sur claude.ai : aucune API ne permet de les lire depuis la console.</div>
         </div>
       </div>
-      <button class="btn ghost" id="btn-history" title="Historique des tâches">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Historique</span>
+      <button class="btn ghost" id="btn-sessions" title="Sessions Claude Code existantes (Claude Desktop, CLI, console)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Sessions</span>
       </button>
       <div class="menu-wrap">
         <button class="btn ghost" id="btn-arrange" title="Ranger les fenêtres">
@@ -66,6 +66,8 @@
           <hr>
           <button data-arrange="minimize">Tout réduire</button>
           <button data-arrange="restore">Tout restaurer</button>
+          <hr>
+          <button data-arrange="close" title="Ctrl+Alt+W">Tout fermer</button>
         </div>
       </div>
       <button class="btn ghost" id="btn-config" title="Configuration (Ctrl+virgule)">
@@ -80,7 +82,8 @@
   <main id="desktop">
     <div id="empty-hint" class="empty-hint">
       <div class="home-head">
-        <img src="/static/img/favicon.svg" alt="" class="empty-mark">
+        <span class="empty-mark" data-logo="hud"></span>
+        <p class="wordmark">JARVIS</p>
         <p class="empty-title">Prêt, monsieur.</p>
       </div>
       <div id="home" class="home-grid"></div>
@@ -94,6 +97,9 @@
       </p>
     </div>
   </main>
+
+  <!-- minimized windows dragged out of the taskbar -->
+  <div id="minis" class="minis"></div>
 
   <div id="dock">
     <nav id="taskbar" class="taskbar" hidden></nav>

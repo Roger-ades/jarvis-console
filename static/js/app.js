@@ -4,7 +4,7 @@ import { Attacher, hasFiles } from "./attach.js";
 import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
-import { accountState, gauges, initLimits, limitsBlock, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
+import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
 import { projectFollow, toggleProject } from "./project.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { openPalette } from "./palette.js";
@@ -14,9 +14,11 @@ import { renderHistory, toggleHistory } from "./history.js";
 import { showSession, toggleSessions } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
+import { mountLogo, setLogoActivity } from "./logo.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, dialog, fmtDate, h, statusLabel, store, toast } from "./util.js";
-import { openPreview, revealImage } from "./viewer.js";
+import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, statusLabel, store, toast } from "./util.js";
+import { configure as configureDisplays, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
+import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
 import * as wm from "./wm.js";
 
 const S = {
@@ -31,6 +33,8 @@ const MAX_HISTORY = 100;
 const profiles = () => S.config?.profiles || [];
 const profile = (id = S.profile) => profiles().find((p) => p.id === id) || profiles()[0];
 const theme = () => S.config?.general.theme || "sombre";
+
+document.querySelectorAll("[data-logo]").forEach(mountLogo);
 
 // ------------------------------------------------------------ boot
 async function boot() {
@@ -135,6 +139,7 @@ function renderState() {
     h("span", { class: "d" }), h("b", {}, String(n || 0)), label);
   $("#counters").replaceChildren(
     counter("run", st.running, "en cours"), counter("await", st.awaiting, "à valider"), counter("queue", st.queued, "en file"));
+  setLogoActivity(st.running, st.awaiting);
   const btn = $("#btn-emergency");
   btn.textContent = st.emergency_stop ? "Réactiver" : "Arrêt d'urgence";
   btn.className = `btn ${st.emergency_stop ? "ok" : "danger"}`;
@@ -414,7 +419,8 @@ function renderHome() {
   const home = $("#home");
   if (!home) return;
   const pinned = projects().filter((p) => p.pinned);
-  const recent = [...S.tasks.values()].sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 6);
+  const touched = (t) => Math.max(t.created || 0, t.started || 0, t.ended || 0);
+  const recent = [...S.tasks.values()].sort((a, b) => touched(b) - touched(a)).slice(0, 6);
   const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
     on: { click: () => { useProject(p); input.focus(); } } },
     h("b", {}, p.name),
@@ -428,9 +434,8 @@ function renderHome() {
     recent.length ? h("section", { class: "home-sec" }, h("h3", {}, "Reprendre"), h("div", { class: "home-list" }, ...recent.map((t) =>
       h("button", { type: "button", class: "home-row", style: { "--pc": t.color }, on: { click: () => openTask(t.id) } },
         h("span", { class: "t" }, t.title),
-        h("small", {}, [projectFor(t.workdir)?.name || pname(t.workdir), statusLabel(t), fmtDate(t.created)].filter(Boolean).join(" · ")))))) : null,
-    h("section", { class: "home-sec" }, h("h3", {}, "Limites des comptes"), h("div", { class: "home-lims" }, ...profiles().map((p) =>
-      limitsBlock(p, (e) => openLimits(e.currentTarget, p, { onConfig: () => showConfig("profiles") }))))),
+        h("small", {}, [projectFor(t.workdir)?.name || pname(t.workdir), statusLabel(t), fmtDate(touched(t))].filter(Boolean).join(" · ")))))) : null,
+    // (the accounts' limits are in the top bar)
   ].filter(Boolean));
 }
 
@@ -652,6 +657,7 @@ const winCtx = {
   move: (t) => moveTask(t),
   projectName: (folder) => projectFor(folder)?.name || "",
 };
+configureDisplays({ autoImages: winCtx.autoImages });
 
 function openWindow(t, fresh) {
   let w = S.windows.get(t.id);
@@ -698,10 +704,42 @@ function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
   if (w) w.addEvent(ev);
   if (ev.kind === "show") showFiles(ev);
+  if (ev.kind === "display") showDisplay(ev);
+  if (ev.kind === "tool_result") followFiles();
+  if (ev.kind === "display_answer") setAnswer(ev.task_id, ev.data || {});
 }
 
-/** Claude asked to show files (tool mcp__jarvis__afficher): one preview window each, even if the
-    task's window is minimized or closed. Live events only, never when replaying a conversation. */
+/** A tool just ran (maybe a file written): open file previews check their file at once, not at the next tick. */
+let followTimer = 0;
+function followFiles() {
+  clearTimeout(followTimer);
+  followTimer = setTimeout(refreshPreviews, 300);
+}
+
+/** Claude composed a display (tool presenter). In the conversation it is drawn by the task's window; a
+    window or a modal opens here, live only, and once (an update redraws it where it is). A modal never
+    covers the screen for a task the user is not looking at: it opens as a window instead. */
+function showDisplay(ev) {
+  const d = ev.data || {};
+  const e = setDoc(ev.task_id, d);
+  if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
+  const first = (d.rev || 1) === 1 || e.movedFrom;
+  const color = S.tasks.get(ev.task_id)?.color;
+  const w = S.windows.get(ev.task_id);
+  const looking = w && wm.has(ev.task_id) && !wm.isMinimized(ev.task_id);
+  if (d.ou === "fenetre" || (d.ou === "modale" && !looking)) {
+    if (first && !isWindowOpen(ev.task_id, d.key)) openDisplayWindow(ev.task_id, d.key, color);
+  } else if (d.ou === "modale") {
+    if (first) openDisplayModal(ev.task_id, d.key, color);
+  } else if (!w && first) {
+    const t = S.tasks.get(ev.task_id);
+    toast(`Claude a affiché « ${d.titre} » dans la tâche « ${t?.title || "…"} ».`);
+  }
+}
+
+/** Claude asked to show files, pages of approved sites or a tool's result (tools mcp__jarvis__afficher
+    and afficher_resultat): one preview window each, even if the task's window is minimized or closed.
+    Live events only, never when replaying a conversation. Other sites wait for a click in the task. */
 function showFiles(ev) {
   if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
   const color = S.tasks.get(ev.task_id)?.color;
@@ -711,22 +749,89 @@ function showFiles(ev) {
     try { image = IMG_EXT.test(new URL(url).pathname); } catch { /* shown as a page */ }
     openPreview({ url, kind: image ? "image" : "web", color });
   }
+  for (const result of ev.data?.results || []) openPreview({ taskId: ev.task_id, result, color });
+  const ask = ev.data?.ask || [];
+  if (ask.length && !S.windows.get(ev.task_id)) {
+    const t = S.tasks.get(ev.task_id);
+    toast(`Claude propose d'ouvrir ${ask.length > 1 ? `${ask.length} pages web` : "une page web"} : ouvre la tâche « ${t?.title || "…"} » pour décider.`);
+  }
 }
 
 function renderTaskbar() {
-  const ids = wm.minimizedIds();
+  const docked = [], floating = [];
+  const d = $("#desktop").getBoundingClientRect();
+  for (const id of wm.minimizedIds()) {
+    const pill = taskPill(id);
+    if (!pill) continue;
+    const at = wm.flag(id, "mini");
+    if (at) {
+      // moved onto the desktop: kept inside it, above the command bar
+      const x = Math.max(0, Math.min(at.x, d.width - 140)), y = Math.max(0, Math.min(at.y, d.height - wm.reservedHeight() - 34));
+      Object.assign(pill.style, { left: `${Math.round(d.left + x)}px`, top: `${Math.round(d.top + y)}px` });
+      floating.push(pill);
+    } else docked.push(pill);
+  }
   const bar = $("#taskbar");
-  bar.replaceChildren(...ids.map((id) => {
-    const t = S.tasks.get(id);
-    if (!t) return null;
-    const n = S.attention.get(id) || 0;
-    return h("button", { type: "button", class: "tpill", style: { "--pc": t.color }, title: `${t.profile_name} · ${STATUS[t.status]} · ${t.prompt}`,
-      on: { click: () => wm.restore(id) } }, h("span", { class: "sw" }), h("span", { class: "tt" }, t.title),
-      h("span", { class: `dot s-${t.status}` }),
-      t.status === "awaiting" ? h("span", { class: "cnt" }, "!") : n ? h("span", { class: "cnt" }, String(n)) : null);
-  }));
-  bar.hidden = !ids.length;
+  bar.replaceChildren(...docked);
+  bar.hidden = !docked.length;
+  $("#minis").replaceChildren(...floating);
+  $("#brand").title = wm.visibleCount() ? "Réduire toutes les fenêtres"
+    : wm.minimizedIds().length ? "Rétablir les fenêtres" : "Aucune fenêtre ouverte";
   $("#empty-hint").hidden = S.windows.size > 0;
+}
+
+/** A minimized window (task or preview): click to restore, drag to move it, × to close it. */
+function taskPill(id) {
+  const t = S.tasks.get(id), m = wm.meta(id);
+  if (!t && !m) return null;
+  const n = S.attention.get(id) || 0;
+  const name = t ? t.title : m.title;
+  const close = () => (t ? S.windows.get(id)?.close() : m.onClose?.());
+  const pill = h("div", {
+    class: "tpill", role: "button", tabindex: "0", style: { "--pc": (t ? t.color : m.color) || "var(--accent)" },
+    title: `${t ? `${t.profile_name} · ${STATUS[t.status]} · ${t.prompt}` : `Aperçu · ${m.subtitle || name}`}\nClic : rétablir · glisser : déplacer`,
+    on: { keydown: (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); wm.restore(id); } else if (e.key === "Delete") close();
+    } },
+  }, t ? h("span", { class: "sw" }) : h("span", { class: "pic", svg: m.icon || "file" }),
+  h("span", { class: "tt" }, name),
+  t ? h("span", { class: `dot s-${t.status}` }) : null,
+  t?.status === "awaiting" ? h("span", { class: "cnt" }, "!") : n ? h("span", { class: "cnt" }, String(n)) : null,
+  h("button", { type: "button", class: "tp-x", title: "Fermer", "aria-label": `Fermer ${name}`, svg: "close",
+    on: { click: (e) => { e.stopPropagation(); close(); } } }));
+  dragPill(pill, id);
+  return pill;
+}
+
+function dragPill(pill, id) {
+  pill.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".tp-x")) return;
+    const sx = e.clientX, sy = e.clientY, r = pill.getBoundingClientRect();
+    let moved = false;
+    pill.setPointerCapture(e.pointerId);
+    const at = (ev) => ({ left: r.left + ev.clientX - sx, top: r.top + ev.clientY - sy });
+    const move = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      if (!moved) { moved = true; pill.classList.add("dragging"); document.body.classList.add("dragging"); }
+      const p = at(ev);
+      Object.assign(pill.style, { left: `${p.left}px`, top: `${p.top}px` });
+    };
+    const up = (ev) => {
+      pill.removeEventListener("pointermove", move);
+      pill.removeEventListener("pointerup", up);
+      pill.removeEventListener("pointercancel", up);
+      document.body.classList.remove("dragging");
+      if (!moved) { if (ev.type === "pointerup") wm.restore(id); return; }
+      const d = $("#desktop").getBoundingClientRect(), p = at(ev);
+      // dropped on the command bar: back in the taskbar
+      const docked = ev.clientY >= d.bottom - wm.reservedHeight();
+      wm.flag(id, "mini", docked ? null : { x: Math.round(p.left - d.left), y: Math.round(p.top - d.top) });
+      renderTaskbar();
+    };
+    pill.addEventListener("pointermove", move);
+    pill.addEventListener("pointerup", up);
+    pill.addEventListener("pointercancel", up);
+  });
 }
 
 // ------------------------------------------------------------ notifications
@@ -796,6 +901,9 @@ document.addEventListener("keydown", (e) => {
   } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
     searchAnything();
+  } else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyW") {
+    e.preventDefault();
+    closeAll();
   } else if (e.key === "Escape") {
     $("#menu-arrange").hidden = true;
     $("#menu-claudeai").hidden = true;
@@ -803,7 +911,20 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/** Ctrl+Alt+W / Ranger → Tout fermer: every session and preview window, then every open modal (Échap each). */
+function closeAll() {
+  for (const id of wm.ids()) {
+    if (S.tasks.has(id)) S.windows.get(id)?.close();
+    else wm.meta(id)?.onClose?.();
+  }
+  for (let i = 0; i < 8 && document.querySelector("#modal-root .overlay"); i++) {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  }
+  closeDrawers();
+}
 $("#btn-config").addEventListener("click", () => showConfig());
+$("#brand").addEventListener("click", () => wm.toggleDesktop());
+window.addEventListener("resize", debounce(() => { if ($("#minis").childElementCount) renderTaskbar(); }, 150));
 $("#btn-search").addEventListener("click", () => searchAnything());
 
 /** Ctrl+K: actions, projects, discussions and Claude Code sessions in one list. */
@@ -832,6 +953,7 @@ function searchAnything() {
         run: () => api(`/api/limits/${p.id}/refresh`, { method: "POST" }).then(() => toast(`Lecture des limites de ${p.name}…`)).catch((e) => toast(e.message, "err")) })),
       { label: "Ranger les fenêtres en cascade", icon: "panel", run: () => wm.arrange("cascade") },
       { label: "Ranger les fenêtres en mosaïque", icon: "panel", run: () => wm.arrange("mosaique") },
+      { label: "Tout fermer (fenêtres et modales)", icon: "close", hint: "Ctrl+Alt+W", run: closeAll },
       { label: "Redémarrer la console", icon: "retry", keywords: "mise à jour", run: restartConsole },
       { label: "Rechercher une mise à jour", icon: "retry", keywords: "github version git pull", run: () => updateConsole() },
       { label: "Assistant de démarrage", icon: "sparkle", keywords: "installation comptes lanceur bienvenue", run: startSetup },
@@ -903,7 +1025,8 @@ $("#btn-emergency").addEventListener("click", () => setEmergency(!S.state.emerge
 $("#btn-arrange").addEventListener("click", (e) => { e.stopPropagation(); $("#menu-arrange").hidden = !$("#menu-arrange").hidden; });
 $("#menu-arrange").addEventListener("click", (e) => {
   const mode = e.target.closest("button")?.dataset.arrange;
-  if (mode) { wm.arrange(mode); $("#menu-arrange").hidden = true; }
+  if (mode === "close") { closeAll(); $("#menu-arrange").hidden = true; }
+  else if (mode) { wm.arrange(mode); $("#menu-arrange").hidden = true; }
 });
 document.addEventListener("pointerdown", (e) => {
   if (!e.target.closest(".menu-wrap")) { $("#menu-arrange").hidden = true; $("#menu-claudeai").hidden = true; }

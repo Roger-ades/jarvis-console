@@ -5,6 +5,7 @@ import asyncio
 import json
 import mimetypes
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -20,9 +21,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 from starlette.datastructures import MutableHeaders
 
-from . import __version__, attachments, claude_cli, mcp, updater, winsys
+from . import __version__, attachments, claude_cli, content, mcp, updater, winsys
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
-                     expand_path, format_errors)
+                     expand_path, format_errors, web_domain)
 from .engine import Engine, TaskError
 from .permissions import LOCKED_RULES
 from .store import Store
@@ -41,9 +42,11 @@ def code_stamp() -> float:
 # Scripts only from the console itself. Web images and pages are allowed as sources, but
 # the page never creates them on its own: only a click of the user does (no silent
 # exfiltration through an image URL written by a model), and web pages run sandboxed.
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; "
-       "frame-src 'self' blob: https:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; "
-       "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+# HTML of mails and files comes from the preview origin (content.py), never from the console's.
+def console_csp(port: int) -> str:
+    return ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob: https:; "
+            f"frame-src 'self' blob: https: http://{content.HOST}:{port}; media-src 'self' blob:; connect-src 'self'; "
+            "font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
 
 
 class Auth:
@@ -97,6 +100,14 @@ class TaskIn(BaseModel):
 class MessageIn(BaseModel):
     text: str = ""
     attachments: list[str] = []
+    compact: bool = False  # compact the session's context first
+
+
+class DisplayAnswerIn(BaseModel):
+    bloc: int
+    choix: list[int] = []
+    autre: str = ""
+    bouton: int | None = None
 
 
 class DecisionIn(BaseModel):
@@ -117,8 +128,9 @@ class Guard:
     client disconnects behave.)
     """
 
-    def __init__(self, app, check, on_reject):
+    def __init__(self, app, check, on_reject, csp: str = "", content_host: str = ""):
         self.app, self.check, self.on_reject = app, check, on_reject
+        self.csp, self.content_host = csp, content_host
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -130,6 +142,22 @@ class Guard:
             self.on_reject(headers, path, err[1])
             return await _err(err[0], err[1])(scope, receive, send)
         api = path.startswith("/api/")
+        if self.content_host and headers.get("host") == self.content_host:
+            async def send_content(message):
+                # A preview page: framed by the console only (its CSP says so), loaded from an opaque
+                # origin (sandbox), so its own images and styles must be readable cross-origin.
+                if message["type"] == "http.response.start":
+                    h = MutableHeaders(scope=message)
+                    h["X-Content-Type-Options"] = "nosniff"
+                    h["Referrer-Policy"] = "no-referrer"
+                    h["X-DNS-Prefetch-Control"] = "off"
+                    h["Cross-Origin-Resource-Policy"] = "cross-origin"
+                    h["Cache-Control"] = "no-store"
+                    if "content-security-policy" not in h:
+                        h["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'; sandbox"
+                await send(message)
+
+            return await self.app(scope, receive, send_content)
 
         async def send_headers(message):
             if message["type"] == "http.response.start":
@@ -141,18 +169,28 @@ class Guard:
                 h["Cross-Origin-Resource-Policy"] = "same-origin"
                 h["Cache-Control"] = "no-store" if api else "no-cache"
                 if not api:
-                    h["Content-Security-Policy"] = CSP
+                    h["Content-Security-Policy"] = self.csp
             await send(message)
 
         await self.app(scope, receive, send_headers)
 
 
-def preview_response(p: Path) -> FileResponse:
+def file_stamp(p: Path) -> str:
+    """Changes whenever the file is written: an open preview compares it to reload itself."""
+    st = p.stat()
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def preview_response(p: Path, stat: bool = False):
     """A file for the preview. sandbox: even opened directly, an HTML/SVG file of the folder never
-    runs as the console. X-File-Path: where a name such as "logo.png" was found."""
+    runs as the console. X-File-Path: where a name such as "logo.png" was found. stat: only the
+    file's stamp, which an open preview checks to follow the changes."""
+    if stat:
+        return JSONResponse({"stamp": file_stamp(p)}, headers={"Cache-Control": "no-store"})
     media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
     return FileResponse(p, media_type=media, headers={"Content-Disposition": "inline", "Cache-Control": "no-store",
-                                                      "Content-Security-Policy": "sandbox", "X-File-Path": quote(str(p))})
+                                                      "Content-Security-Policy": "sandbox", "X-File-Path": quote(str(p)),
+                                                      "X-File-Stamp": file_stamp(p)})
 
 def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                extra_hosts: tuple[str, ...] = (), start_threads: bool = True) -> FastAPI:
@@ -163,6 +201,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     engine = Engine(cfg_store, store, data_dir, port, cli_command=cli_command, start_threads=start_threads)
     auth = Auth(data_dir)
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}", *extra_hosts}
+    content_host = f"{content.HOST}:{port}"
     rejected: dict[str, float] = {}
 
     @asynccontextmanager
@@ -180,8 +219,13 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                 *(f"http://{h}" for h in extra_hosts), *cfg_store.config.security.extra_origins}
 
     def check(headers: dict, path: str) -> tuple[int, str] | None:
+        if headers.get("host", "") == content_host:
+            # the preview origin serves pages behind their random address, and nothing else
+            return None if path.startswith("/v/") else (404, "Introuvable.")
         if headers.get("host", "") not in hosts:
             return 403, "Hôte refusé (la console n'écoute que 127.0.0.1)."
+        if path.startswith("/v/"):
+            return 404, "Introuvable."
         origin = headers.get("origin")
         if origin and origin not in origins():
             return 403, "Origine refusée."
@@ -198,7 +242,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                 store.audit("appel refusé", {"raison": reason, "chemin": path,
                                              "origine": headers.get("origin", ""), "hôte": headers.get("host", "")})
 
-    app.add_middleware(Guard, check=check, on_reject=rejected_call)
+    app.add_middleware(Guard, check=check, on_reject=rejected_call, csp=console_csp(port), content_host=content_host)
 
     @app.exception_handler(TaskError)
     async def task_error(_req, exc: TaskError):
@@ -386,6 +430,18 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def patch_task(tid: str, body: dict = Body(...)):
         return engine.update_task(tid, body)
 
+    @app.post("/api/tasks/{tid}/keep-warm")
+    def task_keep_warm(tid: str, body: dict = Body(default={})):
+        return engine.keep_warm(tid, body.get("hours") or 0)
+
+    @app.get("/api/tasks/{tid}/activity")
+    def task_activity(tid: str):
+        return engine.activity(tid)
+
+    @app.post("/api/tasks/{tid}/ai-title")
+    def task_ai_title(tid: str):
+        return engine.ai_title(tid)
+
     @app.delete("/api/tasks/{tid}")
     def delete_task(tid: str):
         engine.delete_task(tid)
@@ -398,7 +454,11 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/message")
     def task_message(tid: str, body: MessageIn):
-        return engine.followup(tid, body.text, body.attachments)
+        return engine.followup(tid, body.text, body.attachments, compact=body.compact)
+
+    @app.post("/api/tasks/{tid}/displays/{key}/answer")
+    def task_display_answer(tid: str, key: str, body: DisplayAnswerIn):
+        return engine.display_answer(tid, key, body.bloc, body.choix, body.autre, body.bouton)
 
     @app.post("/api/tasks/{tid}/cancel")
     def task_cancel(tid: str):
@@ -468,8 +528,12 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return engine.workspace_files(profile, folder, sub)
 
     @app.get("/api/workspace/file")
-    def workspace_file(path: str, profile: str | None = None, folder: str | None = None):
-        return preview_response(engine.workspace_file(profile, folder, path))
+    def workspace_file(path: str, profile: str | None = None, folder: str | None = None, stat: bool = False):
+        return preview_response(engine.workspace_file(profile, folder, path), stat)
+
+    @app.get("/api/workspace/frame")
+    def workspace_frame(path: str, profile: str | None = None, folder: str | None = None, remote: bool = False):
+        return engine.workspace_frame(profile, folder, path, remote)
 
     @app.get("/api/limits")
     def limits():
@@ -506,8 +570,29 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return engine.decide(tid, aid, body.decision, body.message, body.answers, body.remember)
 
     @app.get("/api/tasks/{tid}/file")
-    def task_file(tid: str, path: str):
-        return preview_response(engine.task_file(tid, path))
+    def task_file(tid: str, path: str, stat: bool = False):
+        return preview_response(engine.task_file(tid, path), stat)
+
+    @app.get("/api/tasks/{tid}/frame")
+    def task_frame(tid: str, path: str, remote: bool = False):
+        return engine.task_frame(tid, path, remote)
+
+    @app.get("/api/tasks/{tid}/result")
+    def task_result(tid: str, id: str, contient: str = "", remote: bool = False):
+        return engine.result_view(tid, id, contient, remote)
+
+    @app.post("/api/security/trust")
+    def trust_domain(body: dict = Body(...)):
+        d = web_domain(str(body.get("domain") or ""))
+        if not d:
+            return _err(422, "Domaine invalide.")
+        cfg = cfg_store.config.model_copy(deep=True)
+        if d not in cfg.security.trusted_domains:
+            cfg.security.trusted_domains.append(d)
+            out = save(cfg, f"domaine approuvé : {d}")
+        else:
+            out = {"config": dump(cfg), "meta": meta(), "restart_needed": False}
+        return {**out, "domain": d}
 
     @app.post("/api/tasks/{tid}/file/open")
     def task_file_open(tid: str, body: dict = Body(...)):
@@ -722,6 +807,27 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
             return _err(413, "État d'interface trop volumineux.")
         store.kv_set("ui", body)
         return {"ok": True}
+
+    # -------------------------------------------------------- preview origin (http://apercu.localhost:<port>)
+    def frame_parents() -> str:
+        return " ".join(sorted(o for o in origins() if re.fullmatch(r"https?://[\w.\-\[\]:]+", o)))
+
+    @app.get("/v/{cid}/{rest:path}")
+    def preview_page(cid: str, rest: str = ""):
+        e = engine.contents.get(cid)
+        if not e:
+            return PlainTextResponse("Cet aperçu a expiré : rouvre-le depuis la console.", status_code=404)
+        csp = content.policy(f"http://{content_host}", frame_parents(), e.remote)
+        if not rest:
+            return Response(e.page, media_type="text/html; charset=utf-8", headers={"Content-Security-Policy": csp})
+        p = e.resolve(rest) if e.resolve else None
+        if not p:
+            return PlainTextResponse("Introuvable.", status_code=404, headers={"Content-Security-Policy": csp})
+        if p.suffix.lower() in (".html", ".htm", ".xhtml"):
+            page = content.prepare(content.decode_html(p.read_bytes())).encode("utf-8")
+            return Response(page, media_type="text/html; charset=utf-8", headers={"Content-Security-Policy": csp})
+        media = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        return FileResponse(p, media_type=media, headers={"Content-Security-Policy": csp})
 
     # -------------------------------------------------------- static UI
     @app.get("/")

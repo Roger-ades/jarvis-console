@@ -1,0 +1,444 @@
+"""What Claude composes for the user (the console's tool "presenter"): typed blocks, not free HTML.
+
+Claude says what to show — images, search results, a table, a chart, a record, a timeline, key
+figures, choices and buttons — and the console decides how to draw it, always the same way.
+Everything is checked here before it reaches the page: local files like a preview (task folders,
+protected paths), web addresses in https only, sizes clipped. A web image outside the approved
+domains is only loaded after a click of the user (an image address written by a model could carry
+data out). A choice or a button sends the user's answer back to the session as a new message.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+import secrets
+from typing import Callable
+from urllib.parse import urlsplit
+
+from .config import trusted_url, web_domain
+
+WHERE = ("conversation", "fenetre", "modale")
+KINDS = ("texte", "images", "resultats", "tableau", "graphique", "fiche", "chronologie", "chiffres",
+         "progression", "schema", "fichiers", "choix", "actions")
+CHARTS = ("barres", "courbe", "secteurs")
+MAX_BLOCKS = 20
+MAX_JSON = 600 * 1024
+MAX_SVG = 300 * 1024
+IMG_EXT = re.compile(r"\.(png|jpe?g|gif|webp|svg|bmp)$", re.I)
+_KEY = re.compile(r"[^\w.-]+")
+
+TOOL_SPEC = {
+    "name": "presenter",
+    "description": (
+        "Compose un affichage pour l'utilisateur dans la console JARVIS : images ou galerie, résultats de "
+        "recherche en cartes, tableau, graphique, fiche (un client, un devis, un contact…), chronologie ou agenda, "
+        "chiffres clés, progression, schéma SVG, fichiers, et des choix ou boutons auxquels il répond d'un clic. "
+        "La console dessine chaque bloc : donne les données, pas de mise en forme. À utiliser dès que l'utilisateur "
+        "demande de montrer, d'afficher, de comparer ou de visualiser quelque chose, et quand un affichage est plus "
+        "clair qu'un long texte. Une réponse à un choix ou à un bouton t'arrive comme un nouveau message de "
+        "l'utilisateur, préfixé par « [Affichage …] ». Pour faire évoluer un affichage (progression, tableau qui se "
+        "remplit), rappelle l'outil avec le même id. Pour un fichier seul, utilise plutôt « afficher » ; pour le "
+        "résultat brut d'un outil (un mail…), « afficher_resultat »."),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "titre": {"type": "string", "description": "Titre de l'affichage."},
+            "ou": {"type": "string", "enum": list(WHERE),
+                   "description": "conversation (par défaut) : dans la discussion. fenetre : une fenêtre à part, pour ce "
+                                  "qui reste ouvert pendant que l'utilisateur travaille. modale : au premier plan, "
+                                  "seulement si l'utilisateur l'a demandé ou pour une décision qui bloque la suite."},
+            "id": {"type": "string", "description": "Identifiant d'un affichage déjà montré (rendu par l'outil la première "
+                                                    "fois). Pour le modifier (données corrigées, ligne ajoutée, étape "
+                                                    "suivante), réutilise-le : l'affichage est redessiné là où il est au "
+                                                    "lieu d'en ouvrir un nouveau."},
+            "blocs": {
+                "type": "array", "minItems": 1, "maxItems": MAX_BLOCKS,
+                "description": "Les blocs, dans l'ordre. Chacun a un « type » et les champs de ce type.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": list(KINDS)},
+                        "titre": {"type": "string", "description": "Intertitre facultatif du bloc."},
+                        "texte": {"type": "string", "description": "texte : Markdown. progression : légende."},
+                        "images": {"type": "array", "description": "images : [{source, legende}] ; source = chemin "
+                                   "d'un fichier ou adresse https:// d'une image.", "items": {"type": "object"}},
+                        "elements": {"type": "array", "items": {"type": "object"}, "description":
+                                     "resultats : [{titre, url, extrait, source, image}] ; "
+                                     "chronologie : [{quand, titre, texte}] (quand : date ISO ou texte) ; "
+                                     "chiffres : [{libelle, valeur, evolution, detail}]."},
+                        "colonnes": {"type": "array", "items": {"type": "string"}, "description": "tableau : en-têtes."},
+                        "lignes": {"type": "array", "items": {"type": "array"}, "description": "tableau : lignes de cellules."},
+                        "forme": {"type": "string", "enum": list(CHARTS), "description": "graphique : barres, courbe ou secteurs."},
+                        "etiquettes": {"type": "array", "items": {"type": "string"}, "description": "graphique : axe des catégories."},
+                        "series": {"type": "array", "items": {"type": "object"},
+                                   "description": "graphique : [{nom, valeurs: [nombres]}], 8 au plus (secteurs : une)."},
+                        "unite": {"type": "string", "description": "graphique : unité des valeurs (€, h, %…)."},
+                        "champs": {"type": "array", "items": {"type": "object"}, "description": "fiche : [{libelle, valeur}]."},
+                        "lien": {"type": "string", "description": "fiche : adresse https:// de l'enregistrement."},
+                        "image": {"type": "string", "description": "fiche : image (chemin ou https://)."},
+                        "valeur": {"type": "number", "description": "progression : 0 à 100."},
+                        "svg": {"type": "string", "description": "schema : un document <svg> complet (sans script)."},
+                        "fichiers": {"type": "array", "items": {"type": "string"}, "description": "fichiers : chemins."},
+                        "question": {"type": "string", "description": "choix : la question posée."},
+                        "options": {"type": "array", "items": {"type": "string"}, "description": "choix : les réponses proposées."},
+                        "multiple": {"type": "boolean", "description": "choix : plusieurs réponses possibles."},
+                        "boutons": {"type": "array", "items": {"type": "object"}, "description":
+                                    "actions : [{libelle, message}] (le message t'est renvoyé au clic) ou [{libelle, url}]."},
+                    },
+                    "required": ["type"],
+                },
+            },
+        },
+        "required": ["titre", "blocs"],
+    },
+}
+
+
+class Problems(list):
+    def add(self, where: str, why: str):
+        self.append(f"{where} : {why}")
+
+
+def _s(v, n: int = 500) -> str:
+    if v is None or isinstance(v, (dict, list)):
+        return ""
+    s = str(v).strip()
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def _cell(v):
+    if isinstance(v, bool) or v is None:
+        return "" if v is None else ("oui" if v else "non")
+    if isinstance(v, (int, float)):
+        return v if math.isfinite(v) else ""
+    return _s(v, 1000)
+
+
+def _num(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) if math.isfinite(v) else None
+    if isinstance(v, str):
+        t = v.strip().replace(" ", "").replace("\xa0", "").replace(" ", "").replace(",", ".")
+        try:
+            f = float(t)
+        except ValueError:
+            return None
+        return f if math.isfinite(f) else None
+    return None
+
+
+def _list(v, n: int) -> list:
+    return list(v)[:n] if isinstance(v, (list, tuple)) else []
+
+
+def key_of(raw) -> str:
+    k = _KEY.sub("-", _s(raw, 60)).strip("-.")
+    return k or f"d-{secrets.token_hex(4)}"
+
+
+class Checker:
+    """Normalizes one call of "presenter". file(path) → absolute path or raises (task folders, protected
+    paths); trusted: the approved web domains."""
+
+    def __init__(self, file: Callable[[str], str], trusted: list[str]):
+        self.file, self.trusted, self.problems = file, trusted, Problems()
+        self.web_images = 0
+
+    def web(self, url: str, where: str) -> dict | None:
+        url = _s(url, 2000)
+        if not re.match(r"^https://", url, re.I):
+            self.problems.add(where, f"{url[:80] or 'adresse vide'} — seules les adresses https:// sont acceptées")
+            return None
+        host = web_domain(url)
+        if not host:
+            self.problems.add(where, f"adresse invalide : {url[:80]}")
+            return None
+        return {"url": url, "host": host, "trusted": trusted_url(url, self.trusted)}
+
+    def image(self, src, where: str) -> dict | None:
+        src = _s(src, 2000)
+        if not src:
+            return None
+        if re.match(r"^[a-z][a-z0-9+.-]*:", src, re.I) and not re.match(r"^[a-z]:[\\/]", src, re.I):
+            w = self.web(src, where)
+            if w and not w["trusted"]:
+                self.web_images += 1
+            return {"web": w["url"], "host": w["host"], "trusted": w["trusted"]} if w else None
+        try:
+            path = self.file(src)
+        except Exception as exc:  # noqa: BLE001 - TaskError, OSError: told to Claude, never shown
+            self.problems.add(where, f"{src} — {getattr(exc, 'message', exc)}")
+            return None
+        if not IMG_EXT.search(path):
+            self.problems.add(where, f"{src} — pas une image (utilise le bloc fichiers)")
+            return None
+        return {"path": path}
+
+    def block(self, b, i: int) -> dict | None:
+        where = f"bloc {i + 1}"
+        if not isinstance(b, dict):
+            self.problems.add(where, "doit être un objet")
+            return None
+        kind = _s(b.get("type"), 30).lower()
+        if kind not in KINDS:
+            self.problems.add(where, f"type inconnu « {kind} » (types : {', '.join(KINDS)})")
+            return None
+        out = {"type": kind, **({"titre": _s(b["titre"], 200)} if _s(b.get("titre")) else {})}
+        body = getattr(self, f"_{kind}")(b, f"{where} ({kind})")
+        if body is None:
+            return None
+        return {**out, **body}
+
+    # ---- one method per type: the normalized fields, or None (with a problem) when nothing is left
+    def _texte(self, b, where):
+        text = _s(b.get("texte"), 60_000)
+        if not text:
+            self.problems.add(where, "texte vide")
+            return None
+        return {"texte": text}
+
+    def _images(self, b, where):
+        items = []
+        for j, it in enumerate(_list(b.get("images"), 48)):
+            it = it if isinstance(it, dict) else {"source": it}
+            img = self.image(it.get("source") or it.get("src") or it.get("url"), f"{where}, image {j + 1}")
+            if img:
+                items.append({**img, "legende": _s(it.get("legende") or it.get("titre"), 300)})
+        if not items:
+            self.problems.add(where, "aucune image utilisable")
+            return None
+        return {"images": items}
+
+    def _resultats(self, b, where):
+        items = []
+        for j, it in enumerate(_list(b.get("elements"), 50)):
+            if not isinstance(it, dict):
+                continue
+            w = self.web(it.get("url"), f"{where}, élément {j + 1}") if _s(it.get("url")) else None
+            title = _s(it.get("titre"), 300)
+            if not title and not w:
+                continue
+            img = self.image(it.get("image"), f"{where}, image {j + 1}") if _s(it.get("image")) else None
+            items.append({"titre": title or w["host"], "extrait": _s(it.get("extrait") or it.get("texte"), 1200),
+                          "source": _s(it.get("source"), 100), **({"lien": w} if w else {}),
+                          **({"image": img} if img else {})})
+        if not items:
+            self.problems.add(where, "aucun élément")
+            return None
+        return {"elements": items}
+
+    def _tableau(self, b, where):
+        cols = [_s(c, 200) for c in _list(b.get("colonnes"), 40)]
+        rows = []
+        for r in _list(b.get("lignes"), 1000):
+            if isinstance(r, dict):
+                r = [r.get(c) for c in cols] if cols else list(r.values())
+            if isinstance(r, (list, tuple)):
+                rows.append([_cell(c) for c in list(r)[:40]])
+        if not rows and not cols:
+            self.problems.add(where, "tableau vide")
+            return None
+        width = max([len(cols), *(len(r) for r in rows)])
+        cols += [""] * (width - len(cols))
+        rows = [r + [""] * (width - len(r)) for r in rows]
+        more = len(b.get("lignes") or []) > 1000 if isinstance(b.get("lignes"), list) else False
+        return {"colonnes": cols, "lignes": rows, **({"tronque": True} if more else {})}
+
+    def _graphique(self, b, where):
+        form = _s(b.get("forme"), 20).lower() or "barres"
+        if form not in CHARTS:
+            self.problems.add(where, f"forme inconnue « {form} » (barres, courbe, secteurs)")
+            return None
+        limit = 500 if form == "courbe" else 60
+        labels = [_s(x, 80) for x in _list(b.get("etiquettes"), limit)]
+        series = []
+        for s in _list(b.get("series"), 8):
+            if not isinstance(s, dict):
+                continue
+            vals = [_num(v) for v in _list(s.get("valeurs"), limit)]
+            if any(v is not None for v in vals):
+                series.append({"nom": _s(s.get("nom"), 80), "valeurs": vals})
+        if not series:
+            self.problems.add(where, "aucune série de nombres")
+            return None
+        n = max(len(s["valeurs"]) for s in series)
+        labels += [str(k + 1) for k in range(len(labels), n)]
+        labels = labels[:n]
+        for s in series:
+            s["valeurs"] += [None] * (n - len(s["valeurs"]))
+        if form == "secteurs":
+            s = series[0]
+            pairs = [(lab, v) for lab, v in zip(labels, s["valeurs"]) if v is not None and v > 0]
+            if not pairs:
+                self.problems.add(where, "secteurs : aucune valeur positive")
+                return None
+            if len(pairs) > 7:  # past seven slices nobody reads them: the rest becomes « Autres »
+                pairs = sorted(pairs, key=lambda p: -p[1])
+                pairs = pairs[:6] + [("Autres", sum(v for _, v in pairs[6:]))]
+            labels, series = [p[0] for p in pairs], [{"nom": s["nom"], "valeurs": [p[1] for p in pairs]}]
+        return {"forme": form, "etiquettes": labels, "series": series, "unite": _s(b.get("unite"), 20)}
+
+    def _fiche(self, b, where):
+        fields = []
+        for f in _list(b.get("champs"), 60):
+            if isinstance(f, dict) and (_s(f.get("libelle")) or _s(f.get("valeur"), 4000)):
+                fields.append({"libelle": _s(f.get("libelle"), 120), "valeur": _s(_cell(f.get("valeur")), 4000)})
+        if isinstance(b.get("champs"), dict):
+            fields = [{"libelle": _s(k, 120), "valeur": _s(_cell(v), 4000)} for k, v in list(b["champs"].items())[:60]]
+        link = self.web(b.get("lien"), where) if _s(b.get("lien")) else None
+        img = self.image(b.get("image"), where) if _s(b.get("image")) else None
+        if not fields and not link:
+            self.problems.add(where, "fiche sans champ")
+            return None
+        return {"champs": fields, **({"lien": link} if link else {}), **({"image": img} if img else {})}
+
+    def _chronologie(self, b, where):
+        items = [{"quand": _s(it.get("quand") or it.get("date"), 60), "titre": _s(it.get("titre"), 300),
+                  "texte": _s(it.get("texte"), 1500)}
+                 for it in _list(b.get("elements"), 200) if isinstance(it, dict) and (_s(it.get("titre")) or _s(it.get("texte")))]
+        if not items:
+            self.problems.add(where, "aucun élément")
+            return None
+        return {"elements": items}
+
+    def _chiffres(self, b, where):
+        items = [{"libelle": _s(it.get("libelle"), 80), "valeur": _s(_cell(it.get("valeur")), 40),
+                  "evolution": _s(it.get("evolution"), 40), "detail": _s(it.get("detail"), 160)}
+                 for it in _list(b.get("elements"), 12) if isinstance(it, dict) and _s(_cell(it.get("valeur")), 40)]
+        if not items:
+            self.problems.add(where, "aucun chiffre")
+            return None
+        return {"elements": items}
+
+    def _progression(self, b, where):
+        v = _num(b.get("valeur"))
+        if v is None:
+            self.problems.add(where, "valeur manquante (0 à 100)")
+            return None
+        return {"valeur": max(0.0, min(100.0, v)), "texte": _s(b.get("texte"), 300)}
+
+    def _schema(self, b, where):
+        svg = str(b.get("svg") or "").strip()
+        if not re.match(r"^(<\?xml[^>]*>\s*)?<svg[\s>]", svg, re.I):
+            self.problems.add(where, "le schéma doit être un document <svg>")
+            return None
+        if len(svg.encode("utf-8")) > MAX_SVG:
+            self.problems.add(where, "schéma trop volumineux (300 Ko au plus)")
+            return None
+        if not re.search(r"\bxmlns\s*=", svg[:2000]):
+            svg = re.sub(r"^(<\?xml[^>]*>\s*)?<svg", r'\1<svg xmlns="http://www.w3.org/2000/svg"', svg, count=1, flags=re.I)
+        # drawn as an image (never in the page): no script runs and nothing loads from the web
+        return {"svg": svg}
+
+    def _fichiers(self, b, where):
+        paths = []
+        for p in _list(b.get("fichiers"), 40):
+            p = _s(p, 2000)
+            try:
+                paths.append(self.file(p))
+            except Exception as exc:  # noqa: BLE001
+                self.problems.add(where, f"{p} — {getattr(exc, 'message', exc)}")
+        if not paths:
+            self.problems.add(where, "aucun fichier affichable")
+            return None
+        return {"fichiers": paths}
+
+    def _choix(self, b, where):
+        opts = [_s(o.get("libelle") if isinstance(o, dict) else o, 200) for o in _list(b.get("options"), 12)]
+        opts = [o for o in opts if o]
+        if not opts:
+            self.problems.add(where, "aucune option")
+            return None
+        return {"question": _s(b.get("question"), 500), "options": opts, "multiple": bool(b.get("multiple"))}
+
+    def _actions(self, b, where):
+        buttons = []
+        for j, x in enumerate(_list(b.get("boutons"), 8)):
+            if not isinstance(x, dict) or not _s(x.get("libelle"), 60):
+                continue
+            label = _s(x.get("libelle"), 60)
+            if _s(x.get("url")):
+                w = self.web(x.get("url"), f"{where}, bouton {j + 1}")
+                if w:
+                    buttons.append({"libelle": label, "lien": w})
+            else:
+                buttons.append({"libelle": label, "message": _s(x.get("message"), 2000) or label})
+        if not buttons:
+            self.problems.add(where, "aucun bouton")
+            return None
+        return {"boutons": buttons}
+
+
+def check(args: dict, file: Callable[[str], str], trusted: list[str], previous: dict | None = None) -> tuple[dict | None, list[str], int]:
+    """(display, problems, web images waiting for a click) of one call of the tool."""
+    args = args if isinstance(args, dict) else {}
+    c = Checker(file, trusted)
+    raw = args.get("blocs")
+    if isinstance(raw, dict):
+        raw = [raw]
+    blocks = [x for x in (c.block(b, i) for i, b in enumerate(_list(raw, MAX_BLOCKS))) if x]
+    if isinstance(raw, list) and len(raw) > MAX_BLOCKS:
+        c.problems.append(f"{len(raw) - MAX_BLOCKS} bloc(s) au-delà de {MAX_BLOCKS} ignoré(s)")
+    if not blocks:
+        return None, list(c.problems) or ["aucun bloc"], 0
+    where = _s(args.get("ou"), 20).lower().replace("ê", "e")
+    if where not in WHERE:
+        where = (previous or {}).get("ou") or "conversation"
+    doc = {"titre": _s(args.get("titre"), 200) or (previous or {}).get("titre") or "Affichage", "ou": where, "blocs": blocks}
+    if len(json.dumps(doc, ensure_ascii=False)) > MAX_JSON:
+        return None, [*c.problems, "affichage trop volumineux (600 Ko au plus) : réduis le tableau ou découpe-le"], 0
+    return doc, list(c.problems), c.web_images
+
+
+def summary(doc: dict) -> str:
+    """« 2 images, un tableau (12 lignes) » for Claude."""
+    parts = []
+    for b in doc["blocs"]:
+        k = b["type"]
+        if k == "images":
+            n = len(b["images"])
+            parts.append(f"{n} image{'s' if n > 1 else ''}")
+        elif k == "tableau":
+            parts.append(f"tableau ({len(b['lignes'])} lignes)")
+        elif k == "resultats":
+            parts.append(f"{len(b['elements'])} résultat(s)")
+        elif k == "graphique":
+            parts.append(f"graphique en {b['forme']}")
+        else:
+            parts.append(k)
+    return ", ".join(parts)
+
+
+def answer_text(doc: dict, index: int, choice: list[int] | None, other: str, button: int | None) -> tuple[str, list[str]]:
+    """The message sent to the session for a click in a display, and the labels shown as answered."""
+    blocks = doc.get("blocs") or []
+    if not 0 <= index < len(blocks):
+        raise ValueError("Bloc introuvable.")
+    b = blocks[index]
+    head = f"[Affichage « {doc.get('titre') or 'Affichage'} »]"
+    if b["type"] == "choix":
+        picked = [b["options"][i] for i in dict.fromkeys(choice or []) if isinstance(i, int) and 0 <= i < len(b["options"])]
+        if not b.get("multiple"):
+            picked = picked[:1]
+        other = _s(other, 1000)
+        labels = picked + ([other] if other else [])
+        if not labels:
+            raise ValueError("Aucune réponse choisie.")
+        q = f" {b['question']}" if b.get("question") else ""
+        return f"{head}{q} → {' ; '.join(labels)}", labels
+    if b["type"] == "actions":
+        btns = b["boutons"]
+        if button is None or not 0 <= button < len(btns) or "message" not in btns[button]:
+            raise ValueError("Bouton introuvable.")
+        return f"{head} {btns[button]['message']}", [btns[button]["libelle"]]
+    raise ValueError("Ce bloc n'attend pas de réponse.")
+
+
+def host_of(url: str) -> str:
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""

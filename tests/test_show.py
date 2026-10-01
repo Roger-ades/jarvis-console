@@ -1,7 +1,7 @@
 """The console's own MCP server: Claude opens files in the interface with mcp__jarvis__afficher."""
 import os
 
-from console.engine import CONSOLE_MCP, SHOW_SPEC
+from console.engine import CONSOLE_MCP, PRESENT_SPEC, RESULT_SPEC, SHOW_SPEC
 
 from .conftest import task_status, wait_for
 
@@ -22,8 +22,9 @@ def test_claude_shows_files_in_the_interface_even_in_read_only_mode(engine, tmp_
     task, events = run(engine, "SHOW logo.png | devis.pdf | absent.png | https://example.com/page | http://site.test/x", wd)
     shown = [e["data"] for e in events if e["kind"] == "show"]
     assert shown == [{"files": [os.path.realpath(wd / "images" / "logo.png"), os.path.realpath(wd / "devis.pdf")],
-                      "urls": ["https://example.com/page"]}]
+                      "urls": [], "ask": ["https://example.com/page"]}]
     assert "Affiché dans la console JARVIS" in task["result"]
+    assert "Proposé à l'utilisateur" in task["result"] and "https://example.com/page" in task["result"]
     assert "absent.png : Fichier introuvable" in task["result"] and "seules les adresses https://" in task["result"]
     # no approval asked, no refusal, and the console's server is not listed with the user's MCP servers
     assert not [e for e in events if e["kind"] in ("approval", "policy")]
@@ -47,7 +48,7 @@ def test_server_protocol(engine):
     eng = engine
     init = eng._console_mcp("x", CONSOLE_MCP, {"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
     assert init["result"]["protocolVersion"] == "2025-06-18" and "tools" in init["result"]["capabilities"]
-    assert eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"] == [SHOW_SPEC]
+    assert eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"] == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC]
     assert eng._console_mcp("x", CONSOLE_MCP, {"method": "notifications/initialized"}) == {"jsonrpc": "2.0", "result": {}}
     assert eng._console_mcp("x", CONSOLE_MCP, {"id": 3, "method": "resources/list"})["error"]["code"] == -32601
     assert "error" in eng._console_mcp("x", "autre", {"id": 4, "method": "tools/list"})

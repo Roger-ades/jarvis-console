@@ -2,6 +2,7 @@
 // It opens on a fresh install (general.setup_done false) and from Configuration or Ctrl+K.
 import { api } from "./api.js";
 import { pickFolder } from "./folderpicker.js";
+import { logo } from "./logo.js";
 import { h, toast } from "./util.js";
 
 /** ctx: state(), profiles(), probes(), newProject(), recentFolders(pid), onDone() */
@@ -14,7 +15,7 @@ export function openSetup(ctx) {
   const next = h("button", { type: "button", class: "btn primary", on: { click: () => (step === STEPS.length - 1 ? finish() : go(step + 1)) } });
   const skip = h("button", { type: "button", class: "btn ghost", title: "Tu pourras le rouvrir dans Configuration → Général", on: { click: finish } }, "Passer l'assistant");
   const box = h("div", { class: "dialog su", role: "dialog", "aria-modal": "true", "aria-label": "Assistant de démarrage" },
-    h("div", { class: "su-head" }, h("img", { src: "/static/img/favicon.svg", alt: "", class: "su-mark" }),
+    h("div", { class: "su-head" }, logo("su-mark"),
       h("div", {}, h("h3", {}, "Bienvenue dans JARVIS"), h("small", { class: "muted" }, "Quelques réglages pour démarrer, en deux minutes."))),
     dots, body, h("div", { class: "dialog-actions" }, skip, h("span", { class: "grow" }), prev, next));
   const overlay = h("div", { class: "overlay" }, box);

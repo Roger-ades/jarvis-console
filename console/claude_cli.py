@@ -86,6 +86,9 @@ def build_env(profile: Profile, general: General) -> dict[str, str]:
         env["PATH"] = _search_path()  # an npm-installed claude needs node on the PATH
     if general.ask_user_questions:
         env["CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL"] = "1"
+    if general.compact_at_k:
+        # compact at this size instead of near the model's window (1M tokens for Opus)
+        env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(general.compact_at_k * 1000)
     env.update(profile.env)
     return env
 
@@ -257,19 +260,19 @@ def open_terminal(title: str, cli: str, args: list[str], env: dict, cwd: str):
         subprocess.Popen([term, "-e", "bash", "-lc", line + "; exec bash"])
 
 
-def limits_probe(cli: list[str], env: dict, cwd: str, timeout: float = 120) -> dict:
-    """Plan usage limits of an account: one tiny request (Haiku, no tool, no MCP, not saved as a
-    session) whose response carries the rate-limit windows. Returns {"events": [...]} or {"error": ...}."""
-    cmd = [*cli, "-p", "Réponds seulement : OK", "--model", "haiku", "--max-turns", "1", "--tools", "",
+def oneshot(cli: list[str], env: dict, cwd: str, prompt: str, model: str = "haiku", timeout: float = 120) -> dict:
+    """One short request (no tool, no MCP, not saved as a session).
+    Returns {"text": answer, "events": rate-limit infos, "error": message or ""}."""
+    cmd = [*cli, "-p", prompt, "--model", model, "--max-turns", "1", "--tools", "",
            "--strict-mcp-config", "--no-session-persistence", "--output-format", "stream-json", "--verbose"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            cwd=cwd, env=env, timeout=timeout, stdin=subprocess.DEVNULL, **spawn_kwargs())
     except subprocess.TimeoutExpired:
-        return {"error": "Claude n'a pas répondu à temps."}
+        return {"text": "", "events": [], "error": "Claude n'a pas répondu à temps."}
     except OSError as exc:
-        return {"error": f"Impossible de lancer la CLI : {exc}"}
-    events, error = [], ""
+        return {"text": "", "events": [], "error": f"Impossible de lancer la CLI : {exc}"}
+    events, text, error = [], "", ""
     for line in r.stdout.splitlines():
         if not line.startswith("{"):
             continue
@@ -279,9 +282,20 @@ def limits_probe(cli: list[str], env: dict, cwd: str, timeout: float = 120) -> d
             continue
         if msg.get("type") == "rate_limit_event" and isinstance(msg.get("rate_limit_info"), dict):
             events.append(msg["rate_limit_info"])
-        elif msg.get("type") == "result" and msg.get("is_error"):
-            error = str(msg.get("result") or "")[:300]
-    if events:
-        return {"events": events}
-    tail = " ".join(r.stderr.strip().splitlines()[-2:])[:300]
-    return {"error": error or tail or "Aucune information de limite reçue (compte non connecté ?)."}
+        elif msg.get("type") == "result":
+            if msg.get("is_error"):
+                error = str(msg.get("result") or "")[:300]
+            else:
+                text = str(msg.get("result") or "")
+    if not text and not error:
+        error = " ".join(r.stderr.strip().splitlines()[-2:])[:300]
+    return {"text": text, "events": events, "error": error}
+
+
+def limits_probe(cli: list[str], env: dict, cwd: str, timeout: float = 120) -> dict:
+    """Plan usage limits of an account: one tiny Haiku request whose response carries the rate-limit
+    windows. Returns {"events": [...]} or {"error": ...}."""
+    res = oneshot(cli, env, cwd, "Réponds seulement : OK", timeout=timeout)
+    if res["events"]:
+        return {"events": res["events"]}
+    return {"error": res["error"] or "Aucune information de limite reçue (compte non connecté ?)."}

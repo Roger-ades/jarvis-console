@@ -24,6 +24,10 @@ export function onChange(fn) { listeners.add(fn); }
 export function prefs() { return ui.prefs || {}; }
 export function savePrefs(p) { ui.prefs = { ...(ui.prefs || {}), ...p }; persist(); }
 export function has(id) { return wins.has(id); }
+/** What a window shows when minimized, for windows that are not tasks (previews): {title, color, icon, onClose}. */
+export function meta(id) { return wins.get(id)?.meta || null; }
+/** Height the floating command bar keeps at the bottom of the desktop. */
+export function reservedHeight() { return reservedH; }
 /** Per-window persisted option (e.g. inspector panel open). */
 export function flag(id, key, value) {
   const st = wins.get(id)?.st || ui.windows[id];
@@ -37,6 +41,7 @@ export function width(id) { return wins.get(id)?.st.w || 0; }
 export function isMinimized(id) { return !!wins.get(id)?.st.min; }
 export function isPinned(id) { return !!wins.get(id)?.st.pinned; }
 export function focused() { return focusedId; }
+export function ids() { return [...wins.keys()]; }
 export function minimizedIds() { return [...wins.entries()].filter(([, w]) => w.st.min).map(([id]) => id); }
 export function visibleCount() { return [...wins.values()].filter((w) => !w.st.min).length; }
 
@@ -112,13 +117,13 @@ function fit(st) {
 
 /** ephemeral: a preview window, not remembered across reloads nor minimized with the others.
     size: {w, h} for a new window. */
-export function register(id, el, { handle, onFocus, fresh = false, ephemeral = false, size = null } = {}) {
+export function register(id, el, { handle, onFocus, fresh = false, ephemeral = false, size = null, meta = null } = {}) {
   let st = ephemeral ? null : ui.windows[id];
   const isNew = !st;
   if (!st) { st = placeNew(size); if (!ephemeral) ui.windows[id] = st; }
   if (fresh) st.min = false;
   fit(st);
-  const w = { el, st, onFocus, ephemeral };
+  const w = { el, st, onFocus, ephemeral, meta };
   wins.set(id, w);
   for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
     const g = h("div", { class: `rz ${dir}` });
@@ -206,6 +211,11 @@ export function toggleMax(id) {
   persist();
 }
 
+/** The JARVIS logo: minimize every window (previews and pinned ones too); once they all are, bring them back. */
+export function toggleDesktop() {
+  arrange(visibleCount() ? "minimize" : "restore");
+}
+
 function makeDraggable(id, handle) {
   handle.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || e.target.closest("button, input, select, textarea, a")) return;
@@ -268,7 +278,7 @@ function startResize(e, id, dir) {
 
 export function arrange(mode) {
   const b = usable();
-  if (mode === "minimize") { for (const [id, w] of wins) if (!isPinned(id) && !w.ephemeral) minimize(id); return; }
+  if (mode === "minimize") { for (const [id, w] of wins) if (!w.st.min) minimize(id); return; }
   if (mode === "restore") { for (const id of minimizedIds()) restore(id); return; }
   const list = [...wins.values()].filter((w) => !w.st.min && !w.st.pinned).sort((a, c) => a.st.z - c.st.z);
   if (!list.length) return;
