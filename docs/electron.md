@@ -234,8 +234,9 @@ Ce qu'il faut adapter pour les documents enfants :
   (connexion, impression) garde sa session. Un téléchargement demande où l'enregistrer.
   « Se déconnecter des sites » ferme leurs fenêtres et vide leurs sessions.
 - **Exemple : un devis Odoo.** « Affiche-moi le dernier devis de X » : Claude trouve le devis (MCP Odoo)
-  et appelle `afficher` avec `https://<odoo>/odoo/sale.order/<id>` (l'adresse du serveur Odoo est dans son
-  prompt) ; la console l'ouvre aussitôt dans la fenêtre Odoo, déjà connectée.
+  et appelle `afficher` avec son modèle et son identifiant ; la console écrit l'adresse
+  (`https://<odoo>/odoo/sales/<id>`, d'après l'adresse du serveur Odoo) et l'ouvre aussitôt dans la
+  fenêtre Odoo, déjà connectée.
 
 ### Notifications et validations
 

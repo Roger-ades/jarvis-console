@@ -57,10 +57,12 @@ SHOW_SPEC = {
     "_meta": ALWAYS_LOAD,
     "name": "afficher",
     "description": (
-        "Ouvre des fichiers ou des pages web dans des fenêtres de la console JARVIS, que l'utilisateur voit à "
-        "l'écran. À utiliser dès qu'il demande d'afficher, de montrer, d'ouvrir ou de voir un fichier, ou un "
-        "enregistrement d'une application web (un devis, une facture, un client Odoo…), au lieu d'en écrire le "
-        "contenu dans ta réponse ; et pour lui présenter un fichier que tu viens de créer quand il veut le voir. "
+        "Ouvre des fichiers, des pages web ou des enregistrements Odoo dans des fenêtres de la console JARVIS, que "
+        "l'utilisateur voit à l'écran. À utiliser dès qu'il demande d'afficher, de montrer, d'ouvrir ou de voir un "
+        "fichier, ou un enregistrement d'une application web (un devis, une facture, un client Odoo…), au lieu d'en "
+        "écrire le contenu dans ta réponse ; et pour lui présenter un fichier que tu viens de créer quand il veut le "
+        "voir. Un enregistrement Odoo se désigne par son modèle et son identifiant (enregistrements) : la console "
+        "construit l'adresse de sa page, ne l'écris pas toi-même. "
         "Fichiers (images, PDF, HTML, texte, Markdown, CSV, JSON… ; les autres types proposent de s'ouvrir avec leur "
         "application) : chemins absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché "
         "dans les dossiers de la tâche. Pages : adresse https:// ; celles des applications web de tes serveurs MCP "
@@ -70,9 +72,18 @@ SHOW_SPEC = {
         "un affichage (galerie, résultats de recherche, tableau, graphique, fiche, choix à cliquer…), presenter."),
     "inputSchema": {
         "type": "object",
-        "properties": {"fichiers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
-                                    "description": "Chemins des fichiers, ou adresses https://, à afficher."}},
-        "required": ["fichiers"],
+        "properties": {
+            "fichiers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
+                         "description": "Chemins des fichiers, ou adresses https://, à afficher."},
+            "enregistrements": {
+                "type": "array", "minItems": 1, "maxItems": 12,
+                "description": "Enregistrements Odoo à ouvrir, ex. [{\"modele\": \"sale.order\", \"id\": 42}] pour un devis.",
+                "items": {"type": "object", "required": ["modele", "id"], "properties": {
+                    "modele": {"type": "string", "description": "Modèle technique (sale.order, res.partner, account.move…)."},
+                    "id": {"type": "integer", "minimum": 1, "description": "Identifiant de l'enregistrement."},
+                    "application": {"type": "string", "description": "Nom du serveur MCP Odoo, s'il y en a plusieurs."}}},
+            },
+        },
     },
 }
 RESULT_TOOL = f"mcp__{CONSOLE_MCP}__afficher_resultat"
@@ -2206,7 +2217,7 @@ class Engine:
                 return ok({"content": [{"type": "text", "text": "Indisponible pendant un maintien du cache."}], "isError": True})
             args = params.get("arguments") or {}
             if params.get("name") == SHOW_SPEC["name"]:
-                text, failed = self.show_files(tid, args.get("fichiers"))
+                text, failed = self.show_files(tid, args.get("fichiers"), args.get("enregistrements"))
             elif params.get("name") == RESULT_SPEC["name"]:
                 text, failed = self.show_result(tid, args)
             elif params.get("name") == PRESENT_SPEC["name"]:
@@ -2220,27 +2231,62 @@ class Engine:
             return {"jsonrpc": "2.0", "result": {}}
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Méthode non prise en charge : {method}"}}
 
-    def _app_domains(self, tid: str) -> list[str]:
-        """The sites of the web applications behind the task's MCP servers (its Odoo…): the user gave their address
-        to those servers, so their pages open without asking, like an approved domain."""
-        t = self._get(tid)
+    def _apps(self, tid: str) -> list[dict]:
+        """The web applications behind the task's MCP servers (mcp.web_apps), as the task was given them."""
+        t = self.tasks.get(tid) or {}
         try:
             prof = Profile.model_validate(t["spec"]["profile"])
         except (KeyError, TypeError, ValueError):
             return []
-        return [d for d in (web_domain(a["url"]) for a in mcp.web_apps(prof, t.get("workdir") or "")) if d]
+        return mcp.web_apps(prof, t.get("workdir") or "")
 
-    def show_files(self, tid: str, items) -> tuple[str, bool]:
-        """Claude shows files to the user: each one checked like a preview, then opened in the UI."""
+    @staticmethod
+    def _record_urls(apps: list[dict], records) -> tuple[list[str], list[str]]:
+        """The pages of the Odoo records Claude designates (model and id): the console writes their address, the
+        model only guesses it (/odoo/sale/42 for /odoo/sales/42)."""
+        if isinstance(records, dict):
+            records = [records]
+        if not isinstance(records, list):
+            return [], []
+        odoo = [a for a in apps if a["kind"] == "odoo"]
+        urls, errors = [], []
+        for r in records[:12]:
+            r = r if isinstance(r, dict) else {}
+            model = str(r.get("modele") or r.get("model") or "").strip()
+            try:
+                rid = int(str(r.get("id")).strip())
+            except ValueError:
+                rid = 0
+            name = str(r.get("application") or "").strip()
+            label = f"{model or '?'} {r.get('id', '?')}"
+            app = next((a for a in odoo if a["name"] == name), None) if name else (odoo[0] if len(odoo) == 1 else None)
+            if not mcp.ODOO_MODEL.fullmatch(model) or rid < 1:
+                errors.append(f"{label} : passe « modele » (ex. sale.order) et « id » (un entier)")
+            elif not app:
+                errors.append(f"{label} : " + ("adresse d'Odoo inconnue (aucun serveur MCP Odoo avec son adresse) : "
+                                               "passe l'adresse https de la page dans « fichiers »" if not odoo else
+                                               "précise « application » : " + ", ".join(a["name"] for a in odoo)))
+            else:
+                urls.append(mcp.odoo_record_url(app["url"], model, rid))
+        return urls, errors
+
+    def show_files(self, tid: str, items, records=None) -> tuple[str, bool]:
+        """Claude shows files to the user: each one checked like a preview, then opened in the UI. records: Odoo
+        records (model and id), opened at the address the console writes for them."""
         if isinstance(items, str):
             items = [items]
-        items = [str(x).strip().strip('"') for x in (items or []) if str(x).strip()][:12]
-        if not items:
-            return ("Aucun fichier indiqué : passe « fichiers », une liste de chemins ou d'adresses https:// "
-                    "(ex. {\"fichiers\": [\"https://…\"]}). Pour un résultat d'outil déjà reçu (un mail…), "
-                    "afficher_resultat ; pour composer une fiche ou un tableau, presenter."), True
-        files, urls, ask, errors = [], [], [], []
-        trusted = [*self.cfg.security.trusted_domains, *self._app_domains(tid)]
+        apps = self._apps(tid)
+        links, errors = self._record_urls(apps, records)
+        items = [*links, *[str(x).strip().strip('"') for x in (items or []) if str(x).strip()]][:12]
+        if not items and not errors:
+            return ("Rien à afficher : passe « fichiers », une liste de chemins ou d'adresses https:// "
+                    "(ex. {\"fichiers\": [\"https://…\"]}), ou « enregistrements » pour Odoo "
+                    "(ex. {\"enregistrements\": [{\"modele\": \"sale.order\", \"id\": 42}]}). Pour un résultat "
+                    "d'outil déjà reçu (un mail…), afficher_resultat ; pour composer une fiche ou un tableau, presenter."), True
+        files, urls, ask = [], [], []
+        # the sites of the task's MCP applications: the user gave their address to those servers, so their pages
+        # open without asking, like an approved domain
+        trusted = [*self.cfg.security.trusted_domains, *(d for d in (web_domain(a["url"]) for a in apps) if d)]
         for item in items:
             if re.match(r"^https?://", item, re.I):
                 if not item.lower().startswith("https://"):

@@ -74,3 +74,51 @@ def test_the_pages_of_the_mcp_servers_applications_open_without_asking(engine, t
     shown = [e["data"] for e in events if e["kind"] == "show"]
     assert shown == [{"files": [], "urls": ["https://erp.example.com/odoo/sale.order/42"], "ask": ["https://autre.example.net/x"]}]
     assert "Affiché dans la console JARVIS : https://erp.example.com/odoo/sale.order/42" in task["result"]
+
+
+def test_the_console_writes_the_address_of_an_odoo_record(engine):
+    """The model guessed /odoo/sale/1538 (an action that does not exist) for /odoo/sales/1538: it now names the
+    record, and the console writes its address."""
+    import time
+    cfg = engine.cfg.model_copy(deep=True)
+    cfg.profile("work").mcp.extra_servers = {
+        "odoo": {"command": "uvx", "args": ["mcp-server-odoo"], "env": {"ODOO_URL": "https://erp.example.com/"}}}
+    engine.cfg_store.save(cfg, "tests")
+    def later():  # (a task keeps the servers it was created with)
+        return engine.create_task("x", profile="work", not_before=time.time() + 3600)["id"]
+
+    tid = later()
+
+    def call(args):
+        out = engine._console_mcp(tid, CONSOLE_MCP, {"id": 1, "method": "tools/call", "params": {"name": "afficher", "arguments": args}})
+        return out["result"]["content"][0]["text"], out["result"]["isError"]
+
+    text, failed = call({"enregistrements": [{"modele": "sale.order", "id": 1538}, {"modele": "res.partner", "id": "7"},
+                                             {"modele": "website", "id": 2}, {"modele": "sale/../x", "id": 3},
+                                             {"modele": "account.move", "id": "abc"}]})
+    urls = ["https://erp.example.com/odoo/sales/1538", "https://erp.example.com/odoo/res.partner/7",
+            "https://erp.example.com/odoo/m-website/2"]
+    assert not failed and [e["data"] for e in engine.store.events(tid) if e["kind"] == "show"] == [
+        {"files": [], "urls": urls, "ask": []}]
+    assert "Affiché dans la console JARVIS : " + ", ".join(urls) in text
+    assert "sale/../x 3 : passe « modele »" in text and "account.move abc : passe « modele »" in text
+    # several Odoo: the server is named, else the call says which ones there are
+    cfg.profile("work").mcp.extra_servers["test"] = {"command": "odoo-mcp", "env": {"ODOO_URL": "https://test.example.com"}}
+    engine.cfg_store.save(cfg, "tests")
+    tid = later()
+    text, failed = call({"enregistrements": [{"modele": "sale.order", "id": 5}]})
+    assert failed and "précise « application » : odoo, test" in text
+    text, failed = call({"enregistrements": [{"modele": "sale.order", "id": 5, "application": "test"}]})
+    assert not failed and "https://test.example.com/odoo/sales/5" in text
+    # no Odoo address known: Claude is told to pass the page's address
+    cfg.profile("work").mcp.extra_servers = {}
+    engine.cfg_store.save(cfg, "tests")
+    tid = later()
+    text, failed = call({"enregistrements": [{"modele": "sale.order", "id": 5}]})
+    assert failed and "adresse d'Odoo inconnue" in text
+
+
+def test_the_records_parameter_is_described_to_claude():
+    props = SHOW_SPEC["inputSchema"]["properties"]
+    assert "required" not in SHOW_SPEC["inputSchema"] and set(props) == {"fichiers", "enregistrements"}
+    assert props["enregistrements"]["items"]["required"] == ["modele", "id"]
