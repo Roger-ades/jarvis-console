@@ -1542,3 +1542,19 @@ th[data-sort="desc"] .dsp-sort::after { content: "▼"; }
 .chg-badge.s-annule, .chg-badge.s-modifie { background: var(--warn-soft); color: var(--warn); }
 .chg-row .btn .i, .chg-fhead .btn .i, .pv-actions .btn .i { display: inline-flex; margin-right: 4px; }
 .chg-row .btn .i svg, .chg-fhead .btn .i svg, .pv-actions .btn .i svg { width: 12px; height: 12px; }
+
+/* ------------------------------------------------ native windows (desktop app, "Intégré au bureau": wm.js) */
+html.native-doc, html.native-doc body { height: 100%; }
+html.native-doc body { margin: 0; display: block; overflow: hidden; background: var(--surface); }
+html.native-doc body::before { display: none; }
+.win.native { position: fixed; inset: 0; width: auto; height: auto; min-width: 0; min-height: 0; border-radius: 0; animation: none;
+  box-shadow: inset 0 0 0 1px var(--border-2); }
+.win.native.focused { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 55%, var(--border-2)); }
+.win.native .rz { display: none; }
+/* the header is the title bar: it moves the window, the native buttons sit at its end (Windows, Linux) or start (Mac) */
+.win.native .win-head { -webkit-app-region: drag; cursor: default; background: color-mix(in srgb, var(--pc) 7%, var(--surface-2));
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 6px); }
+.win.native .win-head:active { cursor: default; }
+.win.native .win-head :is(button, input, select, textarea, a, summary, [role="button"]) { -webkit-app-region: no-drag; }
+html.native-doc.os-darwin .win.native .win-head { padding-left: 80px; }
+.win.native .win-actions .icon-btn:is([aria-label="Réduire"], [aria-label^="Agrandir"], [aria-label^="Fermer"]) { display: none; }

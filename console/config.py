@@ -341,6 +341,8 @@ class UISettings(BaseModel):
     link_preview: bool = True
     auto_images: bool = False
     regard: bool = True  # "Ce que je regarde": the preview or selected text goes with the message
+    # desktop app (shell/): native windows on the OS desktop, or the whole console in one window
+    bureau: Literal["integre", "fenetre"] = "integre"
 
 
 class History(BaseModel):

@@ -1,0 +1,15 @@
+{
+  "name": "jarvis-shell",
+  "productName": "JARVIS",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Application de bureau de la console JARVIS (prototype) : fenêtres intégrées au bureau, icône de notification, raccourci global.",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.5.1"
+  }
+}

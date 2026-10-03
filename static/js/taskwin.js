@@ -23,13 +23,15 @@ export function autoGrow(el, max) {
   el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`;
 }
 
+/** A menu or popover next to its anchor, in the anchor's document (a native window's, in the app). */
 function place(el, anchor, width = 220) {
-  document.body.append(el);
+  const doc = anchor.ownerDocument, view = doc.defaultView;
+  doc.body.append(el);
   const r = anchor.getBoundingClientRect();
   const w = Math.max(width, el.offsetWidth);
   Object.assign(el.style, {
-    top: `${Math.min(r.bottom + 6, innerHeight - el.offsetHeight - 8)}px`,
-    left: `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`,
+    top: `${Math.max(8, Math.min(r.bottom + 6, view.innerHeight - el.offsetHeight - 8))}px`,
+    left: `${Math.max(8, Math.min(r.right - w, view.innerWidth - w - 8))}px`,
   });
 }
 
@@ -56,20 +58,21 @@ function toolChips(tools, max = 99) {
 }
 
 function dismissable(el, onClose) {
+  const doc = el.ownerDocument;
   const off = (e) => { if (!el.contains(e.target)) close(); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   function close() {
     el.remove();
-    document.removeEventListener("pointerdown", off, true);
-    document.removeEventListener("keydown", esc, true);
+    doc.removeEventListener("pointerdown", off, true);
+    doc.removeEventListener("keydown", esc, true);
     onClose?.();
   }
-  setTimeout(() => { document.addEventListener("pointerdown", off, true); document.addEventListener("keydown", esc, true); });
+  setTimeout(() => { doc.addEventListener("pointerdown", off, true); doc.addEventListener("keydown", esc, true); });
   return close;
 }
 
 export function popupMenu(anchor, items) {
-  document.querySelectorAll(".menu.popup, .popover").forEach((m) => m.remove());
+  anchor.ownerDocument.querySelectorAll(".menu.popup, .popover").forEach((m) => m.remove());
   const menu = h("div", { class: "menu popup" });
   // (the base .menu is anchored right: 0 for the top bar; here it must size to its content)
   Object.assign(menu.style, { position: "fixed", zIndex: "9000", right: "auto", bottom: "auto", maxWidth: "360px" });
@@ -85,7 +88,7 @@ export function popupMenu(anchor, items) {
 }
 
 export function popover(anchor, ...content) {
-  document.querySelectorAll(".menu.popup, .popover").forEach((m) => m.remove());
+  anchor.ownerDocument.querySelectorAll(".menu.popup, .popover").forEach((m) => m.remove());
   const el = h("div", { class: "popover" }, ...content);
   place(el, anchor, 260);
   dismissable(el);
@@ -213,7 +216,8 @@ export class TaskWindow {
   }
 
   mount(fresh) {
-    wm.register(this.id, this.el, { handle: this.head, fresh, onFocus: () => this.ctx.onFocus?.(this.id) });
+    wm.register(this.id, this.el, { handle: this.head, fresh, onFocus: () => this.ctx.onFocus?.(this.id),
+      onClose: () => this.close(), title: this.windowTitle() });
     let open = wm.flag(this.id, "insp");
     if (open === undefined) open = wm.width(this.id) >= 720;
     this.setInspector(open, false);
@@ -357,7 +361,7 @@ export class TaskWindow {
 
   /** The account's color, mixed with the project's when the discussion is in a project. */
   tint() { return taskTint(this.task); }
-  repaint() { paint(this.el, this.tint()); }
+  repaint() { paint(this.el, this.tint()); wm.colorize(this.id); }
 
   update(t) {
     const before = this.task?.status;
@@ -365,6 +369,7 @@ export class TaskWindow {
     if (before && before !== t.status && !ACTIVE.has(t.status)) this.refreshActivity();  // the final figures
     this.repaint();
     this.el.setAttribute("aria-label", t.title);
+    wm.setTitle(this.id, this.windowTitle());
     this.whoName.textContent = t.profile_name;
     this.titleEl.textContent = t.title;
     this.titleEl.title = t.prompt;
@@ -376,6 +381,12 @@ export class TaskWindow {
     this.renderSub();
     this.renderApprovals(t.pending || []);
     if (this.inspOpen) this.renderInspector();
+  }
+
+  /** The native window's title (taskbar, Alt+Tab): the status first when it calls for the user. */
+  windowTitle() {
+    const t = this.task;
+    return `${t.status === "awaiting" ? "À valider · " : ""}${t.title} — ${t.profile_name || "JARVIS"}`;
   }
 
   renderSub() {

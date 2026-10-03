@@ -36,7 +36,14 @@ export class Attacher {
 
   button(cls = "icon-btn") {
     return h("button", { type: "button", class: `${cls} att-btn`, title: "Joindre des fichiers (ou glisse-les, ou colle une capture)",
-      "aria-label": "Joindre des fichiers", svg: "clip", on: { click: () => this.picker.click() } });
+      "aria-label": "Joindre des fichiers", svg: "clip", on: { click: () => this.pick() } });
+  }
+
+  /** The file picker, opened from the document of this list (a native window's, in the desktop app). */
+  pick() {
+    const doc = this.list.ownerDocument;
+    if (this.picker.ownerDocument !== doc) doc.body.append(this.picker);
+    this.picker.click();
   }
 
   add(files) {

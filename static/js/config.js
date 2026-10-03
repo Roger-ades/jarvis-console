@@ -461,6 +461,11 @@ function tabInterface() {
       check("Charger automatiquement les images web", "ui.auto_images",
         { help: "Sinon un bouton « afficher » : le site qui héberge l'image voit ta requête seulement quand tu cliques." }))),
     section("Raccourcis", null, h("table", { class: "tbl" }, h("tbody", {}, keys.map(([k, v]) => h("tr", {}, h("td", { class: "narrow" }, h("kbd", {}, k)), h("td", {}, v)))))),
+    // only in the desktop app (shell/, docs/electron.md)
+    ...(window.jarvis ? [section("Application de bureau", "Réglages de l'application JARVIS (Electron). Raccourci global : Ctrl+Alt+J, nouvelle demande.", grid(
+      select("Affichage", "ui.bureau", [["integre", "Intégré au bureau : chaque fenêtre est une fenêtre de l'OS"],
+        ["fenetre", "Une fenêtre JARVIS : toute la console dans une fenêtre"]],
+      { help: "Changer d'affichage recharge l'interface ; les tâches continuent côté serveur." })))] : []),
   ];
 }
 

@@ -111,7 +111,21 @@ function applyConfig(config, meta) {
   document.documentElement.setAttribute("data-theme", config.general.theme);
   store.set("jarvis.theme", config.general.theme);
   wm.configure({ default_width: config.ui.default_width, default_height: config.ui.default_height });
+  wm.retheme();         // (native windows of the desktop app follow the theme)
   regard.configure({}); // (the chips follow the "Joindre ce que je regarde" setting)
+}
+
+/** Desktop app: "Affichage" changed in the configuration, the interface reloads in the other mode. */
+async function switchDisplay() {
+  const want = S.config?.ui?.bureau;
+  if (!window.jarvis || !want || want === window.jarvis.mode || S.switching) return;
+  S.switching = true;
+  const ok = await confirmDialog("Changer l'affichage ?", want === "integre"
+    ? "Chaque discussion, aperçu ou affichage deviendra une fenêtre du bureau. L'interface se recharge ; les tâches continuent."
+    : "Toute la console revient dans une seule fenêtre. L'interface se recharge ; les tâches continuent.", "Recharger maintenant");
+  S.switching = false;
+  if (ok) window.jarvis.switchMode(want);
+  else toast("L'affichage changera au prochain lancement de l'application.");
 }
 
 async function reloadConfig() {
@@ -123,6 +137,7 @@ async function reloadConfig() {
     selectProfile(S.profile, false);
     renderPills();
     recolorTasks();
+    switchDisplay();
   } catch { /* keep the old one */ }
 }
 
@@ -157,6 +172,7 @@ function renderState() {
   renderPills();
   document.title = `${st.awaiting ? `(${st.awaiting}) ` : ""}JARVIS · Console d'agents`;
   if (!st.cli?.path) renderBanner();
+  window.jarvis?.status({ running: st.running || 0, awaiting: st.awaiting || 0, queued: st.queued || 0 });
 }
 
 function renderBanner(down = null) {
@@ -468,6 +484,8 @@ const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
 // "Ce que je regarde": the preview, display or text the user looks at goes with the next request
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
+// desktop app: its global shortcut (or its notification area) asks for a new request
+window.jarvis?.onCommand(({ cmd } = {}) => { if (cmd === "nouvelle-demande") { input.focus(); input.select(); } });
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
 
 /** From a window: this discussion becomes context of the next request. */
@@ -488,14 +506,14 @@ async function forkTask(t) {
 }
 attacher.bindDrop($("#commandbar"));
 attacher.bindPaste(input);
-// Files dropped anywhere else on the page join the next request (and never replace the app).
-window.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
-window.addEventListener("drop", (e) => {
+// Files dropped anywhere else on the page (or in a native window) join the next request and never replace the app.
+wm.onDocument((doc) => doc.defaultView.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } }));
+wm.onDocument((doc) => doc.defaultView.addEventListener("drop", (e) => {
   if (!hasFiles(e)) return;
   e.preventDefault();
   attacher.add([...e.dataTransfer.files]);
   input.focus();
-});
+}));
 
 async function submit(extra = {}) {
   const prompt = input.value.trim();
@@ -696,7 +714,7 @@ function openWindow(t, fresh) {
     w.mount(fresh);
     w.load();
   } else if (fresh) wm.restore(t.id);
-  $("#empty-hint").hidden = S.windows.size > 0;
+  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
   return w;
 }
 
@@ -704,7 +722,7 @@ function closeWindow(id) {
   const w = S.windows.get(id);
   if (w) { w.destroy(); S.windows.delete(id); }
   S.attention.delete(id);
-  $("#empty-hint").hidden = S.windows.size > 0;
+  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
   renderTaskbar();
 }
 
@@ -809,7 +827,7 @@ function renderTaskbar() {
   $("#minis").replaceChildren(...floating);
   $("#brand").title = wm.visibleCount() ? "Réduire toutes les fenêtres"
     : wm.minimizedIds().length ? "Rétablir les fenêtres" : "Aucune fenêtre ouverte";
-  $("#empty-hint").hidden = S.windows.size > 0;
+  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
 }
 
 /** A minimized window (task or preview): click to restore, drag to move it, × to close it. */
@@ -899,7 +917,8 @@ function attention(id, kind) {
 // ------------------------------------------------------------ global UI
 const isLoopback = (host) => /^(localhost|127\.|\[::1\]|0\.0\.0\.0|.*\.localhost$)/i.test(host);
 
-document.addEventListener("click", (e) => {
+wm.onDocument((doc) => doc.addEventListener("click", onDocumentClick));
+function onDocumentClick(e) {
   const b = e.target.closest(".copy-code");
   if (b) { copyText(b.parentElement.querySelector("code")?.textContent || ""); return; }
   const ref = e.target.closest(".fileref");
@@ -921,27 +940,32 @@ document.addEventListener("click", (e) => {
     e.preventDefault();
     openPreview({ url: url.href, kind: IMG_EXT.test(url.pathname) ? "image" : "web" });
   }
-});
+}
 
-document.addEventListener("keydown", (e) => {
+wm.onDocument((doc) => doc.addEventListener("keydown", onShortcut));
+function onShortcut(e) {
+  // from a native window (desktop app), the shortcuts that open something of the JARVIS window bring it forward
+  const elsewhere = (e.target?.ownerDocument || e.target) !== document && !!window.jarvis;
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     const p = profiles()[Number(e.key) - 1];
-    if (p) { e.preventDefault(); selectProfile(p.id); input.focus(); }
+    if (p) { e.preventDefault(); if (elsewhere) window.jarvis.win("hub"); selectProfile(p.id); input.focus(); }
   } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
     e.preventDefault();
+    if (elsewhere) window.jarvis.win("hub");
     showConfig();
   } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
+    if (elsewhere) window.jarvis.win("hub");
     searchAnything();
   } else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyW") {
     e.preventDefault();
     closeAll();
-  } else if (e.key === "Escape") {
+  } else if (e.key === "Escape" && !elsewhere) {
     $("#menu-arrange").hidden = true;
     $("#menu-claudeai").hidden = true;
     if (!document.querySelector(".overlay")) closeDrawers();
   }
-});
+}
 
 /** Ctrl+Alt+W / Ranger → Tout fermer: every session and preview window, then every open modal (Échap each). */
 function closeAll() {

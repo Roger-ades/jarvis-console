@@ -21,8 +21,8 @@ tes abonnements Claude via la CLI Claude Code.
 - **Ce que je regarde** : l'aperçu ou l'affichage au premier plan et le texte sélectionné
   partent avec ton message ; **différences et annulation** de chaque fichier modifié par Claude.
 
-La suite prévue (déclencheurs, boîte de réception, validations depuis le téléphone…) est dans
-[docs/feuille-de-route.md](docs/feuille-de-route.md).
+La suite prévue (intégration au bureau avec Electron, boîte de réception, déclencheurs, validations
+depuis le téléphone…) est dans [docs/feuille-de-route.md](docs/feuille-de-route.md).
 
 ---
 
@@ -324,7 +324,7 @@ onglet du navigateur. Ses images et polices du web ne sont chargées qu'au clic 
 dossier s'affichent directement.
 
 Naviguer dans Odoo ou SharePoint connecté, à l'intérieur de la console, demandera de
-passer à Electron : voir [docs/electron.md](docs/electron.md) (prévu plus tard).
+passer à Electron : voir [docs/electron.md](docs/electron.md) (prochaine étape).
 
 ### Sessions existantes (Claude Desktop, CLI)
 
@@ -351,6 +351,15 @@ clic droit → Épingler à la barre des tâches. Sur Mac, une app « JARVIS Con
 dossier Applications, à glisser dans le Dock. Le lanceur démarre la console si besoin et
 l'ouvre ; si l'app est installée (ci-dessus), il ouvre l'app installée, dont la fenêtre
 porte aussi l'icône JARVIS au lieu de celle du navigateur.
+
+### Application de bureau (prototype)
+
+**`start-app.bat`** (il faut Node.js 22.12 ou plus) lance JARVIS comme une application de bureau
+Electron. En affichage **Intégré au bureau**, chaque discussion, aperçu ou affichage devient une vraie
+fenêtre de Windows (Alt+Tab, ancrage, plusieurs écrans) ; **Ctrl+Alt+J** ramène la fenêtre JARVIS sur
+une nouvelle demande ; l'icône de la zone de notification montre les tâches en cours et à valider.
+Configuration → Interface → **Affichage** repasse à une seule fenêtre. Détails, état et limites :
+[docs/electron.md](docs/electron.md).
 
 ### Routines
 
@@ -450,6 +459,7 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |
 | `console/store.py` | persistance SQLite |
 | `static/` | interface (HTML, CSS, modules JavaScript sans dépendance) |
+| `shell/` | application de bureau Electron (prototype) : serveur, fenêtres natives, zone de notification |
 
 ## Installer sur un autre poste
 
