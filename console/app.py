@@ -321,9 +321,21 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
             "cli_detected": claude_cli.find_cli(""),
         }
 
+    def desktop_app(cfg: Config | None = None) -> dict | None:
+        """The desktop app, when it is how the console opens (Configuration → Général) and it ran here."""
+        return winsys.app_info(data_dir) if (cfg or cfg_store.config).general.open_as == "bureau" else None
+
     def save(cfg: Config, reason: str):
         old_port = cfg_store.config.general.port
+        old_open = cfg_store.config.general.open_as
         cfg_store.save(cfg, reason)
+        if cfg.general.open_as != old_open:
+            # the session start opens what the console now opens with (desktop app or bare server)
+            try:
+                if winsys.startup_enabled():
+                    winsys.set_startup(True, desktop_app(cfg))
+            except (OSError, subprocess.CalledProcessError):
+                pass
         store.audit("configuration modifiée", {"raison": reason})
         engine.bus.publish("config", {"reason": reason})
         return {"config": dump(cfg), "meta": meta(),
@@ -748,12 +760,13 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def system_info():
         return {"startup": winsys.startup_enabled(), "log": str(data_dir / "console.log"),
                 "stoppable": getattr(app.state, "server", None) is not None,
-                "launcher": winsys.launcher_exists(), "platform": "mac" if sys.platform == "darwin" else os.name}
+                "launcher": winsys.launcher_exists(), "platform": "mac" if sys.platform == "darwin" else os.name,
+                "desktop_app": winsys.app_info(data_dir) is not None, "open_as": cfg_store.config.general.open_as}
 
     @app.post("/api/system/launcher")
     def system_launcher():
         try:
-            paths = winsys.create_launcher()
+            paths = winsys.create_launcher(desktop_app())
         except (OSError, subprocess.CalledProcessError) as exc:
             return _err(500, f"Lanceur non créé : {exc}")
         store.audit("lanceur créé", {"chemins": paths})
@@ -833,7 +846,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.post("/api/system/startup")
     def system_startup(body: dict = Body(...)):
         try:
-            on = winsys.set_startup(bool(body.get("on")))
+            on = winsys.set_startup(bool(body.get("on")), desktop_app())
         except (OSError, subprocess.CalledProcessError) as exc:
             return _err(500, f"Impossible de modifier le démarrage automatique : {exc}")
         store.audit("démarrage avec Windows", {"actif": on})

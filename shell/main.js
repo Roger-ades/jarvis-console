@@ -23,6 +23,8 @@ const WIN_PREFIX = "jarvis-win:";        // window.open name of a native window:
 const SHORTCUT = "CommandOrControl+Alt+J";
 const MODES = ["integre", "fenetre"];
 const ICON = path.join(ROOT, "static", "img", IS_WIN ? "jarvis.ico" : "icon-512.png");
+const AUMID = "local.jarvis.console";    // the app's identity for Windows (taskbar grouping, notifications)
+const APP_ARGS = app.isPackaged ? [] : [__dirname];   // how the OS starts this app again (shortcuts, session start)
 
 let hub = null;                          // the JARVIS window (the console's page)
 let tray = null;
@@ -33,6 +35,9 @@ const children = new Map();              // id -> native BrowserWindow
 const closing = new Set();               // ids the page closes itself (no close request back)
 let overlay = { color: "#161b22", symbolColor: "#c9d1d9" };
 let cascade = 0;
+// started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
+// shortcut, launcher); the windows the page opens meanwhile wait hidden
+let discreet = process.argv.includes("--demarrage");
 
 // ------------------------------------------------------------------ settings, like `python -m console`
 function loadEnv() {
@@ -141,7 +146,7 @@ function nativeOptions(f) {
   const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width: f.width })
     ? { x: f.left, y: f.top } : nextPosition(f.width, f.height);
   return {
-    ...pos, width: f.width || 820, height: f.height || 560, minWidth: 360, minHeight: 200, show: true, title: "JARVIS",
+    ...pos, width: f.width || 820, height: f.height || 560, minWidth: 360, minHeight: 200, show: !discreet, title: "JARVIS",
     icon: ICON, backgroundColor: overlay.color, autoHideMenuBar: true,
     ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
       : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
@@ -245,12 +250,20 @@ function createHub() {
     if (!quitting && tray) { e.preventDefault(); hub.hide(); }   // the app stays in the notification area
   });
   hub.on("closed", () => { hub = null; if (!quitting) quit(); });
-  hub.once("ready-to-show", () => hub.show());
+  hub.once("ready-to-show", () => { if (!discreet) hub.show(); });
   hub.loadURL(splash("Démarrage de la console…"));
+}
+
+/** The user opens JARVIS: what waited hidden since the session start shows up. */
+function wake() {
+  if (!discreet) return;
+  discreet = false;
+  for (const w of children.values()) if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
 }
 
 function showHub(newRequest = false) {
   if (!hub || hub.isDestroyed()) return;
+  wake();
   if (hub.isMinimized()) hub.restore();
   hub.show();
   hub.focus();
@@ -258,6 +271,61 @@ function showHub(newRequest = false) {
 }
 
 function quit() { quitting = true; app.quit(); }
+
+// ------------------------------------------------------------------ the OS: launcher, how to start this app
+/** data/app.json: how the console opens this app (start.bat, launcher, session start: console/winsys.py). */
+function registerApp(data) {
+  try {
+    fs.writeFileSync(path.join(data, "app.json"), JSON.stringify({ exe: process.execPath, args: APP_ARGS, aumid: AUMID,
+      version: app.getVersion(), electron: process.versions.electron, at: new Date().toISOString() }, null, 2));
+  } catch { /* the console keeps opening the browser */ }
+}
+
+const quoteArg = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
+const shortcutDirs = () => ({
+  programs: path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs"),
+  desktop: app.getPath("desktop"),
+});
+
+/** A Windows shortcut to this app, with its identity: pinned, it groups the app's windows; in the Start
+ * menu, it lets Windows show the app's notifications. False when it was already right. */
+function writeShortcut(file) {
+  const want = { target: process.execPath, args: APP_ARGS.map(quoteArg).join(" "), cwd: path.dirname(process.execPath),
+    icon: path.join(ROOT, "static", "img", "jarvis.ico"), iconIndex: 0, appUserModelId: AUMID,
+    description: "JARVIS · Console d'agents Claude" };
+  try {
+    const have = shell.readShortcutLink(file);
+    if (have.target === want.target && have.args === want.args && have.appUserModelId === AUMID && have.icon === want.icon) return false;
+  } catch { /* none yet */ }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  return shell.writeShortcutLink(file, "create", want);
+}
+
+/** The Start menu entry "JARVIS" (and the Desktop one if the user made it) follows this app. Not for an
+ * installed app: its installer made them. */
+function ensureShortcuts() {
+  if (!IS_WIN || app.isPackaged) return;
+  const { programs, desktop } = shortcutDirs();
+  try {
+    writeShortcut(path.join(programs, "JARVIS.lnk"));
+    if (fs.existsSync(path.join(desktop, "JARVIS.lnk"))) writeShortcut(path.join(desktop, "JARVIS.lnk"));
+  } catch { /* not essential */ }
+}
+
+/** Configuration → Général → Créer le lanceur, in the app: "JARVIS" in the Start menu and on the Desktop;
+ * the browser's "JARVIS Console" shortcuts go, so that one entry remains. */
+function createLauncher() {
+  if (!IS_WIN) throw new Error("Lanceur de l'application : sous Windows. Sur Mac, garde l'application dans le Dock.");
+  const { programs, desktop } = shortcutDirs();
+  const paths = [];
+  for (const dir of [programs, desktop]) {
+    const file = path.join(dir, "JARVIS.lnk");
+    writeShortcut(file);
+    fs.rmSync(path.join(dir, "JARVIS Console.lnk"), { force: true });
+    paths.push(file);
+  }
+  return paths;
+}
 
 // ------------------------------------------------------------------ notification area
 /** A small round badge drawn pixel by pixel (Windows: on the taskbar button when something waits). */
@@ -329,6 +397,11 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
 
 ipcMain.on("jarvis:status", (e, s) => { if (fromConsole(e)) updateTray(s); });
 
+ipcMain.handle("jarvis:launcher", (e) => {
+  if (!fromConsole(e)) return { error: "refusé" };
+  try { return { paths: createLauncher() }; } catch (err) { return { error: String(err.message || err) }; }
+});
+
 ipcMain.handle("jarvis:switch-mode", (e, m) => {
   if (!fromConsole(e) || !MODES.includes(m) || m === mode) return false;
   quitting = true;
@@ -339,8 +412,9 @@ ipcMain.handle("jarvis:switch-mode", (e, m) => {
 
 // ------------------------------------------------------------------ start
 async function main() {
-  if (IS_WIN) app.setAppUserModelId("local.jarvis.console");
+  if (IS_WIN) app.setAppUserModelId(AUMID);
   const { data, port } = settings();
+  ensureShortcuts();
   origin = `http://127.0.0.1:${port}`;
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) =>
     cb(sameOrigin(details?.requestingUrl || wc.getURL()) && ["notifications", "clipboard-sanitized-write"].includes(permission)));
@@ -355,6 +429,7 @@ async function main() {
       return;
     }
   }
+  registerApp(data);
   let token;
   try { token = fs.readFileSync(path.join(data, "token"), "utf8").trim(); } catch {
     dialog.showErrorBox("JARVIS", `Jeton d'accès introuvable : ${path.join(data, "token")}`);
@@ -376,7 +451,9 @@ async function main() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => showHub());
+  // started again (launcher, start.bat with "Application de bureau"): JARVIS comes forward; a second
+  // session start (--demarrage) changes nothing
+  app.on("second-instance", (_e, argv) => { if (!argv.includes("--demarrage")) showHub(); });
   app.on("before-quit", () => { quitting = true; });
   app.on("will-quit", () => globalShortcut.unregisterAll());
   app.on("window-all-closed", () => { if (!tray) quit(); });

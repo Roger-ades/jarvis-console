@@ -2,7 +2,7 @@
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
-import { confirmDialog, fmtDate, h, toast } from "./util.js";
+import { confirmDialog, createLauncher, fmtDate, h, toast } from "./util.js";
 
 const TABS = [
   ["general", "Général"], ["profiles", "Profils"], ["permissions", "Autorisations"],
@@ -192,8 +192,9 @@ function tabGeneral() {
       num("Port", `${g}.port`, { min: 1024, max: 65535, help: "Pris en compte au prochain démarrage." }),
       field("Dossier de données", h("input", { type: "text", value: meta.data_dir, readonly: true }), "Variable CONSOLE_DATA_DIR pour le changer."),
       select("Profil par défaut", `${g}.default_profile`, profileOptions()),
-      select("Ouverture au démarrage", `${g}.open_as`, [["app", "Fenêtre d'application (Chrome ou Edge)"], ["navigateur", "Onglet du navigateur"]],
-        { help: "start.bat ouvre la console dans sa propre fenêtre. Pour l'installer : bouton Installer ou menu ⋮ de Chrome." }),
+      select("Ouverture au démarrage", `${g}.open_as`, [["bureau", "Application de bureau JARVIS"], ["app", "Fenêtre d'application (Chrome ou Edge)"],
+        ["navigateur", "Onglet du navigateur"]],
+        { help: "Ce qu'ouvrent start.bat, le lanceur et le démarrage avec la session. L'application de bureau doit avoir été lancée une fois (start-app.bat) ; sinon, la fenêtre de Chrome ou Edge." }),
       num("Tâches simultanées (total)", `${g}.max_concurrent`, { min: 1, max: 16, help: "Au-delà, les demandes attendent en file." }),
       num("Durée max d'une tâche (min)", `${g}.task_timeout_min`, { min: 1, max: 1440, help: "Le temps passé à attendre ta validation n'est pas compté." }),
       num("Délai de validation (min)", `${g}.approval_timeout_min`, { min: 1, max: 1440, help: "Passé ce délai, l'action est refusée." }),
@@ -486,7 +487,7 @@ function launcherSection() {
   const btn = h("button", { type: "button", class: "btn primary", disabled: true, on: { click: async () => {
     btn.disabled = true;
     try {
-      const { paths } = await api("/api/system/launcher", { method: "POST" });
+      const paths = await createLauncher(api);
       state.textContent = `Lanceur créé : ${paths.join(" · ")}`;
       btn.textContent = "Recréer le lanceur";
       toast("Lanceur JARVIS créé.", "ok");
@@ -498,7 +499,10 @@ function launcherSection() {
     btn.disabled = !(mac || s.platform === "nt");
     btn.textContent = s.launcher ? "Recréer le lanceur" : "Créer le lanceur";
     state.textContent = s.launcher ? "Lanceur présent." : "Pas encore de lanceur.";
-    help.textContent = mac
+    help.textContent = window.jarvis && !mac
+      ? "Crée « JARVIS » (l'application de bureau) dans le menu Démarrer et sur le Bureau, à épingler à la barre des tâches : ses fenêtres "
+        + "s'y regroupent. Les anciens raccourcis « JARVIS Console » (navigateur) sont retirés."
+      : mac
       ? "Crée « JARVIS Console » dans ton dossier Applications : glisse-le dans le Dock. Il démarre la console si besoin et l'ouvre."
       : "Crée « JARVIS Console » dans le menu Démarrer et sur le Bureau, avec l'icône JARVIS. Clic droit dessus → Épingler à la barre des tâches. "
         + "Il démarre la console si besoin et l'ouvre. Astuce : installe aussi l'app (bouton Installer en haut) ; le lanceur ouvre alors l'app installée "

@@ -157,6 +157,17 @@ export async function copyText(text) {
 let hostDocument = () => document;
 export function setHostDocument(fn) { hostDocument = fn; }
 
+/** The launcher: in the desktop app, its own "JARVIS" shortcuts (with its taskbar identity); else the
+ * console's (it opens what Configuration → Général → Ouverture says). Returns the shortcuts' paths. */
+export async function createLauncher(api) {
+  if (window.jarvis?.createLauncher) {
+    const r = await window.jarvis.createLauncher();
+    if (r?.error) throw new Error(r.error);
+    return r.paths || [];
+  }
+  return (await api("/api/system/launcher", { method: "POST" })).paths;
+}
+
 export function toast(message, kind = "") {
   const box = hostDocument().getElementById("toasts") || $("#toasts");
   const el = h("div", { class: `toast ${kind}`, role: "status" }, message);

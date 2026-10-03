@@ -19,7 +19,7 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
+import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
 import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
@@ -80,6 +80,29 @@ async function boot() {
   checkVersion();
   setInterval(checkVersion, 60_000);
   if (S.config.general.setup_done === false) startSetup(); // fresh install: the first-run assistant
+  else setTimeout(proposeDesktopApp, 2500);
+}
+
+/** In the desktop app, once: should start.bat, the launcher and the session start open it rather than the
+ * browser? (Configuration → Général → Ouverture au démarrage; the choice can be changed there.) */
+async function proposeDesktopApp() {
+  if (!window.jarvis || S.config?.general?.open_as === "bureau" || store.get("jarvis.app-proposed")
+    || document.querySelector("#modal-root .overlay")) return;
+  const v = await dialog({
+    title: "Ouvrir JARVIS avec l'application de bureau ?",
+    body: "start.bat, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur, "
+      + "et un raccourci « JARVIS » va dans le menu Démarrer et sur le Bureau. Tu pourras revenir au navigateur dans Configuration → Général.",
+    buttons: [{ label: "Plus tard", value: null }, { label: "Garder le navigateur", value: "non" },
+      { label: "Utiliser l'application", value: "oui", cls: "primary" }],
+  });
+  if (!v) return;
+  store.set("jarvis.app-proposed", v);
+  if (v !== "oui") return;
+  try {
+    await api("/api/config", { method: "PUT", body: { ...S.config, general: { ...S.config.general, open_as: "bureau" } } });
+    if (window.jarvis.platform === "win32") await createLauncher(api);
+    toast("JARVIS s'ouvrira avec l'application de bureau.", "ok");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 function startSetup() {

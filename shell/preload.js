@@ -15,6 +15,8 @@ if (mode) {
     /** Counters for the notification area: {running, awaiting, queued}. */
     status: (s) => ipcRenderer.send("jarvis:status", s),
     switchMode: (m) => ipcRenderer.invoke("jarvis:switch-mode", m),
+    /** "JARVIS" shortcuts (Start menu, Desktop) to this app: {paths} or {error}. */
+    createLauncher: () => ipcRenderer.invoke("jarvis:launcher"),
     /** fn({cmd}) — "nouvelle-demande": the global shortcut or the notification area's menu. */
     onCommand: (fn) => { ipcRenderer.on("jarvis:command", (_e, c) => fn(c)); },
   });

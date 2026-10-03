@@ -1,7 +1,12 @@
 """Windows and macOS integration: start with the session (so routines run), the pinnable
-launcher with the JARVIS icon, the installed app, and restarting the console."""
+launcher with the JARVIS icon, the installed app, and restarting the console.
+
+With "Ouverture : application de bureau" (general.open_as = "bureau"), the desktop app (shell/,
+Electron) takes the browser's place: it registers itself in data/app.json at each start, and the
+session start and the launcher open it (it starts the server itself when needed)."""
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import re
@@ -12,6 +17,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "JARVIS Console.lnk"
 LABEL = "local.jarvis.console"
+
+
+APP_FILE = "app.json"
+APP_LAUNCHER = "JARVIS"     # the desktop app's own shortcut (it writes it again with its taskbar identity)
+
+
+def app_info(data_dir: Path) -> dict | None:
+    """The desktop app as it registered itself at its last start ({exe, args}), or None when it never
+    ran here or its program is gone (node_modules deleted…)."""
+    try:
+        info = json.loads((Path(data_dir) / APP_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict) or not isinstance(info.get("exe"), str) or not Path(info["exe"]).is_file():
+        return None
+    args = [a for a in info.get("args") or [] if isinstance(a, str)] if isinstance(info.get("args"), list) else []
+    return {"exe": info["exe"], "args": args}
+
+
+def app_command(app: dict, *extra: str) -> list[str]:
+    return [app["exe"], *app["args"], *extra]
 
 
 def startup_dir() -> Path:
@@ -32,26 +58,32 @@ def _ps_quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
-def set_startup(on: bool) -> bool:
+def set_startup(on: bool, app: dict | None = None) -> bool:
+    """app: the desktop app, started discreetly (notification area) instead of the bare server."""
     if sys.platform == "darwin":
-        return _set_mac(on)
+        return _set_mac(on, app)
     if os.name != "nt":
         raise OSError("démarrage automatique disponible sous Windows et macOS")
     link = startup_dir() / NAME
     if not on:
         link.unlink(missing_ok=True)
         return False
-    # pythonw straight away: no console window flashes at login
-    pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
-    target, arguments = (pyw, "-m console --no-browser") if pyw.exists() else (ROOT / "start.bat", "--no-browser")
+    if app:
+        target, arguments, workdir = app["exe"], subprocess.list2cmdline([*app["args"], "--demarrage"]), os.path.dirname(app["exe"])
+        what = "JARVIS (application de bureau)"
+    else:
+        # pythonw straight away: no console window flashes at login
+        pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+        target, arguments = (pyw, "-m console --no-browser") if pyw.exists() else (ROOT / "start.bat", "--no-browser")
+        workdir, what = str(ROOT), "JARVIS Console (routines)"
     script = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(" + _ps_quote(str(link)) + ");"
         "$s.TargetPath = " + _ps_quote(str(target)) + ";"
         "$s.Arguments = " + _ps_quote(arguments) + ";"
-        "$s.WorkingDirectory = " + _ps_quote(str(ROOT)) + ";"
+        "$s.WorkingDirectory = " + _ps_quote(workdir) + ";"
         "$s.WindowStyle = 7;"
         "$s.IconLocation = " + _ps_quote(f"{ICON},0") + ";"
-        "$s.Description = 'JARVIS Console (routines)';"
+        "$s.Description = " + _ps_quote(what) + ";"
         "$s.Save()"
     )
     subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -75,27 +107,35 @@ def _mac_app() -> Path:
 def launcher_exists() -> bool:
     if sys.platform == "darwin":
         return _mac_app().is_dir()
-    return (_programs_dir() / f"{LAUNCHER}.lnk").exists()
+    return any((_programs_dir() / f"{n}.lnk").exists() for n in (LAUNCHER, APP_LAUNCHER))
 
 
-def create_launcher() -> list[str]:
+def create_launcher(app: dict | None = None) -> list[str]:
     """A "JARVIS Console" launcher with its own icon: it starts the console if needed and opens it.
-    Windows: Start Menu and Desktop shortcuts (to pin to the taskbar). macOS: ~/Applications app (to keep in the Dock)."""
+    Windows: Start Menu and Desktop shortcuts (to pin to the taskbar). macOS: ~/Applications app (to keep in the Dock).
+    app: the desktop app, under its own name ("JARVIS"); the browser launcher then goes, so that one entry
+    remains (the app writes its shortcut again with its taskbar identity, for pinning and notifications)."""
     if sys.platform == "darwin":
-        return [_create_mac_app()]
+        return [_create_mac_app()]   # (it runs `python -m console`, which opens the desktop app when chosen)
     if os.name != "nt":
         raise OSError("lanceur disponible sous Windows et macOS")
-    pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
-    target, arguments = (pyw, "-m console") if pyw.exists() else (ROOT / "start.bat", "")
+    if app:
+        target, arguments, workdir, name, gone = (app["exe"], subprocess.list2cmdline(app["args"]), os.path.dirname(app["exe"]),
+                                                  APP_LAUNCHER, LAUNCHER)
+    else:
+        pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+        target, arguments = (pyw, "-m console") if pyw.exists() else (ROOT / "start.bat", "")
+        workdir, name, gone = str(ROOT), LAUNCHER, ""
     script = (
         "[Console]::OutputEncoding = [Text.UTF8Encoding]::new();"
         "$w = New-Object -ComObject WScript.Shell;"
         "foreach ($dir in @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Desktop'))) {"
-        "  $p = Join-Path $dir " + _ps_quote(f"{LAUNCHER}.lnk") + ";"
+        + ("  Remove-Item -LiteralPath (Join-Path $dir " + _ps_quote(f"{gone}.lnk") + ") -ErrorAction SilentlyContinue;" if gone else "")
+        + "  $p = Join-Path $dir " + _ps_quote(f"{name}.lnk") + ";"
         "  $s = $w.CreateShortcut($p);"
         "  $s.TargetPath = " + _ps_quote(str(target)) + ";"
         "  $s.Arguments = " + _ps_quote(arguments) + ";"
-        "  $s.WorkingDirectory = " + _ps_quote(str(ROOT)) + ";"
+        "  $s.WorkingDirectory = " + _ps_quote(workdir) + ";"
         "  $s.IconLocation = " + _ps_quote(f"{ICON},0") + ";"
         "  $s.Description = " + _ps_quote("JARVIS · Console d'agents Claude") + ";"
         "  $s.Save(); $p"
@@ -177,7 +217,7 @@ def relaunch(port: int, data_dir: Path):
     subprocess.Popen(args, **kw)
 
 
-def _set_mac(on: bool) -> bool:
+def _set_mac(on: bool, app: dict | None = None) -> bool:
     """A LaunchAgent: started at login, no Terminal window, logs in data/console.log."""
     plist = _agent_plist()
     uid = str(os.getuid())
@@ -187,14 +227,14 @@ def _set_mac(on: bool) -> bool:
         plist.unlink(missing_ok=True)
         return False
     py = ROOT / ".venv" / "bin" / "python"
-    if not py.exists():
+    if not py.exists() and not app:
         raise OSError("lance d'abord start.command une fois (création de l'environnement Python)")
     plist.parent.mkdir(parents=True, exist_ok=True)
     home = str(Path.home())
     with plist.open("wb") as fh:
         plistlib.dump({
             "Label": LABEL,
-            "ProgramArguments": [str(py), "-m", "console", "--no-browser", "--background"],
+            "ProgramArguments": app_command(app, "--demarrage") if app else [str(py), "-m", "console", "--no-browser", "--background"],
             "WorkingDirectory": str(ROOT),
             "RunAtLoad": True,
             "EnvironmentVariables": {"PATH": f"{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"},

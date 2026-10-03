@@ -87,7 +87,7 @@ class General(BaseModel):
     max_turns: int = Field(60, ge=1, le=1000)
     max_output_kb: int = Field(1024, ge=16, le=65536)
     notifications: bool = True
-    open_as: Literal["app", "navigateur"] = "app"
+    open_as: Literal["app", "navigateur", "bureau"] = "app"  # bureau: the desktop app (shell/), once started here
     cli_path: str = ""
     attachments_dir: str = "~/ClaudeConsole/pieces-jointes"
     limits_on_start: bool = True  # read the plan limits at start when older than 3 h (one tiny request per account)
