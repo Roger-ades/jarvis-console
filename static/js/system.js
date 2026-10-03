@@ -2,7 +2,7 @@
 // code only when it starts. A banner offers to restart after an update, or to install a new
 // version published on GitHub (git pull, dependencies, restart).
 import { api } from "./api.js";
-import { confirmDialog, h, toast } from "./util.js";
+import { confirmDialog, h, modalHost, noticeRoot, toast } from "./util.js";
 
 let bar = null, barKind = "";
 
@@ -12,7 +12,7 @@ function showBar(kind, text, button) {
   barKind = kind;
   bar = h("div", { class: "update-bar", role: "status" }, h("span", { class: "i", svg: "retry" }), h("span", {}, text), button,
     h("button", { type: "button", class: "icon-btn", title: "Masquer", svg: "close", on: { click: () => { bar?.remove(); bar = null; } } }));
-  document.body.append(bar);
+  noticeRoot().append(bar);
 }
 
 export async function checkVersion() {
@@ -43,7 +43,7 @@ async function running() {
 /** After a restart: wait for the new server (another boot id), then reload the page. */
 async function waitForNew(old, title) {
   const note = h("div", { class: "dialog-body" }, "La page se recharge dès que la nouvelle version répond.");
-  document.getElementById("modal-root").append(h("div", { class: "overlay" },
+  modalHost("dialog").root.append(h("div", { class: "overlay" },
     h("div", { class: "dialog", role: "alertdialog", "aria-live": "polite" }, h("h3", {}, title), note)));
   const end = Date.now() + 120_000;
   while (Date.now() < end) {

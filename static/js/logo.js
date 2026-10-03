@@ -107,9 +107,20 @@ function paint(e) {
 
 const still = matchMedia("(prefers-reduced-motion: reduce)");
 let raf = 0, last = 0;
+let frames = window;   // whose animation frames turn the emblems
+
+/** The desktop app ("Intégré au bureau"): the bar's window turns them, the page's window being hidden. */
+export function animateWith(win) {
+  if (!win || win === frames) return;
+  if (raf) frames.cancelAnimationFrame(raf);
+  raf = 0;
+  last = 0;
+  frames = win;
+  start();
+}
 
 function start() {
-  if (!raf && !still.matches) raf = requestAnimationFrame(tick);
+  if (!raf && !still.matches) raf = frames.requestAnimationFrame(tick);
 }
 
 function tick(now) {
@@ -127,8 +138,8 @@ function tick(now) {
       e.parts[k].setAttribute("transform", `rotate(${e.angle[k].toFixed(2)})`);
     }
   }
-  raf = logos.size ? requestAnimationFrame(tick) : 0;
+  raf = logos.size ? frames.requestAnimationFrame(tick) : 0;
   if (!raf) last = 0;
 }
 
-still.addEventListener?.("change", () => { if (still.matches) { cancelAnimationFrame(raf); raf = 0; last = 0; } else start(); });
+still.addEventListener?.("change", () => { if (still.matches) { frames.cancelAnimationFrame(raf); raf = 0; last = 0; } else start(); });

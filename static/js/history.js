@@ -1,12 +1,12 @@
 // History drawer: every task, including closed windows; click to reopen.
 import { download } from "./api.js";
-import { STATUS, fmtCost, fmtDate, h, statusLabel } from "./util.js";
+import { $, STATUS, fmtCost, fmtDate, h, statusLabel } from "./util.js";
 
 let ctx = null, q = "", profile = "", status = "";
 
 export function toggleHistory(context) {
   ctx = context;
-  const el = document.getElementById("history");
+  const el = $("#history");
   if (!el.hidden) { el.hidden = true; return; }
   el.hidden = false;
   renderHistory();
@@ -14,7 +14,7 @@ export function toggleHistory(context) {
 }
 
 export function renderHistory() {
-  const el = document.getElementById("history");
+  const el = $("#history");
   if (!ctx || el.hidden) return;
   const search = h("input", { type: "text", placeholder: "Rechercher dans les demandes…", value: q });
   search.addEventListener("input", () => { q = search.value; renderList(); });

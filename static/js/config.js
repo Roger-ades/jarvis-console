@@ -2,7 +2,7 @@
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
-import { confirmDialog, createLauncher, fmtDate, h, toast } from "./util.js";
+import { confirmDialog, createLauncher, fmtDate, h, modalHost, reveal, toast } from "./util.js";
 
 const TABS = [
   ["general", "Général"], ["profiles", "Profils"], ["permissions", "Autorisations"],
@@ -13,6 +13,7 @@ const EFFORTS = [["", "défaut du profil"], ["low", "faible"], ["medium", "moyen
 
 let draft = null, meta = null, probes = {}, tab = "general", dirty = false, ctx = null;
 let overlay = null, bodyEl = null, msgEl = null, navEl = null, presetSel = null;
+let cfgDoc = document;   // the document the configuration shows in (a window of its own in the desktop app)
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -188,7 +189,7 @@ function tabGeneral() {
     section("Général", null, grid(
       select("Langue", `${g}.language`, [["fr", "Français"]]),
       select("Thème", `${g}.theme`, [["sombre", "Sombre"], ["clair", "Clair"], ["systeme", "Système"]],
-        { onChange: (v) => document.documentElement.setAttribute("data-theme", v) }),
+        { onChange: (v) => { for (const d of new Set([document, cfgDoc])) d.documentElement.setAttribute("data-theme", v); } }),
       num("Port", `${g}.port`, { min: 1024, max: 65535, help: "Pris en compte au prochain démarrage." }),
       field("Dossier de données", h("input", { type: "text", value: meta.data_dir, readonly: true }), "Variable CONSOLE_DATA_DIR pour le changer."),
       select("Profil par défaut", `${g}.default_profile`, profileOptions()),
@@ -684,13 +685,13 @@ async function close() {
   if (dirty && !(await confirmDialog("Fermer sans enregistrer ?", "Tes modifications seront perdues.", "Fermer", "danger"))) return;
   overlay.remove();
   overlay = null;
-  document.documentElement.setAttribute("data-theme", ctx.theme());
-  document.removeEventListener("keydown", onKey, true);
+  for (const d of new Set([document, cfgDoc])) d.documentElement.setAttribute("data-theme", ctx.theme());
+  cfgDoc.removeEventListener("keydown", onKey, true);
 }
 
 function onKey(e) {
   // Escape belongs to a confirmation dialog opened on top of the configuration, if any.
-  if (e.key === "Escape" && !document.querySelector(".dialog:not(.cfg)")) { e.preventDefault(); close(); }
+  if (e.key === "Escape" && !cfgDoc.querySelector(".dialog:not(.cfg)")) { e.preventDefault(); close(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
 }
 
@@ -705,7 +706,7 @@ function render() {
 
 export async function openConfig(context, startTab = null) {
   ctx = context;
-  if (overlay) { if (startTab) { tab = startTab; render(); } return; }
+  if (overlay) { if (startTab) { tab = startTab; render(); } reveal(cfgDoc); return; }
   const [{ config, meta: m }, pr] = await Promise.all([api("/api/config"), api("/api/probes").catch(() => ({ probes: {} }))]);
   draft = clone(config);
   meta = m;
@@ -722,8 +723,10 @@ export async function openConfig(context, startTab = null) {
       h("button", { type: "button", class: "btn ghost", on: { click: close } }, "Fermer"),
       h("button", { type: "button", class: "btn primary", on: { click: () => save() } }, "Enregistrer")));
   overlay = h("div", { class: "overlay" }, box);
-  document.getElementById("modal-root").append(overlay);
-  document.addEventListener("keydown", onKey, true);
+  const host = modalHost("config");
+  cfgDoc = host.doc;
+  host.root.append(overlay);
+  cfgDoc.addEventListener("keydown", onKey, true);
   render();
 }
 

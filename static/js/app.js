@@ -19,7 +19,7 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { barSent, setupBar } from "./bar.js";
+import { barSent, setupBar, toggleMenu } from "./bar.js";
 import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
 import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
@@ -88,7 +88,7 @@ async function boot() {
  * browser? (Configuration → Général → Ouverture au démarrage; the choice can be changed there.) */
 async function proposeDesktopApp() {
   if (!window.jarvis || S.config?.general?.open_as === "bureau" || store.get("jarvis.app-proposed")
-    || document.querySelector("#modal-root .overlay")) return;
+    || wm.modalOpen()) return;
   const v = await dialog({
     title: "Ouvrir JARVIS avec l'application de bureau ?",
     body: "start.bat, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur, "
@@ -478,7 +478,7 @@ function renderHome() {
   const touched = (t) => Math.max(t.created || 0, t.started || 0, t.ended || 0);
   const recent = [...S.tasks.values()].sort((a, b) => touched(b) - touched(a)).slice(0, 6);
   const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
-    on: { click: () => { useProject(p); input.focus(); } } },
+    on: { click: () => { useProject(p); focusInput(); } } },
     h("b", {}, p.name),
     h("small", {}, [pname(p.folder), p.discussions ? `${p.discussions} discussion${p.discussions > 1 ? "s" : ""}` : "aucune discussion",
       p.last ? fmtDate(p.last) : ""].filter(Boolean).join(" · ")),
@@ -509,11 +509,15 @@ const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
 // "Ce que je regarde": the preview, display or text the user looks at goes with the next request
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
-// desktop app, "Intégré au bureau": the command bar floats in a window of its own (bar.js)
-setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")], callButton: $("#bar-call") });
-// desktop app: its global shortcut (or its notification area) asks for a new request
+// desktop app, "Intégré au bureau": no JARVIS window; the command bar floats in a window of its own, with
+// the top bar and the home screen in its menu, and the notices above it (bar.js)
+setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")],
+  menu: { status: [$("#counters"), $("#profile-pills")], actions: $("#topbar .top-actions"), home: $("#home") },
+  notices: [$("#banner"), $("#reminders")] });
+// desktop app: its global shortcut (or its notification area) asks for a new request, or for the menu
 window.jarvis?.onCommand(({ cmd, tid } = {}) => {
-  if (cmd === "nouvelle-demande") { input.focus(); input.select(); }
+  if (cmd === "nouvelle-demande") { toggleMenu(false); input.focus(); input.select(); }
+  else if (cmd === "menu") toggleMenu(true);
   else if (cmd === "ouvrir" && S.tasks.has(tid)) openTask(tid);   // a click on a notification
 });
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
@@ -762,7 +766,7 @@ function openTask(id) {
   if (t.closed) { t.closed = false; api(`/api/tasks/${id}`, { method: "PATCH", body: { closed: false } }).catch(() => {}); }
   openWindow(t, true);
   wm.restore(id);
-  document.getElementById("history").hidden = true;
+  if (!wm.isNative()) $("#history").hidden = true;
 }
 
 function onTask(t, fresh = false) {
@@ -995,18 +999,23 @@ function onDocumentClick(e) {
 
 wm.onDocument((doc) => doc.addEventListener("keydown", onShortcut));
 function onShortcut(e) {
-  // from a native window (desktop app), the shortcuts that open something of the JARVIS window bring it forward
-  const elsewhere = (e.target?.ownerDocument || e.target) !== document && !!window.jarvis;
+  // (desktop app: the configuration and Ctrl+K open in windows of their own; a profile chosen from another
+  // window calls the bar)
+  const doc = e.target?.ownerDocument || e.target;
+  const elsewhere = doc !== document && !!window.jarvis;
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     const p = profiles()[Number(e.key) - 1];
-    if (p) { e.preventDefault(); if (elsewhere) window.jarvis.win("hub"); selectProfile(p.id); input.focus(); }
+    if (p) {
+      e.preventDefault();
+      if (wm.isNative() && doc !== input.ownerDocument) window.jarvis.win("bar-show", null, { select: false });
+      selectProfile(p.id);
+      input.focus();
+    }
   } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
     e.preventDefault();
-    if (elsewhere) window.jarvis.win("hub");
     showConfig();
   } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
-    if (elsewhere) window.jarvis.win("hub");
     searchAnything();
   } else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyW") {
     e.preventDefault();
@@ -1028,11 +1037,18 @@ function closeAll() {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
   }
   closeDrawers();
+  wm.closeFrames();   // (desktop app: the panels' and the modals' windows)
 }
 $("#btn-config").addEventListener("click", () => showConfig());
 $("#brand").addEventListener("click", () => wm.toggleDesktop());
 window.addEventListener("resize", debounce(() => { if ($("#minis").childElementCount) renderTaskbar(); }, 150));
 $("#btn-search").addEventListener("click", () => searchAnything());
+
+/** The request field gets the keyboard (desktop app, "Intégré au bureau": the bar comes first). */
+function focusInput() {
+  if (wm.isNative()) window.jarvis.win("bar-show", null, { select: false });
+  input.focus();
+}
 
 /** Ctrl+K: actions, projects, discussions and Claude Code sessions in one list. */
 function searchAnything() {
@@ -1042,11 +1058,11 @@ function searchAnything() {
     projects,
     projectName: (folder) => projectFor(folder)?.name || "",
     openTask,
-    useProject: (p) => { useProject(p); input.focus(); },
+    useProject: (p) => { useProject(p); focusInput(); },
     openSession: (pid, sid) => showSession(panelCtx, pid, sid),
     actions: () => [
       ...projectActions(),
-      { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => input.focus() },
+      { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => focusInput() },
       { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
       { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },
       { label: "Nouvelle note", icon: "note", hint: "Générale", keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: "" }) },
@@ -1060,7 +1076,7 @@ function searchAnything() {
       { label: "Joindre des fichiers", icon: "clip", keywords: "pièce jointe pdf image", run: () => attacher.picker.click() },
       { label: "Contexte d'autres discussions", icon: "link", run: () => contextPicker.pick() },
       ...profiles().map((p) => ({ label: `Utiliser le compte ${p.name}`, icon: "user", hint: "Pour la prochaine demande",
-        run: () => { selectProfile(p.id); input.focus(); } })),
+        run: () => { selectProfile(p.id); focusInput(); } })),
       ...profiles().map((p) => ({ label: `Actualiser les limites · ${p.name}`, icon: "gauge", keywords: "quota usage session semaine",
         run: () => api(`/api/limits/${p.id}/refresh`, { method: "POST" }).then(() => toast(`Lecture des limites de ${p.name}…`)).catch((e) => toast(e.message, "err")) })),
       { label: "Ranger les fenêtres en cascade", icon: "panel", run: () => wm.arrange("cascade") },
@@ -1081,14 +1097,23 @@ function projectActions() {
     hint: `${proj.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAction(panelCtx, proj.folder, a) }));
 }
 
+const DRAWERS = ["history", "sessions", "routines", "project", "notes"];
 function closeDrawers(except) {
-  for (const id of ["history", "sessions", "routines", "project", "notes"]) if (id !== except) document.getElementById(id).hidden = true;
+  if (wm.isNative()) return;   // (desktop app: each panel is a window of its own, wm.nativePanels)
+  for (const id of DRAWERS) if (id !== except) document.getElementById(id).hidden = true;
+}
+// desktop app, "Intégré au bureau": the panels open in windows of their own; their button brings an open one forward
+wm.nativePanels(DRAWERS.map((id) => document.getElementById(id)));
+for (const id of DRAWERS) {
+  const btn = $(`#btn-${id}`);
+  btn?.addEventListener("click", (e) => { if (wm.focusPanel($(`#${id}`))) e.stopImmediatePropagation(); }, true);
 }
 const panelCtx = {
   profiles, presets: () => S.config.presets, launch, closeDrawers, onTask: (t) => onTask(t, true),
   currentProfile: () => S.profile,
   compose: (pid, text) => {
     closeDrawers();
+    if (wm.isNative()) window.jarvis.win("bar-show", null, { select: false });
     selectProfile(pid);
     input.value = text;
     autoGrow(input, 220);
@@ -1146,9 +1171,9 @@ const notesCtx = {
   alert: ({ title, body, tag, onClick }) => {
     if (S.config?.ui?.sounds) beep(660);
     if (window.jarvis) {
-      // desktop app: the reminder is in the JARVIS window (often hidden), which comes forward without taking
-      // the keyboard; and a notification of the OS (a click opens the JARVIS window)
-      window.jarvis.win("hub-reveal");
+      // desktop app: the reminder shows above the bar ("Intégré au bureau") or in the JARVIS window, which
+      // come forward without taking the keyboard; and a notification of the OS (a click opens them)
+      window.jarvis.win(wm.isNative() ? "bar-reveal" : "hub-reveal");
       if (S.config?.general?.notifications) window.jarvis.notify({ tid: "rappel", kind: tag, title, body });
       return;
     }
@@ -1174,9 +1199,9 @@ $("#menu-arrange").addEventListener("click", (e) => {
   if (mode === "close") { closeAll(); $("#menu-arrange").hidden = true; }
   else if (mode) { wm.arrange(mode); $("#menu-arrange").hidden = true; }
 });
-document.addEventListener("pointerdown", (e) => {
+wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
   if (!e.target.closest(".menu-wrap")) { $("#menu-arrange").hidden = true; $("#menu-claudeai").hidden = true; }
-});
+}));
 document.addEventListener("visibilitychange", () => { if (!document.hidden && wm.focused()) S.attention.delete(wm.focused()); });
 
 // ------------------------------------------------------------ installable app

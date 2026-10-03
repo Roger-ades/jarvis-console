@@ -1,7 +1,7 @@
 // Folder picker: browse the disk from the console (a web page cannot open the system's own
 // dialog and read the real path). Protected folders never appear.
 import { ApiError, api } from "./api.js";
-import { h, toast } from "./util.js";
+import { h, modalHost, toast } from "./util.js";
 
 const ICON = { account: "user", folder: "folder", cloud: "globe", home: "user", drive: "file", network: "globe", recent: "book" };
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
@@ -26,12 +26,13 @@ export function pickFolder({ title = "Choisir un dossier", start = "", recent = 
         h("button", { type: "button", class: "btn", on: { click: () => done(null) } }, "Annuler"), choose));
     const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) done(null); } } }, box);
     const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(null); } };
-    document.addEventListener("keydown", onKey, true);
-    document.getElementById("modal-root").append(overlay);
+    const { root, doc } = modalHost("dialog");
+    doc.addEventListener("keydown", onKey, true);
+    root.append(overlay);
 
     function done(v) {
       overlay.remove();
-      document.removeEventListener("keydown", onKey, true);
+      doc.removeEventListener("keydown", onKey, true);
       resolve(v);
     }
 

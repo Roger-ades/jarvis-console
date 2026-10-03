@@ -363,8 +363,11 @@ l'installer. En affichage **Intégré au bureau** :
 
 - chaque discussion, aperçu ou affichage devient une vraie fenêtre de Windows (Alt+Tab, ancrage,
   plusieurs écrans) ;
-- **Ctrl+Alt+J** appelle la **barre JARVIS** (la barre de commande) en bas de l'écran ; Échap la
-  range ;
+- plus de fenêtre principale : **Ctrl+Alt+J** appelle la **barre JARVIS** (la barre de commande) en
+  bas de l'écran, Échap la range ; son emblème ouvre le **menu JARVIS** (compteurs, comptes,
+  Rechercher, Projet, Notes, Historique, Routines, Configuration, projets, discussions à reprendre) ;
+- l'historique, les notes, les routines, la configuration, la recherche (Ctrl+K) et les questions
+  s'ouvrent dans des fenêtres de Windows à elles ;
 - une validation en attente produit une notification avec **Approuver** et **Refuser** ;
 - les liens et les pages qu'affiche Claude (Odoo, SharePoint, Outlook web) s'ouvrent dans des
   fenêtres de sites, chacune avec sa session : on y reste connecté ;

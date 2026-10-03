@@ -1,10 +1,10 @@
 // Routines: tasks the console launches on a schedule.
 import { api } from "./api.js";
-import { STATUS, confirmDialog, fmtDate, h, toast } from "./util.js";
+import { $, STATUS, confirmDialog, fmtDate, h, modalHost, toast } from "./util.js";
 
 let ctx = null, data = { routines: [], startup: false };
 const cloud = {}; // profile id -> { loading, error, res }
-const el = () => document.getElementById("routines");
+const el = () => $("#routines");
 const DAYS = ["L", "M", "M", "J", "V", "S", "D"];
 const DAY_NAMES = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
 const RUN_LABEL = { ...STATUS, "lancée": "lancée", "non lancée": "non lancée", "manquée": "manquée" };
@@ -110,7 +110,7 @@ async function cloudDetail(p, r) {
       h("span", { class: "grow" }),
       h("button", { type: "button", class: "btn primary", on: { click: () => overlay.remove() } }, "Fermer")));
   const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) overlay.remove(); } } }, box);
-  document.getElementById("modal-root").append(overlay);
+  modalHost("dialog").root.append(overlay);
   try {
     const { runs: items } = await api(`/api/cloud-routines/${p.id}/${r.id}/runs`);
     runs.replaceChildren(items.length ? h("table", { class: "tbl" }, h("tbody", {}, ...items.map((x) => h("tr", {},
@@ -236,8 +236,9 @@ function editor(r = null, defaults = {}, after = null) {
   const [catchUp, catchUpEl] = cb("Rattraper une exécution manquée", cur.catch_up, "Si la console était arrêtée à l'heure prévue, lancer au démarrage suivant.");
   const [teamCb, teamEl] = cb("Mode équipe", !!cur.team, "Le modèle choisi dirige et délègue à des sous-agents (Configuration → Modèles).");
   const err = h("div", { class: "line err", hidden: true });
-  const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey, true); };
-  const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".dialog:not(.routine-ed)")) close(); };
+  const { root, doc } = modalHost("dialog");
+  const close = () => { overlay.remove(); doc.removeEventListener("keydown", onKey, true); };
+  const onKey = (e) => { if (e.key === "Escape" && !doc.querySelector(".dialog:not(.routine-ed)")) close(); };
   const submit = async () => {
     const schedule = { kind: kind.value, time: time.value || "08:00", days: [...days].sort(), every_min: Math.round(Number(every.value || 60) * Number(unit.value)),
       at: at.value ? new Date(at.value).getTime() / 1000 : null };
@@ -276,7 +277,7 @@ function editor(r = null, defaults = {}, after = null) {
       h("button", { type: "button", class: "btn ghost", on: { click: close } }, "Annuler"),
       h("button", { type: "button", class: "btn primary", on: { click: submit } }, "Enregistrer")));
   const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
-  document.getElementById("modal-root").append(overlay);
-  document.addEventListener("keydown", onKey, true);
+  root.append(overlay);
+  doc.addEventListener("keydown", onKey, true);
   name.focus();
 }

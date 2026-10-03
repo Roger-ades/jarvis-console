@@ -1,8 +1,10 @@
 // Small DOM helpers. Untrusted text only ever goes through textContent or esc().
 
 const lookups = [];
-/** Another document whose elements `$` also finds (the floating bar of the desktop app). */
+/** Another document whose elements `$` also finds (the windows of the desktop app: the floating bar, a
+ * panel moved into a window of its own). */
 export function addLookupDocument(doc) { if (!lookups.includes(doc)) lookups.push(doc); }
+export function removeLookupDocument(doc) { const i = lookups.indexOf(doc); if (i >= 0) lookups.splice(i, 1); }
 export const $ = (sel, root) => (root ? root.querySelector(sel)
   : document.querySelector(sel) || lookups.reduce((found, d) => found || d.querySelector(sel), null));
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -157,9 +159,27 @@ export async function copyText(text) {
   catch { toast("Copie impossible dans ce navigateur.", "err"); }
 }
 
-// Where dialogs and toasts go: this page, or the native window in use (wm.js, desktop app). kind: dialog | toast
+// Where dialogs and toasts go: this page, or the native window in use (wm.js, desktop app).
+// kind: toast | dialog | config | palette | setup
 let hostDocument = (_kind) => document;
 export function setHostDocument(fn) { hostDocument = fn; }
+
+// Brings forward the window a document belongs to (desktop app; nothing in the browser).
+let revealDocument = (_doc) => {};
+export function setRevealDocument(fn) { revealDocument = fn; }
+export function reveal(doc) { revealDocument(doc); }
+
+/** Where a modal goes (a dialog, the configuration, Ctrl+K…): {root: its #modal-root, doc: the document
+ * whose keys it listens to}. */
+export function modalHost(kind = "dialog") {
+  const root = hostDocument(kind).getElementById("modal-root") || document.getElementById("modal-root");
+  return { root, doc: root.ownerDocument };
+}
+
+// Where a notice of the console goes (an update to install): the top of this page, or the desktop app's bar.
+let noticeHost = () => document.body;
+export function setNoticeHost(fn) { noticeHost = fn; }
+export function noticeRoot() { return noticeHost(); }
 
 /** The launcher: in the desktop app, its own "JARVIS" shortcuts (with its taskbar identity); else the
  * console's (it opens what Configuration → Général → Ouverture says). Returns the shortcuts' paths. */
@@ -209,8 +229,7 @@ export function paint(el, c) {
 /** tint: the colors of the account (and of the project) the dialog is about. */
 export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls: "primary" }], input = null, onOpen = null, tint = null }) {
   return new Promise((resolve) => {
-    const doc = hostDocument("dialog");
-    const root = doc.getElementById("modal-root") || $("#modal-root");
+    const { root } = modalHost("dialog");
     const field = input ? h("input", { type: input.type || "text", value: input.value || "", placeholder: input.placeholder || "" }) : null;
     const done = (v) => { overlay.remove(); root.ownerDocument.removeEventListener("keydown", onKey, true); resolve(v); };
     const actions = buttons.map((b) => h("button", { type: "button", class: `btn ${b.cls || ""}`, on: { click: () => done(field && b.value === true ? field.value : b.value) } }, b.label));

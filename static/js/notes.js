@@ -4,11 +4,11 @@
 import { api } from "./api.js";
 import { projectFor, projects } from "./projects.js";
 import { tintOf } from "./tint.js";
-import { confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
+import { $, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 
 let ctx = null, notes = [], filter = "all", search = "";
 const shown = new Map(); // note id -> its reminder popup
-const el = () => document.getElementById("notes");
+const el = () => $("#notes");
 const pad = (n) => String(n).padStart(2, "0");
 const keyOf = (f) => String(f || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 
@@ -249,7 +249,7 @@ function checkReminders() {
 }
 
 function popup(n) {
-  const root = document.getElementById("reminders");
+  const root = $("#reminders");
   const rest = restOf(n);
   const later = (secs) => patch(n, { remind_at: Math.floor(Date.now() / 1000) + secs });
   const tomorrow9 = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return Math.floor(d.getTime() / 1000); };

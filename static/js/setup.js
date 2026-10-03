@@ -3,7 +3,7 @@
 import { api } from "./api.js";
 import { pickFolder } from "./folderpicker.js";
 import { logo } from "./logo.js";
-import { createLauncher, h, toast } from "./util.js";
+import { createLauncher, h, modalHost, toast } from "./util.js";
 
 /** ctx: state(), profiles(), probes(), newProject(), recentFolders(pid), onDone() */
 export function openSetup(ctx) {
@@ -19,7 +19,7 @@ export function openSetup(ctx) {
       h("div", {}, h("h3", {}, "Bienvenue dans JARVIS"), h("small", { class: "muted" }, "Quelques réglages pour démarrer, en deux minutes."))),
     dots, body, h("div", { class: "dialog-actions" }, skip, h("span", { class: "grow" }), prev, next));
   const overlay = h("div", { class: "overlay" }, box);
-  document.getElementById("modal-root").append(overlay);
+  modalHost("setup").root.append(overlay);
 
   async function finish() {
     try {
