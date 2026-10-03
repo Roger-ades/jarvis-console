@@ -19,6 +19,7 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
+import { barSent, setupBar } from "./bar.js";
 import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
 import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
@@ -302,12 +303,13 @@ function toggleOptions(open = $("#opt-panel").hidden) {
 }
 $("#opt-summary").addEventListener("click", () => toggleOptions());
 for (const id of ["#opt-model", "#opt-preset", "#opt-effort"]) $(id).addEventListener("change", updateSummary);
-document.addEventListener("pointerdown", (e) => {
+// (in every document: the command bar may float in a window of its own, bar.js)
+wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
   if (!$("#opt-panel").hidden && !e.target.closest("#opt-panel, #opt-summary")) toggleOptions(false);
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#opt-panel").hidden) { e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
-}, true);
+}));
+wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#opt-panel").hidden) { e.preventDefault(); e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
+}, true));
 
 function selectProfile(id, remember = true) {
   const p = profile(id);
@@ -345,7 +347,7 @@ function selectProfile(id, remember = true) {
   applyProject(projectFor(home));
   updateSummary();
 }
-const $$pbtn = () => Array.from(document.querySelectorAll("#cmd-profiles .pbtn"));
+const $$pbtn = () => Array.from($("#cmd-profiles").querySelectorAll(".pbtn"));
 
 $("#opt-workdir").addEventListener("change", async (e) => {
   if (e.target.value !== "__other__") {
@@ -507,6 +509,8 @@ const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
 // "Ce que je regarde": the preview, display or text the user looks at goes with the next request
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
+// desktop app, "Intégré au bureau": the command bar floats in a window of its own (bar.js)
+setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")], callButton: $("#bar-call") });
 // desktop app: its global shortcut (or its notification area) asks for a new request
 window.jarvis?.onCommand(({ cmd, tid } = {}) => {
   if (cmd === "nouvelle-demande") { input.focus(); input.select(); }
@@ -568,7 +572,7 @@ async function submit(extra = {}) {
     store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
   }
   const t = await launch("/api/tasks", body);
-  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); }
+  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); barSent(); }
   else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
 }
 
@@ -1091,7 +1095,7 @@ const panelCtx = {
     input.focus();
     input.setSelectionRange(text.length, text.length);
   },
-  models: () => [...document.querySelectorAll("#opt-model option")].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
+  models: () => [...$("#opt-model").options].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
   tasks: () => [...S.tasks.values()],
   openTask: (id) => { closeDrawers(); openTask(id); },
   addContext: (t) => addContext(t),

@@ -189,7 +189,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .brand-sub { color: var(--text-3); font-size: 12px; }
 .counters { display: flex; gap: 4px; }
 .counter {
-  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px;
+  display: inline-flex; white-space: nowrap; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 999px;
   font-size: 11.5px; color: var(--text-3); border: 1px solid transparent;
 }
 .counter b { color: var(--text-2); font-weight: 600; }
@@ -1558,3 +1558,23 @@ html.native-doc body::before { display: none; }
 .win.native .win-head :is(button, input, select, textarea, a, summary, [role="button"]) { -webkit-app-region: no-drag; }
 html.native-doc.os-darwin .win.native .win-head { padding-left: 80px; }
 .win.native .win-actions .icon-btn:is([aria-label="Réduire"], [aria-label^="Agrandir"], [aria-label^="Fermer"]) { display: none; }
+
+/* ------------------------------------------------ the floating JARVIS bar (desktop app, bar.js) */
+html.bar-doc, html.bar-doc body { background: transparent; }
+html.bar-doc body { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+html.bar-doc #dock { position: static; padding: 0 14px 14px; pointer-events: auto; }
+/* no backdrop to blur behind a window of the OS: an almost solid surface, a shorter shadow (the window ends there) */
+html.bar-doc .composer { max-width: none; background: color-mix(in srgb, var(--surface) 97%, transparent);
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px var(--border-2); }
+html.bar-doc .composer:focus-within { box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 45%, var(--border-2)); }
+html.bar-doc .taskbar { max-width: none; }
+html.bar-doc .tpill { background: color-mix(in srgb, var(--surface) 97%, transparent); }
+html.bar-doc .toasts { position: static; align-items: center; padding: 0 14px 8px; }
+html.bar-doc .composer-tools .bar-tool { width: 30px; height: 30px; }
+html.bar-doc .composer-tools .bar-pin.on { color: var(--accent); }
+.bar-call { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 20; display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 16px; border-radius: 12px; border: 1px solid var(--border-2); background: color-mix(in srgb, var(--surface) 80%, transparent);
+  color: var(--text-2); font-size: 12.5px; cursor: pointer; box-shadow: var(--shadow-pop); }
+.bar-call:hover { color: var(--text); border-color: var(--border-3); }
+.bar-call[hidden] { display: none; }
+.bar-call kbd { font: 10.5px/1 var(--mono); padding: 2px 5px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }

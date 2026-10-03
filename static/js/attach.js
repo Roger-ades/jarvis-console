@@ -43,6 +43,13 @@ export class Attacher {
   pick() {
     const doc = this.list.ownerDocument;
     if (this.picker.ownerDocument !== doc) doc.body.append(this.picker);
+    // the floating bar of the desktop app does not put itself away while its file picker is open
+    if (doc.documentElement.classList.contains("bar-doc")) {
+      window.jarvis?.win("bar-hold", null, true);
+      const release = () => window.jarvis?.win("bar-hold", null, false);
+      this.picker.addEventListener("change", release, { once: true });
+      this.picker.addEventListener("cancel", release, { once: true });
+    }
     this.picker.click();
   }
 

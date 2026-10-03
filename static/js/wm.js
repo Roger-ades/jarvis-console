@@ -5,7 +5,7 @@
 // a child of this page (window.open) into which the window's element moves: one JavaScript context,
 // one live stream; the app does the moving, sizing and stacking.
 import { api } from "./api.js";
-import { debounce, h, setHostDocument, store } from "./util.js";
+import { addLookupDocument, debounce, h, setHostDocument, store } from "./util.js";
 
 const wins = new Map(); // id -> { el, st, onFocus }
 const listeners = new Set();
@@ -31,14 +31,18 @@ export function onDocument(fn) {
   docInits.add(fn);
   fn(document);
   for (const w of wins.values()) if (w.doc) fn(w.doc);
+  if (barDoc) fn(barDoc);
 }
 /** The document a window lives in (a native window's, or this page's). */
 export function docOf(id) { return wins.get(id)?.doc || document; }
 /** Where dialogs and toasts go: the window of the user's last click or key (this page, or a native
- * window still open), else this page. */
+ * window still open), else this page. From the floating bar, a dialog goes to the JARVIS window (the
+ * bar is too small), a toast stays in the bar. */
 let lastDoc = document;
-export function activeDocument() {
+let barDoc = null;
+export function activeDocument(kind = "dialog") {
   if (!NATIVE || lastDoc === document) return document;
+  if (lastDoc === barDoc) return kind === "toast" ? barDoc : document;
   const w = [...wins.values()].find((x) => x.doc === lastDoc);
   return w && !w.win.closed && !w.st.min ? lastDoc : document;
 }
@@ -49,6 +53,15 @@ if (NATIVE) {
     doc.addEventListener("pointerdown", used, true);
     doc.addEventListener("keydown", used, true);
   });
+  // a dialog or a panel opens in the JARVIS window: it comes forward (it may be hidden); one asked from the
+  // floating bar gives the bar back once it is closed
+  const root = document.getElementById("modal-root");
+  let open = false, fromBar = false;
+  new MutationObserver(() => {
+    const now = root.childElementCount > 0;
+    if (now && !open) { open = true; fromBar = !!barDoc && lastDoc === barDoc; bridge.win("hub"); }
+    else if (!now && open) { open = false; if (fromBar) { fromBar = false; bridge.win("bar-show"); } }
+  }).observe(root, { childList: true });
 }
 
 const persist = debounce(() => {
@@ -374,17 +387,7 @@ function registerNative(id, el, { onFocus, onClose, fresh, ephemeral, size, meta
   const features = [`width=${width}`, `height=${height}`, ...(Number.isFinite(nb.x) ? [`left=${nb.x}`, `top=${nb.y}`] : [])].join(",");
   const win = window.open("about:blank", `jarvis-win:${id}`, features);
   if (!win) return false;
-  const doc = win.document;
-  doc.open();
-  doc.write('<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>JARVIS</title></head><body></body></html>');
-  doc.close();
-  doc.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
-  doc.documentElement.classList.add("native-doc", `os-${bridge.platform}`);
-  const css = doc.createElement("link");
-  css.rel = "stylesheet";
-  css.href = new URL("/static/css/app.css", location.href).href;
-  css.addEventListener("load", () => { const x = wins.get(id); if (x) { x.cssReady = true; colorize(id); } });
-  doc.head.append(css);
+  const doc = nativeDocument(win, [], () => { const x = wins.get(id); if (x) { x.cssReady = true; colorize(id); } });
   el.classList.add("native");
   el.classList.toggle("pinned", !!st.pinned);
   doc.body.append(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
@@ -401,6 +404,37 @@ function registerNative(id, el, { onFocus, onClose, fresh, ephemeral, size, meta
   persist();
   notify();
   return true;
+}
+
+/** A native window's document: the console's stylesheet and theme. onCss: once the stylesheet is in. */
+function nativeDocument(win, classes, onCss = null) {
+  const doc = win.document;
+  doc.open();
+  doc.write('<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>JARVIS</title></head><body></body></html>');
+  doc.close();
+  doc.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
+  doc.documentElement.classList.add("native-doc", `os-${bridge.platform}`, ...classes);
+  const css = doc.createElement("link");
+  css.rel = "stylesheet";
+  css.href = new URL("/static/css/app.css", location.href).href;
+  if (onCss) css.addEventListener("load", onCss);
+  doc.head.append(css);
+  return doc;
+}
+
+/** Desktop app, "Intégré au bureau": an element (the command bar) in the floating bar window, a window
+ * of its own that is not one of the windows (no taskbar pill, not arranged). Returns its document. */
+export function detachBar(el) {
+  if (!NATIVE) return null;
+  const win = window.open("about:blank", "jarvis-win:barre", "width=820,height=190");
+  if (!win) return null;
+  const doc = nativeDocument(win, ["bar-doc"]);
+  doc.title = "JARVIS — nouvelle demande";
+  doc.body.append(h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }), el);
+  barDoc = doc;
+  addLookupDocument(doc);
+  docInits.forEach((fn) => fn(doc));
+  return doc;
 }
 
 /** The native window's title (taskbar, Alt+Tab). */
@@ -438,6 +472,7 @@ export function colorize(id) {
 /** The theme changed: native windows follow. */
 export function retheme() {
   colorize.done = false;
+  barDoc?.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
   for (const [id, w] of wins) {
     if (!w.win) continue;
     w.colors = "";

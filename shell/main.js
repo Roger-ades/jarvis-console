@@ -39,6 +39,12 @@ const children = new Map();              // id -> native BrowserWindow
 const closing = new Set();               // ids the page closes itself (no close request back)
 let overlay = { color: "#161b22", symbolColor: "#c9d1d9" };
 let cascade = 0;
+// the floating JARVIS bar ("Intégré au bureau"): the command bar in a frameless window of its own
+let bar = null;
+let barPinned = false;                   // stays when the user clicks elsewhere
+let barHold = false;                     // a file picker of the bar is open: it does not hide meanwhile
+let barH = 190;
+const BAR_W = 820;
 // started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
 // shortcut, launcher); the windows the page opens meanwhile wait hidden
 let discreet = process.argv.includes("--demarrage");
@@ -158,8 +164,48 @@ function nativeOptions(f) {
   };
 }
 
+/** Bottom center of the screen where the mouse is: where the bar shows. */
+function barPlace(height) {
+  const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  return { x: Math.round(a.x + (a.width - BAR_W) / 2), y: Math.round(a.y + a.height - height - 12) };
+}
+
+function barOptions() {
+  return { ...barPlace(barH), width: BAR_W, height: barH, frame: false, transparent: true, backgroundColor: "#00000000",
+    hasShadow: false, resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
+    alwaysOnTop: true, show: false, title: "JARVIS — nouvelle demande", icon: ICON,
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } };
+}
+
+function adoptBar(win) {
+  bar = win;
+  win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
+  win.webContents.on("will-navigate", (e, url) => { e.preventDefault(); openOutside(url); });
+  win.on("blur", () => { if (!barPinned && !barHold && !win.isDestroyed() && win.isVisible()) win.hide(); });
+  win.on("close", (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });   // (Alt+F4: put away)
+  win.on("closed", () => { if (bar === win) bar = null; });
+}
+
+/** Ctrl+Alt+J, the notification area, "Nouvelle demande": the bar where the mouse is, ready to type. */
+function showBar() {
+  if (!bar || bar.isDestroyed() || mode !== "integre") { showHub(true); return; }
+  wake();
+  bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
+  bar.show();
+  bar.focus();
+  if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "nouvelle-demande" });
+}
+
+function toggleBar() {
+  if (bar && !bar.isDestroyed() && mode === "integre" && bar.isVisible() && bar.isFocused()) bar.hide();
+  else showBar();
+}
+
 /** window.open from the console's page: its native windows; a web address goes to the system browser. */
 function openHandler({ url, frameName, features }) {
+  if (url === "about:blank" && frameName === `${WIN_PREFIX}barre` && mode === "integre") {
+    return { action: "allow", overrideBrowserWindowOptions: barOptions() };
+  }
   if (url === "about:blank" && String(frameName).startsWith(WIN_PREFIX) && mode === "integre") {
     return { action: "allow", overrideBrowserWindowOptions: nativeOptions(parseFeatures(features)) };
   }
@@ -171,6 +217,7 @@ function openHandler({ url, frameName, features }) {
 function adopt(win, details) {
   const id = String(details.frameName || "").slice(WIN_PREFIX.length);
   if (!id) return;
+  if (id === "barre") { adoptBar(win); return; }
   children.set(id, win);
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { e.preventDefault(); openOutside(url); });
@@ -199,6 +246,8 @@ function adopt(win, details) {
 function closeChildren() {
   for (const [id, w] of children) { closing.add(id); if (!w.isDestroyed()) w.destroy(); }
   children.clear();
+  if (bar && !bar.isDestroyed()) bar.destroy();
+  bar = null;
 }
 
 function arrange({ mode: how, ids } = {}) {
@@ -263,6 +312,7 @@ function wake() {
   if (!discreet) return;
   discreet = false;
   for (const w of [...children.values(), ...sites.map((s) => s.win)]) if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
+  if (bar && !bar.isDestroyed() && !bar.isVisible()) bar.showInactive();
 }
 
 function showHub(newRequest = false) {
@@ -590,7 +640,7 @@ function updateTray(s = {}) {
     { label: `${running} en cours${queued ? ` · ${queued} en file` : ""}`, enabled: false },
     { type: "separator" },
     { label: "Ouvrir JARVIS", click: () => showHub() },
-    { label: "Nouvelle demande", accelerator: SHORTCUT, click: () => showHub(true) },
+    { label: "Nouvelle demande", accelerator: SHORTCUT, click: () => showBar() },
     { type: "separator" },
     { label: "Se déconnecter des sites", enabled: (loadState().sites || []).length > 0, click: () => logoutSites() },
     { label: "Quitter l'application (la console continue de tourner)", click: quit },
@@ -612,6 +662,22 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
   }
   if (op === "arrange") return arrange(data);
   if (op === "hub") { showHub(); return true; }
+  if (op.startsWith("bar-")) {
+    if (op === "bar-show") showBar();
+    if (!bar || bar.isDestroyed()) return false;
+    if (op === "bar-ready" && !discreet) { bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH }); bar.showInactive(); }
+    else if (op === "bar-hide") bar.hide();
+    else if (op === "bar-sent" && !barPinned) bar.hide();
+    else if (op === "bar-pin") barPinned = !!data;
+    else if (op === "bar-hold") barHold = !!data;
+    else if (op === "bar-fit" && Number.isFinite(data?.height)) {
+      // the bar grows upward (a list, a menu, a message above it): its bottom stays where it is
+      barH = Math.max(90, Math.min(720, Math.round(data.height)));
+      const b = bar.getBounds();
+      bar.setBounds({ x: b.x, y: b.y + b.height - barH, width: BAR_W, height: barH });
+    }
+    return true;
+  }
   const w = children.get(String(id));
   if (!w || w.isDestroyed()) return false;
   switch (op) {
@@ -694,7 +760,7 @@ async function main() {
     hub.setTitle(mode === "integre" ? "JARVIS" : "JARVIS · Console d'agents");
     hub.loadURL(`${origin}/#code=${code}`);
   }
-  globalShortcut.register(SHORTCUT, () => showHub(true));
+  globalShortcut.register(SHORTCUT, () => (mode === "integre" ? toggleBar() : showHub(true)));
   const link = process.argv.find((a) => a.startsWith("jarvis://"));   // started by a notification
   if (link) handleLink(link);
 }
