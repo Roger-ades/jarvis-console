@@ -118,11 +118,11 @@ export function refreshPreviews() {
 setInterval(() => { if (document.visibilityState === "visible") refreshPreviews(); }, 3000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshPreviews(); });
 
-// Échap closes the preview window that has the focus (when no dialog is open)
-document.addEventListener("keydown", (e) => {
+// Échap closes the preview window that has the focus (when no dialog is open), in its own window too
+wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
   const id = wm.focused();
-  if (e.key === "Escape" && id && closers.has(id) && !document.querySelector(".overlay")) { e.preventDefault(); closers.get(id)(); }
-});
+  if (e.key === "Escape" && id && closers.has(id) && !doc.querySelector(".overlay")) { e.preventDefault(); closers.get(id)(); }
+}));
 
 /** opts: {taskId, path} or {profile, folder, path} for a file, {url, kind:"web"|"image"} for the web,
  * {taskId, result: {id, contient, title, kind}} for a tool's result shown by Claude; color: accent. */

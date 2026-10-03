@@ -1,7 +1,11 @@
 // Window manager: drag, resize, focus, minimise, pin, maximise, arrange.
 // Positions and sizes persist on the server (ui-state) so they survive restarts.
+// Two engines: windows drawn on the console's desktop (the page), or, in the desktop app with
+// "Intégré au bureau" (shell/main.js, docs/electron.md), native windows of the OS. A native window is
+// a child of this page (window.open) into which the window's element moves: one JavaScript context,
+// one live stream; the app does the moving, sizing and stacking.
 import { api } from "./api.js";
-import { debounce, h, store } from "./util.js";
+import { debounce, h, setHostDocument, store } from "./util.js";
 
 const wins = new Map(); // id -> { el, st, onFocus }
 const listeners = new Set();
@@ -14,6 +18,38 @@ let focusedId = null;
 const desktop = () => document.getElementById("desktop");
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const notify = () => listeners.forEach((fn) => fn());
+
+const bridge = window.jarvis || null;          // the desktop app's preload (shell/preload.js)
+const NATIVE = bridge?.mode === "integre";
+const docInits = new Set();
+if (NATIVE) document.documentElement.classList.add("bureau-integre");
+/** True when windows are native windows of the OS (desktop app, "Intégré au bureau"). */
+export function isNative() { return NATIVE; }
+/** fn(doc) for this page's document and for each native window's: listeners that a module puts on
+ * `document` (click delegation, shortcuts, selection) must be on every document. */
+export function onDocument(fn) {
+  docInits.add(fn);
+  fn(document);
+  for (const w of wins.values()) if (w.doc) fn(w.doc);
+}
+/** The document a window lives in (a native window's, or this page's). */
+export function docOf(id) { return wins.get(id)?.doc || document; }
+/** Where dialogs and toasts go: the window of the user's last click or key (this page, or a native
+ * window still open), else this page. */
+let lastDoc = document;
+export function activeDocument() {
+  if (!NATIVE || lastDoc === document) return document;
+  const w = [...wins.values()].find((x) => x.doc === lastDoc);
+  return w && !w.win.closed && !w.st.min ? lastDoc : document;
+}
+setHostDocument(activeDocument);
+if (NATIVE) {
+  onDocument((doc) => {
+    const used = () => { lastDoc = doc; };
+    doc.addEventListener("pointerdown", used, true);
+    doc.addEventListener("keydown", used, true);
+  });
+}
 
 const persist = debounce(() => {
   store.set("jarvis.ui", ui);
@@ -41,7 +77,7 @@ export function flag(id, key, value) {
   persist();
   return value;
 }
-export function width(id) { return wins.get(id)?.st.w || 0; }
+export function width(id) { const st = wins.get(id)?.st; return (NATIVE ? st?.native?.w || settings.default_width : st?.w) || 0; }
 export function isMinimized(id) { return !!wins.get(id)?.st.min; }
 export function isPinned(id) { return !!wins.get(id)?.st.pinned; }
 export function focused() { return focusedId; }
@@ -85,7 +121,7 @@ function watchDock() {
     if (hh === reservedH) return;
     reservedH = hh;
     document.documentElement.style.setProperty("--dock-h", `${hh}px`);
-    for (const w of wins.values()) { fit(w.st); apply(w); }
+    for (const w of wins.values()) if (!w.win) { fit(w.st); apply(w); }
   }).observe(dock);
 }
 watchDock();
@@ -120,8 +156,10 @@ function fit(st) {
 }
 
 /** ephemeral: a preview window, not remembered across reloads nor minimized with the others.
-    size: {w, h} for a new window. */
-export function register(id, el, { handle, onFocus, fresh = false, ephemeral = false, size = null, meta = null } = {}) {
+    size: {w, h} for a new window. onClose: what closing it by its own button does (native windows;
+    else meta.onClose, else it just goes). title: the native window's title. */
+export function register(id, el, { handle, onFocus, onClose = null, fresh = false, ephemeral = false, size = null, meta = null, title = "" } = {}) {
+  if (NATIVE && registerNative(id, el, { onFocus, onClose, fresh, ephemeral, size, meta, title })) return;
   let st = ephemeral ? null : ui.windows[id];
   const isNew = !st;
   if (!st) { st = placeNew(size); if (!ephemeral) ui.windows[id] = st; }
@@ -147,8 +185,9 @@ export function register(id, el, { handle, onFocus, fresh = false, ephemeral = f
 export function unregister(id) {
   const w = wins.get(id);
   if (!w) return;
-  w.el.remove();
   wins.delete(id);
+  if (w.win) bridge.win("close", id);
+  w.el.remove();
   delete ui.windows[id];
   if (focusedId === id) focusedId = null;
   persist();
@@ -158,7 +197,14 @@ export function unregister(id) {
 export function focus(id) {
   const w = wins.get(id);
   if (!w) return;
+  if (w.win) { bridge.win("focus", id); markFocus(id); return; }
   if (focusedId !== id || w.st.z < topZ) { w.st.z = ++topZ; apply(w); persist(); }
+  markFocus(id);
+}
+
+function markFocus(id) {
+  const w = wins.get(id);
+  if (!w) return;
   focusedId = id;
   for (const [oid, o] of wins) o.el.classList.toggle("focused", oid === id);
   w.onFocus?.();
@@ -169,7 +215,8 @@ export function minimize(id) {
   const w = wins.get(id);
   if (!w) return;
   w.st.min = true;
-  apply(w);
+  if (w.win) bridge.win("minimize", id);
+  else apply(w);
   if (focusedId === id) focusedId = null;
   persist();
   notify();
@@ -179,6 +226,7 @@ export function restore(id) {
   const w = wins.get(id);
   if (!w) return;
   w.st.min = false;
+  if (w.win) { bridge.win("restore", id); markFocus(id); persist(); notify(); return; }
   fit(w.st);
   apply(w);
   focus(id);
@@ -190,7 +238,7 @@ export function togglePin(id) {
   const w = wins.get(id);
   if (!w) return false;
   w.st.pinned = !w.st.pinned;
-  apply(w);
+  if (w.win) { bridge.win("pin", id, w.st.pinned); w.el.classList.toggle("pinned", w.st.pinned); } else apply(w);
   persist();
   return w.st.pinned;
 }
@@ -199,6 +247,7 @@ export function togglePin(id) {
 export function setSize(id, width, height) {
   const w = wins.get(id);
   if (!w) return;
+  if (w.win) { bridge.win("size", id, { width, height }); return; }
   const b = usable();
   w.st.w = Math.min(width, b.w - 24);
   w.st.h = Math.min(height, b.h - 24);
@@ -212,6 +261,7 @@ export function setSize(id, width, height) {
 export function toggleMax(id) {
   const w = wins.get(id);
   if (!w) return;
+  if (w.win) { bridge.win("max", id); return; }
   w.st.max = !w.st.max;
   apply(w);
   persist();
@@ -286,6 +336,10 @@ export function arrange(mode) {
   const b = usable();
   if (mode === "minimize") { for (const [id, w] of wins) if (!w.st.min) minimize(id); return; }
   if (mode === "restore") { for (const id of minimizedIds()) restore(id); return; }
+  if (NATIVE) {
+    bridge.win("arrange", null, { mode, ids: [...wins.entries()].filter(([, w]) => w.win && !w.st.min && !w.st.pinned).map(([id]) => id) });
+    return;
+  }
   const list = [...wins.values()].filter((w) => !w.st.min && !w.st.pinned).sort((a, c) => a.st.z - c.st.z);
   if (!list.length) return;
   if (mode === "mosaique") {
@@ -308,4 +362,108 @@ export function arrange(mode) {
   persist();
 }
 
-window.addEventListener("resize", debounce(() => { for (const w of wins.values()) { fit(w.st); apply(w); } }, 150));
+window.addEventListener("resize", debounce(() => { for (const w of wins.values()) if (!w.win) { fit(w.st); apply(w); } }, 150));
+
+// ------------------------------------------------------------ native windows (desktop app)
+/** The window's element in a native window of its own; false when the app refused to open it. */
+function registerNative(id, el, { onFocus, onClose, fresh, ephemeral, size, meta, title }) {
+  let st = ephemeral ? null : ui.windows[id];
+  if (!st) { st = { min: false, pinned: false }; if (!ephemeral) ui.windows[id] = st; }
+  const nb = st.native || {};
+  const width = Math.round(nb.w || size?.w || settings.default_width), height = Math.round(nb.h || size?.h || settings.default_height);
+  const features = [`width=${width}`, `height=${height}`, ...(Number.isFinite(nb.x) ? [`left=${nb.x}`, `top=${nb.y}`] : [])].join(",");
+  const win = window.open("about:blank", `jarvis-win:${id}`, features);
+  if (!win) return false;
+  const doc = win.document;
+  doc.open();
+  doc.write('<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>JARVIS</title></head><body></body></html>');
+  doc.close();
+  doc.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
+  doc.documentElement.classList.add("native-doc", `os-${bridge.platform}`);
+  const css = doc.createElement("link");
+  css.rel = "stylesheet";
+  css.href = new URL("/static/css/app.css", location.href).href;
+  css.addEventListener("load", () => { const x = wins.get(id); if (x) { x.cssReady = true; colorize(id); } });
+  doc.head.append(css);
+  el.classList.add("native");
+  el.classList.toggle("pinned", !!st.pinned);
+  doc.body.append(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
+  const w = { el, st, onFocus, onClose, ephemeral, meta, win, doc };
+  wins.set(id, w);
+  el.dataset.wid = id;
+  win.addEventListener("focus", () => markFocus(id));
+  el.addEventListener("pointerdown", () => markFocus(id), true);  // (each click: what the user looks at, regard.js)
+  docInits.forEach((fn) => fn(doc));
+  setTitle(id, title || meta?.title || el.getAttribute("aria-label") || "JARVIS");
+  if (st.pinned) bridge.win("pin", id, true);
+  if (st.min && !fresh) bridge.win("minimize", id);
+  else { st.min = false; markFocus(id); }
+  persist();
+  notify();
+  return true;
+}
+
+/** The native window's title (taskbar, Alt+Tab). */
+export function setTitle(id, text) {
+  const w = wins.get(id);
+  if (!w?.win || w.doc.title === (text || "JARVIS")) return;
+  w.doc.title = text || "JARVIS";
+  bridge.win("title", id, w.doc.title);
+}
+
+const probe = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+function hexColor(css) {
+  probe.clearRect(0, 0, 1, 1);
+  probe.fillStyle = "#000";
+  probe.fillStyle = css;
+  probe.fillRect(0, 0, 1, 1);
+  const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+  return `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** The native buttons (minimize, maximize, close) take the colors of the window's header. */
+export function colorize(id) {
+  const w = wins.get(id);
+  const head = w?.win && w.cssReady && w.el.querySelector(".win-head");
+  if (!head) return;
+  const cs = w.win.getComputedStyle(head);
+  const colors = { color: hexColor(cs.backgroundColor), symbolColor: hexColor(cs.color) };
+  const key = `${colors.color}${colors.symbolColor}`;
+  if (w.colors === key) return;   // (called on each update of a task)
+  w.colors = key;
+  bridge.win("overlay", id, colors);
+  if (!colorize.done) { colorize.done = true; bridge.win("overlay", null, colors); } // (the next windows open with them)
+}
+
+/** The theme changed: native windows follow. */
+export function retheme() {
+  colorize.done = false;
+  for (const [id, w] of wins) {
+    if (!w.win) continue;
+    w.colors = "";
+    w.doc.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
+    colorize(id);
+  }
+}
+
+if (NATIVE) {
+  bridge.onWin(({ id, type, bounds: b }) => {
+    const w = wins.get(id);
+    if (!w) return;
+    if (type === "focus") markFocus(id);
+    else if (type === "minimize") { w.st.min = true; if (focusedId === id) focusedId = null; persist(); notify(); }
+    else if (type === "restore") { w.st.min = false; persist(); notify(); }
+    else if (type === "bounds" && b) { w.st.native = { x: b.x, y: b.y, w: b.width, h: b.height }; if (!w.ephemeral) persist(); }
+    else if (type === "close-request") {
+      lastDoc = w.doc;   // (a question before closing shows in this window)
+      (w.onClose || w.meta?.onClose || (() => unregister(id)))();
+    }
+    else if (type === "closed") {
+      // gone without the page asking (the app closed it): its owner forgets it
+      wins.delete(id);
+      if (focusedId === id) focusedId = null;
+      (w.onClose || w.meta?.onClose)?.();
+      notify();
+    }
+  });
+}

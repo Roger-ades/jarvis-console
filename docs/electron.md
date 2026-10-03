@@ -1,7 +1,8 @@
 # Passage à Electron : JARVIS intégré au bureau
 
 Note de conception. C'est la prochaine étape de la [feuille de route](feuille-de-route.md), juste après
-« Ce que je regarde » et les différences de fichiers ; rien n'est commencé. Trois objectifs :
+« Ce que je regarde » et les différences de fichiers. **Un prototype est en place** (`shell/`, voir
+« Essayer le prototype ») ; il reste à le valider sous Windows. Trois objectifs :
 
 1. **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le « bureau » de la console
    (son fond) : une discussion, un aperçu ou un affichage se range à côté d'Excel ou d'Outlook,
@@ -12,7 +13,31 @@ Note de conception. C'est la prochaine étape de la [feuille de route](feuille-d
    la zone de notification (tâches en cours, validations en attente), des notifications natives.
 
 Le mode navigateur actuel (Chrome ou Edge en mode application) reste disponible : même code, même
-serveur.
+serveur. Dans l'application, **Configuration → Interface → Affichage** choisit entre *Intégré au bureau*
+(chaque fenêtre est une fenêtre de l'OS) et *Une fenêtre JARVIS* (toute la console dans une fenêtre,
+comme dans le navigateur). Changer d'affichage recharge l'interface ; les tâches continuent.
+
+## Essayer le prototype
+
+Sous Windows, il faut Node.js 22.12 ou plus récent (https://nodejs.org) en plus de ce que demande déjà
+la console.
+
+1. Double-clic sur **`start-app.bat`**. La première fois, il installe Electron dans `shell\node_modules`
+   (environ 100 Mo).
+2. L'application démarre le serveur de la console s'il ne tourne pas (`start.bat --no-browser`), ou
+   reprend celui qui tourne, et ouvre la fenêtre JARVIS.
+3. En mode *Intégré au bureau* (par défaut), chaque discussion, aperçu, affichage ou fenêtre de
+   différences s'ouvre en fenêtre de Windows. **Ctrl+Alt+J** ramène la fenêtre JARVIS sur une
+   nouvelle demande. Fermer la fenêtre JARVIS la range dans la zone de notification ; « Quitter
+   l'application » ferme l'application, pas la console.
+
+Sur Mac ou Linux : `cd shell && npm install && npm start`. Pour le développement, `JARVIS_PYTHON`
+désigne un Python qui lance la console directement, `CONSOLE_PORT` et `CONSOLE_DATA_DIR` sont lus comme
+par `python -m console`.
+
+Le prototype ne fait pas encore : la barre JARVIS flottante (la barre de commande reste dans la fenêtre
+JARVIS), les fenêtres de sites connectés, les notifications avec Approuver et Refuser, l'installateur
+et la signature. La boîte de dialogue Ctrl+K et la configuration s'ouvrent dans la fenêtre JARVIS.
 
 ## Pourquoi maintenant
 
@@ -212,23 +237,40 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
   de signature de code) ; sur Mac, la notarisation est nécessaire.
 - **Tests** : Playwright sait piloter Electron (`_electron.launch`) ; les tests Python restent.
 
-## Points à valider dans le prototype
+## Ce que le prototype valide déjà
 
-- Barre de titre avec boutons natifs (`titleBarOverlay`) : ancrage de Windows 11, Alt+Tab, passage
-  d'un écran à l'autre, mémorisation des positions.
-- Fenêtres enfants : même processus de rendu, un seul flux, mémoire avec une dizaine de fenêtres
-  ouvertes, comportement quand la page moteur est cachée.
-- Regard d'une fenêtre à l'autre (sélection dans un aperçu, envoi depuis une discussion).
+Vérifié avec Electron 44 sous Linux (affichage virtuel), piloté par Playwright sur le serveur de démo :
+
+- une discussion, un aperçu, un affichage ou une fenêtre de différences s'ouvrent en fenêtres de l'OS,
+  avec leur titre (statut, discussion, compte) ;
+- **un seul processus de rendu** : avec 10 fenêtres de discussion ouvertes, toujours un processus de
+  rendu, pour environ +260 Mo au total (rendu logiciel) ;
+- menus (⋯) et boîtes de dialogue (renommer, annuler une modification) s'ouvrent dans la fenêtre d'où
+  on les demande ;
+- regard d'une fenêtre à l'autre : texte sélectionné dans un aperçu natif, puce dans la fenêtre de la
+  discussion, message envoyé avec le fichier et l'extrait ;
+- le bouton de fermeture natif passe par la console (une discussion en cours demande d'abord) ;
+- les deux affichages, l'option de la configuration, la proposition de recharger, la relance de
+  l'application ;
+- le mode navigateur ne change pas (scénarios rejoués dans Chromium).
+
+## Points à valider sous Windows
+
+- Barre de titre avec boutons natifs (`titleBarOverlay`) : couleurs, ancrage de Windows 11, Alt+Tab,
+  passage d'un écran à l'autre, mémorisation des positions, coins arrondis.
+- Démarrage du serveur par `start.bat --no-browser` quand il ne tourne pas ; icône de la zone de
+  notification et pastille de la barre des tâches quand une validation attend.
 - Glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native, et entre fenêtres.
-- Menus et boîtes de dialogue dans les documents enfants.
-- Notification Windows avec Approuver et Refuser (XML de notification, activation par protocole).
-- Matériau Mica ou Acrylic pour la barre JARVIS ; couleur de bordure native.
+- Raccourci Ctrl+Alt+J (pas de conflit avec d'autres outils).
+- Pour la suite : notification avec Approuver et Refuser (XML de notification, activation par
+  protocole), matériau Mica ou Acrylic, couleur de bordure native.
 
 ## Étapes proposées
 
-1. **Prototype sous Windows** (court) : coquille qui lance le serveur, page moteur cachée, une fenêtre
-   de discussion native, la liste de vérification ci-dessus.
-2. **Moteur natif de `wm.js`** et adaptations aux documents enfants ; mode « Bureau JARVIS » conservé.
+1. **Prototype** : coquille qui lance le serveur, fenêtres natives, moteur natif de `wm.js` et
+   adaptations aux documents enfants, choix de l'affichage. *Fait ; à valider sous Windows.* Dans le
+   prototype, la page moteur est la fenêtre JARVIS elle-même, cachée quand on la ferme.
+2. **Finitions du moteur natif** selon les retours sous Windows ; page moteur vraiment cachée.
 3. **Barre JARVIS**, raccourci global, icône de notification, pastille de la barre des tâches.
 4. **Fenêtre JARVIS** : barre du haut, tiroirs, configuration, Ctrl+K.
 5. **Sites connectés** : fenêtres de sites, sessions séparées, domaines approuvés, navigation,

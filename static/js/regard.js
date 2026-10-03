@@ -85,10 +85,11 @@ function sourceOf(el) {
 }
 
 let pending = 0;
-document.addEventListener("selectionchange", () => {
+// every document: the page's, and each native window's in the desktop app
+wm.onDocument((doc) => doc.addEventListener("selectionchange", () => {
   clearTimeout(pending);
   pending = setTimeout(() => {
-    const sel = document.getSelection();
+    const sel = doc.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return;
     const node = sel.anchorNode;
     const el = node?.nodeType === 1 ? node : node?.parentElement;
@@ -100,7 +101,7 @@ document.addEventListener("selectionchange", () => {
     current = { ...src.desc, selection: text.length > MAX ? `${text.slice(0, MAX)} […]` : text, wid: src.wid };
     changed();
   }, 180);
-});
+}));
 
 /** A chip that follows what would be sent. visible(): whether this bar shows it now; here: the
  * discussion of this bar ("" for the command bar). Returns {render, dispose}. */

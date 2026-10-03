@@ -273,7 +273,9 @@ function application(b, e, m, i) {
   return box;
 }
 
-window.addEventListener("message", async (ev) => {
+// an application's frame talks to the window it is in: this page's, or a native window's (desktop app)
+wm.onDocument((doc) => doc.defaultView.addEventListener("message", onAppMessage));
+async function onAppMessage(ev) {
   const d = ev.data;
   if (!d || d.jarvisApp !== 1 || ev.origin !== "null") return;
   let app = null;
@@ -283,7 +285,7 @@ window.addEventListener("message", async (ev) => {
     try { if (ev.source && ev.source === a.frame.contentWindow?.[0]) app = a; } catch { /* another origin: not ours */ }
   }
   if (!app) return;
-  if (document.activeElement !== app.frame) return; // the user is not in this application: ignored
+  if (app.frame.ownerDocument.activeElement !== app.frame) return; // the user is not in this application: ignored
   const now = Date.now();
   if (now - app.last < APP_GAP) return;
   app.last = now;
@@ -306,7 +308,7 @@ window.addEventListener("message", async (ev) => {
       h("p", { class: "muted" }, "Une nouvelle discussion du projet, avec ses autorisations et ses validations habituelles.")), "Lancer");
     if (ok) settings.appAction(e.taskId, nom, args);
   }
-});
+}
 
 // ---------------------------------------------------------------- table
 const isNum = (v) => typeof v === "number";
@@ -577,6 +579,12 @@ let modal = null; // {id0, close}
 export function openDisplayModal(taskId, key, color) {
   const e = entry(taskId, key);
   if (!e) return;
+  if (wm.isNative()) {
+    // windows on the desktop (app): "in front" is a window kept above the others
+    const id = openDisplayWindow(taskId, key, color);
+    if (id && !wm.isPinned(id)) wm.togglePin(id);
+    return;
+  }
   const id0 = `${taskId}|${key}`;
   if (modal?.id0 === id0) return;
   modal?.close();

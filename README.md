@@ -352,6 +352,15 @@ dossier Applications, à glisser dans le Dock. Le lanceur démarre la console si
 l'ouvre ; si l'app est installée (ci-dessus), il ouvre l'app installée, dont la fenêtre
 porte aussi l'icône JARVIS au lieu de celle du navigateur.
 
+### Application de bureau (prototype)
+
+**`start-app.bat`** (il faut Node.js 22.12 ou plus) lance JARVIS comme une application de bureau
+Electron. En affichage **Intégré au bureau**, chaque discussion, aperçu ou affichage devient une vraie
+fenêtre de Windows (Alt+Tab, ancrage, plusieurs écrans) ; **Ctrl+Alt+J** ramène la fenêtre JARVIS sur
+une nouvelle demande ; l'icône de la zone de notification montre les tâches en cours et à valider.
+Configuration → Interface → **Affichage** repasse à une seule fenêtre. Détails, état et limites :
+[docs/electron.md](docs/electron.md).
+
 ### Routines
 
 Le panneau **Routines** a deux parties :
@@ -450,6 +459,7 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |
 | `console/store.py` | persistance SQLite |
 | `static/` | interface (HTML, CSS, modules JavaScript sans dépendance) |
+| `shell/` | application de bureau Electron (prototype) : serveur, fenêtres natives, zone de notification |
 
 ## Installer sur un autre poste
 

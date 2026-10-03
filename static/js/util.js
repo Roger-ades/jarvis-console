@@ -153,8 +153,12 @@ export async function copyText(text) {
   catch { toast("Copie impossible dans ce navigateur.", "err"); }
 }
 
+// Where dialogs and toasts go: this page, or the native window in use (wm.js, desktop app).
+let hostDocument = () => document;
+export function setHostDocument(fn) { hostDocument = fn; }
+
 export function toast(message, kind = "") {
-  const box = $("#toasts");
+  const box = hostDocument().getElementById("toasts") || $("#toasts");
   const el = h("div", { class: `toast ${kind}`, role: "status" }, message);
   box.append(el);
   setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
@@ -190,9 +194,10 @@ export function paint(el, c) {
 /** tint: the colors of the account (and of the project) the dialog is about. */
 export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls: "primary" }], input = null, onOpen = null, tint = null }) {
   return new Promise((resolve) => {
-    const root = $("#modal-root");
+    const doc = hostDocument();
+    const root = doc.getElementById("modal-root") || $("#modal-root");
     const field = input ? h("input", { type: input.type || "text", value: input.value || "", placeholder: input.placeholder || "" }) : null;
-    const done = (v) => { overlay.remove(); document.removeEventListener("keydown", onKey, true); resolve(v); };
+    const done = (v) => { overlay.remove(); root.ownerDocument.removeEventListener("keydown", onKey, true); resolve(v); };
     const actions = buttons.map((b) => h("button", { type: "button", class: `btn ${b.cls || ""}`, on: { click: () => done(field && b.value === true ? field.value : b.value) } }, b.label));
     const content = typeof body === "string" ? h("p", {}, body) : body;
     const box = h("div", { class: "dialog", role: "dialog", "aria-modal": "true" },
@@ -201,9 +206,9 @@ export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls
     const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) done(null); } } }, box);
     function onKey(e) {
       if (e.key === "Escape") { e.stopPropagation(); done(null); }
-      if (e.key === "Enter" && field && document.activeElement === field) { e.preventDefault(); done(field.value); }
+      if (e.key === "Enter" && field && root.ownerDocument.activeElement === field) { e.preventDefault(); done(field.value); }
     }
-    document.addEventListener("keydown", onKey, true);
+    root.ownerDocument.addEventListener("keydown", onKey, true);
     root.append(overlay);
     (field || actions[actions.length - 1])?.focus();
     onOpen?.(box);

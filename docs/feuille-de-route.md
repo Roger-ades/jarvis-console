@@ -105,10 +105,10 @@ navigateur reste disponible.
 
 1. **« Ce que je regarde », différences et annulation des fichiers** : petits chantiers, utiles tous
    les jours. *Fait.*
-2. **Electron : JARVIS intégré au bureau**, en commençant par un prototype sous Windows
-   ([electron.md](electron.md)). Avant les autres points d'interface : il change le modèle de
-   fenêtres sur lequel ils s'appuient, et apporte l'icône de notification, les notifications et les
-   sites connectés.
+2. **Electron : JARVIS intégré au bureau** ([electron.md](electron.md)). Avant les autres points
+   d'interface : il change le modèle de fenêtres sur lequel ils s'appuient, et apporte l'icône de
+   notification, les notifications et les sites connectés. *Prototype en place (`start-app.bat`), à
+   valider sous Windows.*
 3. Boîte de réception, actions du compte en boutons.
 4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
