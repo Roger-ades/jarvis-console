@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- The navigation bar of a site window (shell/main.js, openSite): the site itself is a separate view
+     below, in its own session. Nothing from the site reaches this page but its address and title,
+     always written as text. -->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>JARVIS</title>
+<style>
+  :root {
+    --bg: #1c2430; --field: #141a23; --text: #e7edf4; --text-2: #aab6c3; --text-3: #74828f;
+    --border: rgba(160, 186, 214, .16); --accent: #72c9ff; --hover: rgba(160, 186, 214, .12); --warn: #f0b45c;
+    color-scheme: dark;
+  }
+  :root.clair {
+    --bg: #f6f8fa; --field: #ffffff; --text: #0f1b27; --text-2: #3f5163; --text-3: #6c7c8c;
+    --border: rgba(20, 40, 60, .14); --accent: #0a78b8; --hover: rgba(20, 40, 60, .08); --warn: #b36b00;
+    color-scheme: light;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+    font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; }
+  .bar { position: relative; height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 4px;
+    padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px) 0 8px;
+    border-bottom: 1px solid var(--border); -webkit-app-region: drag; user-select: none; }
+  :root.mac .bar { padding-left: 80px; }
+  button, input { -webkit-app-region: no-drag; font: inherit; color: inherit; }
+  button { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 7px; background: transparent; color: var(--text-2); cursor: pointer; padding: 0; }
+  button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  button:disabled { opacity: .35; cursor: default; }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .addr { flex: 1; min-width: 80px; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; margin: 0 4px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--field); -webkit-app-region: no-drag; }
+  .addr svg { width: 13px; height: 13px; color: var(--text-3); flex: none; }
+  .addr.insecure svg { color: var(--warn); }
+  .addr input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 12.5px; color: var(--text-2); }
+  .addr input:focus { color: var(--text); }
+  .addr:focus-within { border-color: var(--accent); }
+  .who { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px;
+    color: var(--text-3); padding: 0 4px; }
+  .load { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity .2s; }
+  .load.on { opacity: 1; }
+  .load::after { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--accent); animation: slide 1.1s infinite ease-in-out; }
+  @keyframes slide { from { left: -30%; } to { left: 100%; } }
+</style>
+</head>
+<body>
+<div class="bar">
+  <button id="back" title="Précédent (Alt+←)" aria-label="Précédent" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+  <button id="forward" title="Suivant (Alt+→)" aria-label="Suivant" disabled><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
+  <button id="reload" title="Recharger (F5)" aria-label="Recharger"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/></svg></button>
+  <label class="addr" id="addr" title="">
+    <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    <input id="url" type="text" spellcheck="false" aria-label="Adresse">
+  </label>
+  <span class="who" id="who" title="Session de ce site : séparée de la console et des autres sites"></span>
+  <button id="external" title="Ouvrir dans le navigateur" aria-label="Ouvrir dans le navigateur"><svg viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>
+  <div class="load" id="load"></div>
+</div>
+<script>
+  "use strict";
+  const q = new URLSearchParams(location.search);
+  if (q.get("theme") === "clair") document.documentElement.classList.add("clair");
+  if (q.get("os") === "darwin") document.documentElement.classList.add("mac");
+  const $ = (id) => document.getElementById(id);
+  const RELOAD = $("reload").innerHTML;
+  const STOP = '<svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>';
+  let editing = false, loading = false;
+  $("back").onclick = () => site.nav("back");
+  $("forward").onclick = () => site.nav("forward");
+  $("reload").onclick = () => site.nav(loading ? "stop" : "reload");
+  $("external").onclick = () => site.nav("external");
+  const url = $("url");
+  url.addEventListener("focus", () => { editing = true; url.select(); });
+  url.addEventListener("blur", () => { editing = false; });
+  url.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { site.nav("go", url.value.trim()); url.blur(); }
+    if (e.key === "Escape") { url.blur(); }
+  });
+  site.onState((s) => {
+    if (!editing) url.value = s.url || "";
+    $("addr").title = s.url || "";
+    $("addr").classList.toggle("insecure", !/^https:/i.test(s.url || ""));
+    $("back").disabled = !s.canBack;
+    $("forward").disabled = !s.canForward;
+    loading = !!s.loading;
+    $("reload").innerHTML = loading ? STOP : RELOAD;
+    $("reload").title = loading ? "Arrêter" : "Recharger (F5)";
+    $("load").classList.toggle("on", loading);
+    $("who").textContent = s.session || "";
+  });
+</script>
+</body>
+</html>

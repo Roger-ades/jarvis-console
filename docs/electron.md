@@ -1,8 +1,7 @@
-# Passage à Electron : JARVIS intégré au bureau
+# Application de bureau : JARVIS intégré au bureau
 
-Note de conception. C'est la prochaine étape de la [feuille de route](feuille-de-route.md), juste après
-« Ce que je regarde » et les différences de fichiers. **Un prototype est en place** (`shell/`, voir
-« Essayer le prototype ») ; il reste à le valider sous Windows. Trois objectifs :
+L'application de bureau (Electron, dossier `shell/`) est en place et validée sous Windows (installation,
+fenêtre JARVIS). Elle a trois objectifs :
 
 1. **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le « bureau » de la console
    (son fond) : une discussion, un aperçu ou un affichage se range à côté d'Excel ou d'Outlook,
@@ -10,37 +9,65 @@ Note de conception. C'est la prochaine étape de la [feuille de route](feuille-d
 2. **Les sites connectés** (Odoo, SharePoint, Outlook web) s'ouvrent dans des fenêtres de JARVIS, avec
    leur session, ce que Chrome ou Edge seuls ne permettent pas.
 3. **JARVIS présent dans l'OS** : une barre flottante appelée par un raccourci global, une icône dans
-   la zone de notification (tâches en cours, validations en attente), des notifications natives.
+   la zone de notification (tâches en cours, validations en attente), des notifications natives avec
+   Approuver et Refuser.
 
-Le mode navigateur actuel (Chrome ou Edge en mode application) reste disponible : même code, même
-serveur. Dans l'application, **Configuration → Interface → Affichage** choisit entre *Intégré au bureau*
+Le mode navigateur (Chrome ou Edge en mode application) reste disponible : même code, même serveur.
+Dans l'application, **Configuration → Interface → Affichage** choisit entre *Intégré au bureau*
 (chaque fenêtre est une fenêtre de l'OS) et *Une fenêtre JARVIS* (toute la console dans une fenêtre,
 comme dans le navigateur). Changer d'affichage recharge l'interface ; les tâches continuent.
 
-## Essayer le prototype
+## Installer l'application
 
 Sous Windows, il faut Node.js 22.12 ou plus récent (https://nodejs.org) en plus de ce que demande déjà
-la console.
+la console. Node ne sert qu'à construire l'application.
 
-1. Double-clic sur **`start-app.bat`**. La première fois, il installe Electron dans `shell\node_modules`
-   puis télécharge son exécutable depuis GitHub (environ 100 Mo) : depuis la version 44, Electron ne le
-   télécharge plus pendant `npm install` seul, d'où le script `postinstall` de `shell/package.json`.
+1. Double-clic sur **`build-app.bat`**. Il installe Electron dans `shell\node_modules` (la première
+   fois), construit l'installateur avec electron-builder (`shell\dist\JARVIS-installation-<version>.exe`)
+   et le lance. L'installation se fait pour l'utilisateur, sans droits d'administrateur, dans
+   `%LOCALAPPDATA%\Programs\jarvis` ; elle crée **JARVIS** dans le menu Démarrer et sur le Bureau.
 2. L'application démarre le serveur de la console s'il ne tourne pas (`start.bat --no-browser`), ou
-   reprend celui qui tourne, et ouvre la fenêtre JARVIS.
-3. En mode *Intégré au bureau* (par défaut), chaque discussion, aperçu, affichage ou fenêtre de
-   différences s'ouvre en fenêtre de Windows. **Ctrl+Alt+J** ramène la fenêtre JARVIS sur une
-   nouvelle demande. Fermer la fenêtre JARVIS la range dans la zone de notification ; « Quitter
-   l'application » ferme l'application, pas la console.
+   reprend celui qui tourne. Si l'application de `start-app.bat` tourne déjà, l'application installée
+   prend le relais.
+3. Configuration → Général : **Ouvrir avec** « Application de bureau JARVIS » fait ouvrir
+   l'application par `start.bat` et par le lanceur ; **Démarrer avec la session** la démarre
+   discrètement à l'ouverture de session (rien ne s'affiche avant qu'on l'appelle).
 
-Sur Mac ou Linux : `cd shell && npm install && npm start`. Pour le développement, `JARVIS_PYTHON`
-désigne un Python qui lance la console directement, `CONSOLE_PORT` et `CONSOLE_DATA_DIR` sont lus comme
-par `python -m console`.
+Sur Mac : **`build-app.command`** construit l'image disque et l'ouvre ; glisser JARVIS dans
+Applications.
 
-Le prototype ne fait pas encore : la barre JARVIS flottante (la barre de commande reste dans la fenêtre
-JARVIS), les fenêtres de sites connectés, les notifications avec Approuver et Refuser, l'installateur
-et la signature. La boîte de dialogue Ctrl+K et la configuration s'ouvrent dans la fenêtre JARVIS.
+**Sans installer** : `start-app.bat` (ou `cd shell && npm install && npm start`) lance l'application
+depuis le dossier ; il démarre l'application installée si elle existe. Pour le développement,
+`JARVIS_PYTHON` désigne un Python qui lance la console directement, `CONSOLE_PORT` et
+`CONSOLE_DATA_DIR` sont lus comme par `python -m console`.
 
-## Pourquoi maintenant
+### Au quotidien
+
+- **Ctrl+Alt+J** appelle la **barre JARVIS** en bas de l'écran où se trouve la souris : la barre de
+  commande (puces Regard, pièces jointes, contexte, compte, dossier, réglages) et les pastilles de
+  tâches. Échap, une demande envoyée ou un clic ailleurs la rangent ; l'épingle la garde affichée.
+- Chaque discussion, aperçu, affichage ou fenêtre de différences s'ouvre en fenêtre de Windows.
+- La **fenêtre JARVIS** (barre du haut, accueil, tiroirs, configuration, Ctrl+K) s'ouvre par le bouton
+  de la barre, l'icône de la zone de notification ou le lanceur. La fermer la range ; fermée, elle le
+  reste au démarrage suivant (seule la barre s'affiche).
+- Une validation en attente produit une notification avec **Approuver** et **Refuser** ; un clic
+  ailleurs sur la notification ouvre la discussion. La pastille de la barre des tâches compte les
+  validations en attente.
+- Un lien https d'une réponse, ou une page qu'affiche Claude, s'ouvre dans une **fenêtre de site** avec
+  sa propre session : on y reste connecté. Configuration → Interface → Application de bureau →
+  **Se déconnecter des sites** (ou l'icône de la zone de notification) vide ces sessions.
+- « Quitter l'application » (zone de notification) ferme l'application, pas la console : les tâches et
+  les routines continuent.
+
+### Mises à jour
+
+L'application installée exécute le `shell/main.js` du dossier de JARVIS (voir « Installation et mises
+à jour ») : la mise à jour en un clic, ou `git pull`, met aussi l'application à jour, sans la
+réinstaller. Il ne faut relancer `build-app.bat` que lorsque l'application le demande (une notification
+au démarrage), c'est-à-dire quand le dossier attend une version d'Electron plus récente que celle
+installée ; en attendant, l'application continue avec la copie qu'elle contient.
+
+## Pourquoi Electron, et avant le reste
 
 - **Le modèle de fenêtres conditionne la suite.** Toutes les fenêtres passent par `wm.register`
   ([static/js/wm.js](../static/js/wm.js)) dans un seul document. La boîte de réception,
@@ -55,7 +82,7 @@ et la signature. La boîte de dialogue Ctrl+K et la configuration s'ouvrent dans
 
 Les déclencheurs (dossier surveillé, enchaînements) sont côté serveur et peuvent avancer en parallèle.
 
-## Où on en est (navigateur seul)
+## Ce que le navigateur seul ne permet pas
 
 - La console est une page : une barre du haut, un « bureau » où `wm.js` dessine les fenêtres
   (tâches, aperçus, affichages, différences), la barre de commande et les pastilles de tâches en bas,
@@ -91,10 +118,11 @@ Le calque ferait une démonstration rapide mais un mauvais outil de tous les jou
   le jeton de `data/token` pour obtenir un code d'accès à usage unique (`/api/auth/code`). Il possède
   l'icône de notification, les raccourcis globaux, les fenêtres natives, les vues de sites, les
   permissions et les téléchargements.
-- **Fenêtre moteur, cachée.** Elle charge `http://127.0.0.1:<port>/#code=…` et fait tourner tout le
-  JavaScript actuel : état, flux temps réel, regard, affichages. `show: false`, et
-  `backgroundThrottling: false` pour que Chromium ne ralentisse pas une page qu'il croit en
-  arrière-plan.
+- **Page moteur : la fenêtre JARVIS.** Elle charge `http://127.0.0.1:<port>/#code=…` et fait tourner
+  tout le JavaScript : état, flux temps réel, regard, affichages. Elle reste vivante cachée
+  (`backgroundThrottling: false`, pour que Chromium ne ralentisse pas une page qu'il croit en
+  arrière-plan) : fermer la fenêtre JARVIS la range, et au démarrage suivant elle reste cachée si on
+  l'avait fermée ; barre, fenêtres, notifications et icône de notification continuent sans elle.
 - **Fenêtres JARVIS : des fenêtres enfants de la page moteur.** Une fenêtre s'ouvre par
   `window.open` depuis la page moteur ; le processus principal lui donne son apparence
   (`setWindowOpenHandler`, `overrideBrowserWindowOptions`) ; la page moteur déplace dans son document
@@ -111,8 +139,9 @@ Ce choix évite trois écueils d'une page indépendante par fenêtre :
   clics) continuent de marcher.
 
 Un **preload minimal**, seulement pour la page moteur, expose `window.jarvis` : fenêtres (déplacer,
-épingler, réduire, ranger), compteurs de l'icône de notification, raccourcis, notifications, ouverture
-d'un site. Le processus principal revalide chaque appel : l'expéditeur doit être la page de la console.
+épingler, réduire, ranger, barre JARVIS), compteurs de l'icône de notification, raccourcis,
+notifications, ouverture d'un site, lanceur. Le processus principal revalide chaque appel :
+l'expéditeur doit être la page de la console.
 
 ### `wm.js` : deux moteurs
 
@@ -142,35 +171,46 @@ Ce qu'il faut adapter pour les documents enfants :
 
 ### Ce qui remplace le fond
 
-- **Barre JARVIS** : la barre de commande actuelle (puces Regard, pièces jointes et contexte, compte,
-  dossier, réglages) avec les pastilles de tâches, dans une petite fenêtre sans cadre. Un raccourci
-  global l'appelle et Échap la range, comme PowerToys Run. Raccourci réglable ; il faut en choisir un
-  par défaut qui n'entre pas en conflit avec Windows ni PowerToys.
-- **Icône de la zone de notification** : tâches en cours, validations en attente, limites des
-  comptes ; menu Nouvelle demande, Ouvrir JARVIS, Arrêt d'urgence, Quitter. Une pastille sur le bouton
-  de la barre des tâches de Windows (`setOverlayIcon`) signale une validation en attente.
-- **Fenêtre JARVIS** : la barre du haut, les tiroirs (Historique, Sessions, Routines, Projet, Notes),
-  la configuration et Ctrl+K. C'est la page actuelle sans son bureau ; elle s'ouvre quand on en a
-  besoin. Ctrl+K a aussi son raccourci global.
-- **Toasts** : dans la barre JARVIS, ou en notification native quand aucune fenêtre JARVIS n'a le
-  focus.
+- **Barre JARVIS** ([static/js/bar.js](../static/js/bar.js)) : la barre de commande (puces Regard,
+  pièces jointes et contexte, compte, dossier, réglages) avec les pastilles de tâches, déplacée dans
+  une fenêtre sans cadre, transparente, toujours au premier plan (`jarvis-win:barre`). Ctrl+Alt+J
+  l'appelle en bas de l'écran où se trouve la souris, comme PowerToys Run ; Échap, une demande
+  envoyée ou un clic ailleurs la rangent, sauf si elle est épinglée (pas pendant le choix d'un
+  fichier). Elle grandit vers le haut, bord du bas fixe, quand une liste (skills, profils), les
+  réglages ou un message s'ouvrent au-dessus. Une boîte de dialogue ou Ctrl+K demandés depuis la barre
+  s'ouvrent dans la fenêtre JARVIS, puis la barre revient ; les toasts restent dans la barre.
+- **Icône de la zone de notification** : tâches en cours, en file et à valider ; menu Ouvrir JARVIS,
+  Nouvelle demande (la barre), Se déconnecter des sites, Quitter. Une pastille sur les boutons de la
+  barre des tâches de Windows (`setOverlayIcon`, sur chaque fenêtre de JARVIS) signale une validation
+  en attente.
+- **Fenêtre JARVIS** : la barre du haut, l'accueil (projets, reprendre), les tiroirs (Historique,
+  Sessions, Routines, Projet, Notes), la configuration et Ctrl+K. C'est la page sans son bureau ; elle
+  s'ouvre quand on en a besoin (bouton de la barre, icône de notification, boîte de dialogue). Un
+  rappel des notes l'amène devant sans prendre le clavier, avec une notification.
+- **Toasts** : dans la fenêtre de la dernière action (barre, discussion, fenêtre JARVIS) ; une tâche
+  terminée ou en erreur, quand on ne la regarde pas, en notification native.
 - **Mode « Bureau JARVIS »** : l'interface actuelle dans une seule fenêtre, pour qui la préfère
   (moteur DOM de `wm.js`).
 
 ### Sites connectés
 
-- Une **fenêtre JARVIS par site**, qui contient une `WebContentsView` (Electron 30 et plus) dans une
-  session propre au site : `session.fromPartition("persist:odoo")`, `"persist:o365"`… Cookies séparés
-  de la console et entre sites : on reste connecté à Odoo et SharePoint sans rien partager avec la
-  page de la console.
-- La barre de navigation (précédent, suivant, adresse, ouvrir dans le navigateur) est dessinée par
-  JARVIS dans l'en-tête de la fenêtre ; la vue occupe le reste. Seuls les menus de cette fenêtre
-  doivent tenir dans son en-tête, ou devenir des menus natifs.
+- Une **fenêtre JARVIS par site**, qui contient une `WebContentsView` dans une session propre au site :
+  `persist:site:<domaine approuvé>` (sous-domaines compris), sinon `persist:site:<hôte>`. Cookies
+  séparés de la console et entre sites : on reste connecté à Odoo et SharePoint sans rien partager
+  avec la page de la console. Une deuxième adresse du même site réutilise sa fenêtre.
+- Ce qui ouvre une fenêtre de site : un lien https d'une réponse (quand l'aperçu des liens est
+  activé), une page qu'affiche Claude (`afficher`, domaines approuvés), « Ouvrir » dans un aperçu web.
+- La barre de navigation (précédent, suivant, recharger, adresse, ouvrir dans le navigateur, session)
+  est une page de l'application ([shell/site.html](../shell/site.html)) au-dessus de la vue ; elle ne
+  reçoit du site que son adresse et son titre, écrits comme du texte. Alt+← / Alt+→ et F5 marchent
+  dans la vue.
 - **Durcissement des vues** : `sandbox: true`, `contextIsolation: true`, `nodeIntegration: false`,
-  aucun preload pour les sites tiers ; `setPermissionRequestHandler` refuse caméra, micro,
-  notifications, géolocalisation… ; `will-navigate` et `setWindowOpenHandler` gardent la vue dans les
-  domaines approuvés et renvoient le reste au navigateur du système ; `will-download` demande avant
-  chaque téléchargement ; « Se déconnecter des sites » vide les sessions.
+  aucun preload pour les sites tiers ; les permissions se limitent à l'écriture du presse-papiers et
+  au plein écran (jamais caméra, micro, notifications, position). La vue suit toute adresse https
+  (les pages de connexion sont souvent ailleurs) ; une adresse http, ou un lien vers un autre site
+  ouvert dans un nouvel onglet, part dans le navigateur du système ; une fenêtre surgissante du site
+  (connexion, impression) garde sa session. Un téléchargement demande où l'enregistrer.
+  « Se déconnecter des sites » ferme leurs fenêtres et vide leurs sessions.
 - **Exemple : un devis Odoo.** Claude lit le devis (MCP Odoo) et appelle `afficher` avec
   `https://<odoo>/odoo/sales/<id>` ; la console l'ouvre dans la fenêtre Odoo, déjà connectée.
 
@@ -178,8 +218,12 @@ Ce qu'il faut adapter pour les documents enfants :
 
 - Une validation en attente produit une notification native qui montre l'outil et sa cible, avec
   **Approuver** et **Refuser**. Sous Windows, les boutons d'une notification passent par un XML de
-  notification (`toastXml`) et une activation par protocole (`jarvis://…`, enregistré par
-  l'application) ; sur Mac, par les actions de notification. À valider dans le prototype.
+  notification (`toastXml`) et une activation par protocole (`jarvis://valider?…`, enregistré par
+  l'application) ; sur Mac, par les actions de notification. Pas de notification pendant qu'on
+  regarde la discussion ; elle disparaît quand la validation est décidée ailleurs.
+- Chaque notification porte un secret à elle (128 bits) : un lien `jarvis://` fabriqué ailleurs (une
+  page web, un autre programme) ne décide rien ; l'application revérifie la tâche et la validation,
+  puis passe par l'API de la console comme un clic dans la fenêtre (journal compris).
 - Approuver depuis une notification reste un clic de l'utilisateur : la règle « rien d'irréversible
   sans son clic » tient. Les validations qui demandent de relire un contenu long (proposition
   d'action, plan) ouvrent leur fenêtre au lieu d'offrir un bouton.
@@ -207,7 +251,7 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
 | Coins arrondis | Rayon de JARVIS | Ceux de Windows 11, un peu plus petits |
 | Réduire, agrandir, fermer | Boutons de JARVIS | Boutons natifs aux couleurs de JARVIS (`titleBarOverlay`), pour garder l'ancrage de Windows 11 ; ou les boutons de JARVIS, sans ces dispositions d'ancrage |
 | Animation d'ouverture | Celle de JARVIS | Celle de Windows |
-| Flou des barres | `backdrop-filter` sur le fond de la console | Pour la barre JARVIS, le matériau Mica ou Acrylic de Windows 11 (`backgroundMaterial`, à vérifier), qui floute ce qu'il y a derrière : bureau, autres applications |
+| Flou des barres | `backdrop-filter` sur le fond de la console | Rien à flouter derrière une fenêtre de l'OS : la barre JARVIS a un fond presque opaque. Le matériau Mica ou Acrylic de Windows 11 (`backgroundMaterial`) reste à essayer |
 | Fond (dégradés, grille de points) | Celui de la console | Le fond d'écran de l'utilisateur ; gardé dans le mode « Bureau JARVIS » |
 | Menus contextuels | Peuvent dépasser d'une fenêtre | Restent dans leur fenêtre, repositionnés à l'intérieur |
 
@@ -224,60 +268,83 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
 
 ## Installation et mises à jour
 
-- **Coquille Electron** : un dossier `shell/` du dépôt (`package.json`, processus principal, preload),
-  empaqueté avec electron-builder (installateur Windows par utilisateur, sans droits
-  d'administrateur ; application Mac). Environ 100 Mo. L'outillage Node ne sert qu'à construire la
-  coquille.
-- **La partie Python ne change pas de mode de mise à jour** : `git pull` en un clic, comme aujourd'hui.
-  La coquille, qui change rarement, a ses propres mises à jour (electron-updater).
-- **Démarrage** : la coquille lance le serveur du dépôt (`.venv`, créé au besoin par `start.bat` ou
-  `start.command`), sans fenêtre. Elle remplace le démarrage à l'ouverture de session
-  (`app.setLoginItemSettings`) et le lanceur ; un identifiant d'application regroupe ses fenêtres
-  sous l'icône JARVIS dans la barre des tâches.
-- **Signature** : sous Windows, SmartScreen avertit tant que l'exécutable n'est pas signé (certificat
-  de signature de code) ; sur Mac, la notarisation est nécessaire.
-- **Tests** : Playwright sait piloter Electron (`_electron.launch`) ; les tests Python restent.
+- **Construction** : electron-builder (configuration `build` de [shell/package.json](../shell/package.json),
+  lancé par `npx` : rien de plus dans `shell/node_modules`). Windows : installateur NSIS par
+  utilisateur, en un clic, sans droits d'administrateur, raccourcis « JARVIS » avec l'identifiant
+  d'application `local.jarvis.console` (même identité que `app.setAppUserModelId` : fenêtres
+  regroupées, notifications). Mac : image disque. Environ 100 Mo.
+- **L'application installée exécute le shell du dossier** : son point d'entrée,
+  [shell/loader.js](../shell/loader.js), retrouve le dossier de JARVIS (`JARVIS_ROOT`, sinon
+  `dossier.json` dans les données de l'application, écrit à chaque démarrage et par `build-app.bat`,
+  sinon il le demande une fois) et exécute son `shell/main.js`. La partie Python et l'application se
+  mettent donc à jour ensemble, en un clic ou par `git pull`. Si le dossier attend une version
+  d'Electron plus récente que celle installée (`devDependencies` de `shell/package.json`),
+  l'application continue avec la copie de `main.js` qu'elle contient et demande, par une
+  notification, de relancer `build-app.bat`.
+- **Pas d'electron-updater** : il lui faudrait un serveur de versions publiées (le dépôt est privé), et
+  ce qui change souvent (le shell) suit déjà le dossier ; reste Electron lui-même, que
+  `build-app.bat` met à jour quand il le faut.
+- **Démarrage** : l'application lance le serveur du dossier (`.venv`, créé au besoin par `start.bat`
+  ou `start.command`), sans fenêtre. Le démarrage avec la session (Configuration → Général) lance
+  l'application avec `--demarrage` quand elle est enregistrée (`data/app.json`) ; après
+  l'installation, le raccourci de démarrage suit l'application installée.
+- **Signature** : construit sur le poste même, l'installateur n'est pas marqué comme venant d'Internet
+  et SmartScreen ne l'arrête pas. Pour l'installer sur d'autres PC sans avertissement, il faut un
+  certificat de signature de code : `CSC_LINK` (fichier .pfx) et `CSC_KEY_PASSWORD` avant
+  `build-app.bat`, electron-builder signe alors l'exécutable et l'installateur. Sur Mac, signature et
+  notarisation : `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
+  `APPLE_TEAM_ID`.
+- **Tests** : Playwright pilote Electron (`_electron.launch`) ; les tests Python restent.
 
-## Ce que le prototype valide déjà
+## Ce qui est vérifié
 
-Vérifié avec Electron 44 sous Linux (affichage virtuel), piloté par Playwright sur le serveur de démo :
+**Sous Windows** (par l'utilisateur) : installation d'Electron par `start-app.bat`, ouverture de la
+fenêtre JARVIS, fenêtres natives et affichage intégré.
 
-- une discussion, un aperçu, un affichage ou une fenêtre de différences s'ouvrent en fenêtres de l'OS,
-  avec leur titre (statut, discussion, compte) ;
-- **un seul processus de rendu** : avec 10 fenêtres de discussion ouvertes, toujours un processus de
-  rendu, pour environ +260 Mo au total (rendu logiciel) ;
-- menus (⋯) et boîtes de dialogue (renommer, annuler une modification) s'ouvrent dans la fenêtre d'où
-  on les demande ;
-- regard d'une fenêtre à l'autre : texte sélectionné dans un aperçu natif, puce dans la fenêtre de la
-  discussion, message envoyé avec le fichier et l'extrait ;
-- le bouton de fermeture natif passe par la console (une discussion en cours demande d'abord) ;
-- les deux affichages, l'option de la configuration, la proposition de recharger, la relance de
-  l'application ;
+**Sous Linux** (affichage virtuel, Electron 44, piloté par Playwright sur le serveur de démo) :
+
+- fenêtres de l'OS pour les discussions, aperçus, affichages et différences, avec leur titre ;
+  **un seul processus de rendu** (10 fenêtres de discussion : environ +260 Mo au total) ; menus et
+  boîtes de dialogue dans la fenêtre d'où on les demande ; regard d'une fenêtre à l'autre ; bouton de
+  fermeture natif ; les deux affichages et le passage de l'un à l'autre ;
+- démarrage discret (`--demarrage`) : rien ne s'affiche, puis tout apparaît quand on appelle JARVIS ;
+  enregistrement de l'application (`data/app.json`) et proposition de l'utiliser ;
+- fenêtres de sites : session séparée de la console, réutilisation de la fenêtre d'un site,
+  navigation, liens vers un autre site dans le navigateur, http refusé, déconnexion ;
+- notifications : un lien `jarvis://` fabriqué sans le secret ne décide rien, le bouton Approuver de
+  la notification valide (journal : « allow ») ;
+- barre JARVIS : elle grandit vers le haut (liste, réglages), Échap la range, l'épingle la garde, une
+  demande envoyée crée la tâche et la range, boîte de dialogue et Ctrl+K dans la fenêtre JARVIS puis
+  retour de la barre, toasts dans la barre ; rien ne change en affichage *Une fenêtre JARVIS* ;
+- fenêtre JARVIS fermée qui reste fermée au démarrage suivant, rappel qui l'amène devant ;
+- application empaquetée (electron-builder, cible Linux) : elle retrouve le dossier, exécute son
+  `shell/main.js`, retombe sur sa propre copie quand le dossier attend un Electron plus récent, et
+  prend le relais de l'application lancée par `start-app.bat` ;
 - le mode navigateur ne change pas (scénarios rejoués dans Chromium).
 
-## Points à valider sous Windows
+## Points à vérifier sous Windows
 
-- Barre de titre avec boutons natifs (`titleBarOverlay`) : couleurs, ancrage de Windows 11, Alt+Tab,
-  passage d'un écran à l'autre, mémorisation des positions, coins arrondis.
-- Démarrage du serveur par `start.bat --no-browser` quand il ne tourne pas ; icône de la zone de
-  notification et pastille de la barre des tâches quand une validation attend.
-- Glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native, et entre fenêtres.
-- Raccourci Ctrl+Alt+J (pas de conflit avec d'autres outils).
-- Pour la suite : notification avec Approuver et Refuser (XML de notification, activation par
-  protocole), matériau Mica ou Acrylic, couleur de bordure native.
+- Installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
+  (Paramètres → Applications), démarrage avec la session qui suit l'application installée.
+- Barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J (pas de conflit
+  avec d'autres outils), clic ailleurs qui la range.
+- Notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
+  de la barre des tâches.
+- Fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
+  fenêtres surgissantes), téléchargements.
+- Glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native.
+- Pour la suite : matériau Mica ou Acrylic, couleur de bordure native.
 
-## Étapes proposées
+## Étapes
 
-1. **Prototype** : coquille qui lance le serveur, fenêtres natives, moteur natif de `wm.js` et
-   adaptations aux documents enfants, choix de l'affichage. *Fait ; à valider sous Windows.* Dans le
-   prototype, la page moteur est la fenêtre JARVIS elle-même, cachée quand on la ferme.
-2. **Finitions du moteur natif** selon les retours sous Windows ; page moteur vraiment cachée.
-3. **Barre JARVIS**, raccourci global, icône de notification, pastille de la barre des tâches.
-4. **Fenêtre JARVIS** : barre du haut, tiroirs, configuration, Ctrl+K.
-5. **Sites connectés** : fenêtres de sites, sessions séparées, domaines approuvés, navigation,
-   permissions, téléchargements.
-6. **Notifications** avec Approuver et Refuser.
-7. **Installateur**, démarrage avec la session, signature, mises à jour de la coquille.
+1. **Prototype** : application qui lance le serveur, fenêtres natives, moteur natif de `wm.js` et
+   adaptations aux documents enfants, choix de l'affichage. *Fait, validé sous Windows.*
+2. **Démarrage avec la session et lanceur** qui ouvrent l'application. *Fait.*
+3. **Sites connectés** : fenêtres de sites, sessions séparées, navigation, permissions. *Fait.*
+4. **Notifications** avec Approuver et Refuser. *Fait.*
+5. **Barre JARVIS** flottante, raccourci global, icône de notification. *Fait.*
+6. **Finitions** : fenêtre JARVIS qui reste cachée, rappels, pastille sur chaque fenêtre. *Fait.*
+7. **Installateur**, signature, mises à jour de l'application. *Fait ; à essayer sous Windows.*
 
 ## Ce qui ne change pas
 

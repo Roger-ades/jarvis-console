@@ -19,7 +19,8 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
+import { barSent, setupBar } from "./bar.js";
+import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
 import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
@@ -80,6 +81,29 @@ async function boot() {
   checkVersion();
   setInterval(checkVersion, 60_000);
   if (S.config.general.setup_done === false) startSetup(); // fresh install: the first-run assistant
+  else setTimeout(proposeDesktopApp, 2500);
+}
+
+/** In the desktop app, once: should start.bat, the launcher and the session start open it rather than the
+ * browser? (Configuration → Général → Ouverture au démarrage; the choice can be changed there.) */
+async function proposeDesktopApp() {
+  if (!window.jarvis || S.config?.general?.open_as === "bureau" || store.get("jarvis.app-proposed")
+    || document.querySelector("#modal-root .overlay")) return;
+  const v = await dialog({
+    title: "Ouvrir JARVIS avec l'application de bureau ?",
+    body: "start.bat, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur, "
+      + "et un raccourci « JARVIS » va dans le menu Démarrer et sur le Bureau. Tu pourras revenir au navigateur dans Configuration → Général.",
+    buttons: [{ label: "Plus tard", value: null }, { label: "Garder le navigateur", value: "non" },
+      { label: "Utiliser l'application", value: "oui", cls: "primary" }],
+  });
+  if (!v) return;
+  store.set("jarvis.app-proposed", v);
+  if (v !== "oui") return;
+  try {
+    await api("/api/config", { method: "PUT", body: { ...S.config, general: { ...S.config.general, open_as: "bureau" } } });
+    if (window.jarvis.platform === "win32") await createLauncher(api);
+    toast("JARVIS s'ouvrira avec l'application de bureau.", "ok");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 function startSetup() {
@@ -279,12 +303,13 @@ function toggleOptions(open = $("#opt-panel").hidden) {
 }
 $("#opt-summary").addEventListener("click", () => toggleOptions());
 for (const id of ["#opt-model", "#opt-preset", "#opt-effort"]) $(id).addEventListener("change", updateSummary);
-document.addEventListener("pointerdown", (e) => {
+// (in every document: the command bar may float in a window of its own, bar.js)
+wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
   if (!$("#opt-panel").hidden && !e.target.closest("#opt-panel, #opt-summary")) toggleOptions(false);
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#opt-panel").hidden) { e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
-}, true);
+}));
+wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#opt-panel").hidden) { e.preventDefault(); e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
+}, true));
 
 function selectProfile(id, remember = true) {
   const p = profile(id);
@@ -322,7 +347,7 @@ function selectProfile(id, remember = true) {
   applyProject(projectFor(home));
   updateSummary();
 }
-const $$pbtn = () => Array.from(document.querySelectorAll("#cmd-profiles .pbtn"));
+const $$pbtn = () => Array.from($("#cmd-profiles").querySelectorAll(".pbtn"));
 
 $("#opt-workdir").addEventListener("change", async (e) => {
   if (e.target.value !== "__other__") {
@@ -484,8 +509,13 @@ const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
 // "Ce que je regarde": the preview, display or text the user looks at goes with the next request
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
+// desktop app, "Intégré au bureau": the command bar floats in a window of its own (bar.js)
+setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")], callButton: $("#bar-call") });
 // desktop app: its global shortcut (or its notification area) asks for a new request
-window.jarvis?.onCommand(({ cmd } = {}) => { if (cmd === "nouvelle-demande") { input.focus(); input.select(); } });
+window.jarvis?.onCommand(({ cmd, tid } = {}) => {
+  if (cmd === "nouvelle-demande") { input.focus(); input.select(); }
+  else if (cmd === "ouvrir" && S.tasks.has(tid)) openTask(tid);   // a click on a notification
+});
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
 
 /** From a window: this discussion becomes context of the next request. */
@@ -542,7 +572,7 @@ async function submit(extra = {}) {
     store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
   }
   const t = await launch("/api/tasks", body);
-  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); }
+  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); barSent(); }
   else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
 }
 
@@ -753,6 +783,7 @@ const actionRunsChanged = debounce(() => projectActionsChanged(), 400);
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
   if (w) w.addEvent(ev);
+  if (window.jarvis && (ev.kind === "approval" || ev.kind === "approval_done")) nativeNotify(ev);
   if (ev.kind === "show") showFiles(ev);
   if (ev.kind === "display") showDisplay(ev);
   if (ev.kind === "tool_result") followFiles();
@@ -899,6 +930,19 @@ function beep(freq) {
   } catch { /* no audio */ }
 }
 
+/** Desktop app: an approval waiting gets a notification of the OS, with Approuver and Refuser for a tool
+ * call (a question, a plan or a proposal is read in its window: a click opens it). */
+function nativeNotify(ev) {
+  const d = ev.data || {};
+  if (ev.kind === "approval_done") { window.jarvis.notifyDone(d.id); return; }
+  if (!S.config?.general?.notifications || (ev.ts && Date.now() / 1000 - ev.ts > 120)) return;
+  const t = S.tasks.get(ev.task_id);
+  const what = { question: "Question de Claude", plan: "Plan à approuver", proposal: "Proposition de Claude" }[d.kind] || toolLabel(d.tool);
+  window.jarvis.notify({ tid: ev.task_id, aid: d.id, kind: d.kind, title: `À valider · ${t?.title || "discussion"}`,
+    body: `${[what, d.target].filter(Boolean).join(" — ")}${t?.profile_name ? ` · ${t.profile_name}` : ""}`,
+    buttons: d.kind === "hook" || d.kind === "permission", looking: wm.focused() === ev.task_id && !wm.isMinimized(ev.task_id) });
+}
+
 function attention(id, kind) {
   const t = S.tasks.get(id);
   if (!t) return;
@@ -908,6 +952,13 @@ function attention(id, kind) {
   renderTaskbar();
   const title = kind === "awaiting" ? `À valider · ${t.profile_name}` : kind === "error" ? `En erreur · ${t.profile_name}` : `Terminée · ${t.profile_name}`;
   if (S.config.ui.sounds) beep(kind === "awaiting" ? 880 : kind === "error" ? 220 : 560);
+  if (window.jarvis) {
+    // desktop app: the OS's notifications (an approval has its own, with its buttons: nativeNotify)
+    if (kind !== "awaiting" && S.config.general.notifications) {
+      window.jarvis.notify({ tid: id, kind, title, body: t.title, looking: wm.focused() === id && !wm.isMinimized(id) });
+    }
+    return;
+  }
   if (S.config.general.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
     const n = new Notification(title, { body: t.title, tag: `${id}-${kind}`, icon: "/static/img/favicon.svg" });
     n.onclick = () => { window.focus(); openTask(id); n.close(); };
@@ -1044,7 +1095,7 @@ const panelCtx = {
     input.focus();
     input.setSelectionRange(text.length, text.length);
   },
-  models: () => [...document.querySelectorAll("#opt-model option")].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
+  models: () => [...$("#opt-model").options].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
   tasks: () => [...S.tasks.values()],
   openTask: (id) => { closeDrawers(); openTask(id); },
   addContext: (t) => addContext(t),
@@ -1094,6 +1145,13 @@ const notesCtx = {
   },
   alert: ({ title, body, tag, onClick }) => {
     if (S.config?.ui?.sounds) beep(660);
+    if (window.jarvis) {
+      // desktop app: the reminder is in the JARVIS window (often hidden), which comes forward without taking
+      // the keyboard; and a notification of the OS (a click opens the JARVIS window)
+      window.jarvis.win("hub-reveal");
+      if (S.config?.general?.notifications) window.jarvis.notify({ tid: "rappel", kind: tag, title, body });
+      return;
+    }
     if (S.config?.general?.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
       const n = new Notification(title, { body, tag, icon: "/static/img/favicon.svg", requireInteraction: true });
       n.onclick = () => { window.focus(); onClick?.(); n.close(); };

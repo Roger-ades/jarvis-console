@@ -98,7 +98,7 @@ def test_exchange_marks_the_browser_and_launcher_route(client, data_dir, monkeyp
     assert client.post("/api/auth/exchange", json={"code": code}).status_code == 200
     assert (data_dir / "ui-seen").exists()
     h = {"X-Console-Token": client.token}
-    monkeypatch.setattr(winsys, "create_launcher", lambda: ["C:\\x\\JARVIS Console.lnk"])
+    monkeypatch.setattr(winsys, "create_launcher", lambda app=None: ["C:\\x\\JARVIS Console.lnk"])
     assert client.post("/api/system/launcher", headers=h).json() == {"paths": ["C:\\x\\JARVIS Console.lnk"]}
     assert client.post("/api/system/launcher").status_code == 401
     assert "launcher" in client.get("/api/system", headers=h).json()

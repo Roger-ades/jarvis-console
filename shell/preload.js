@@ -15,6 +15,16 @@ if (mode) {
     /** Counters for the notification area: {running, awaiting, queued}. */
     status: (s) => ipcRenderer.send("jarvis:status", s),
     switchMode: (m) => ipcRenderer.invoke("jarvis:switch-mode", m),
+    /** A notification of the OS: {tid, aid, kind, title, body, buttons (Approuver / Refuser), looking}. */
+    notify: (p) => ipcRenderer.send("jarvis:notify", p),
+    /** The approval was decided: its notification goes. */
+    notifyDone: (aid) => ipcRenderer.send("jarvis:notify-done", aid),
+    /** A site (https) in a window of its own, signed in with its own session. */
+    openSite: (url) => ipcRenderer.invoke("jarvis:site", url),
+    /** Every site's session emptied, their windows closed. */
+    siteLogout: () => ipcRenderer.invoke("jarvis:site-logout"),
+    /** "JARVIS" shortcuts (Start menu, Desktop) to this app: {paths} or {error}. */
+    createLauncher: () => ipcRenderer.invoke("jarvis:launcher"),
     /** fn({cmd}) — "nouvelle-demande": the global shortcut or the notification area's menu. */
     onCommand: (fn) => { ipcRenderer.on("jarvis:command", (_e, c) => fn(c)); },
   });

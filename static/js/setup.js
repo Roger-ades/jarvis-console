@@ -3,7 +3,7 @@
 import { api } from "./api.js";
 import { pickFolder } from "./folderpicker.js";
 import { logo } from "./logo.js";
-import { h, toast } from "./util.js";
+import { createLauncher, h, toast } from "./util.js";
 
 /** ctx: state(), profiles(), probes(), newProject(), recentFolders(pid), onDone() */
 export function openSetup(ctx) {
@@ -99,7 +99,7 @@ export function openSetup(ctx) {
   function launcher() {
     const status = h("div", { class: "muted" }, "…");
     const create = h("button", { type: "button", class: "btn small primary", on: { click: async () => {
-      try { const r = await api("/api/system/launcher", { method: "POST" }); status.textContent = `Créé : ${r.paths.join(" · ")}`; }
+      try { status.textContent = `Créé : ${(await createLauncher(api)).join(" · ")}`; }
       catch (e) { toast(e.message, "err"); }
     } } }, "Créer le lanceur JARVIS");
     const startup = h("input", { type: "checkbox" });

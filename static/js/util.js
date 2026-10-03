@@ -1,6 +1,10 @@
 // Small DOM helpers. Untrusted text only ever goes through textContent or esc().
 
-export const $ = (sel, root = document) => root.querySelector(sel);
+const lookups = [];
+/** Another document whose elements `$` also finds (the floating bar of the desktop app). */
+export function addLookupDocument(doc) { if (!lookups.includes(doc)) lookups.push(doc); }
+export const $ = (sel, root) => (root ? root.querySelector(sel)
+  : document.querySelector(sel) || lookups.reduce((found, d) => found || d.querySelector(sel), null));
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 export function esc(s) {
@@ -153,12 +157,23 @@ export async function copyText(text) {
   catch { toast("Copie impossible dans ce navigateur.", "err"); }
 }
 
-// Where dialogs and toasts go: this page, or the native window in use (wm.js, desktop app).
-let hostDocument = () => document;
+// Where dialogs and toasts go: this page, or the native window in use (wm.js, desktop app). kind: dialog | toast
+let hostDocument = (_kind) => document;
 export function setHostDocument(fn) { hostDocument = fn; }
 
+/** The launcher: in the desktop app, its own "JARVIS" shortcuts (with its taskbar identity); else the
+ * console's (it opens what Configuration → Général → Ouverture says). Returns the shortcuts' paths. */
+export async function createLauncher(api) {
+  if (window.jarvis?.createLauncher) {
+    const r = await window.jarvis.createLauncher();
+    if (r?.error) throw new Error(r.error);
+    return r.paths || [];
+  }
+  return (await api("/api/system/launcher", { method: "POST" })).paths;
+}
+
 export function toast(message, kind = "") {
-  const box = hostDocument().getElementById("toasts") || $("#toasts");
+  const box = hostDocument("toast").getElementById("toasts") || $("#toasts");
   const el = h("div", { class: `toast ${kind}`, role: "status" }, message);
   box.append(el);
   setTimeout(() => el.remove(), kind === "err" ? 7000 : 3500);
@@ -194,7 +209,7 @@ export function paint(el, c) {
 /** tint: the colors of the account (and of the project) the dialog is about. */
 export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls: "primary" }], input = null, onOpen = null, tint = null }) {
   return new Promise((resolve) => {
-    const doc = hostDocument();
+    const doc = hostDocument("dialog");
     const root = doc.getElementById("modal-root") || $("#modal-root");
     const field = input ? h("input", { type: input.type || "text", value: input.value || "", placeholder: input.placeholder || "" }) : null;
     const done = (v) => { overlay.remove(); root.ownerDocument.removeEventListener("keydown", onKey, true); resolve(v); };

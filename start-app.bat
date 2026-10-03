@@ -1,8 +1,13 @@
 @echo off
-rem JARVIS : application de bureau (prototype, docs\electron.md). Il faut Node.js 22.12 ou plus recent.
-rem La premiere fois, installe Electron dans shell\node_modules ; ensuite, demarre l'application.
+rem JARVIS : application de bureau (docs\electron.md). Si elle est installee (build-app.bat), la demarre.
+rem Sinon, il faut Node.js 22.12 ou plus recent : la premiere fois, installe Electron dans
+rem shell\node_modules ; ensuite, demarre l'application depuis ce dossier.
 rem Le serveur de la console est demarre au besoin (start.bat --no-browser).
 setlocal
+if exist "%LOCALAPPDATA%\Programs\jarvis\JARVIS.exe" (
+  start "" "%LOCALAPPDATA%\Programs\jarvis\JARVIS.exe"
+  exit /b 0
+)
 cd /d "%~dp0shell"
 if exist "node_modules\electron\dist\electron.exe" goto run
 where node >nul 2>nul

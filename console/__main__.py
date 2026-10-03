@@ -60,8 +60,19 @@ def app_browser() -> str | None:
 
 def open_ui(url: str, mode: str, data_dir: Path | None = None):
     """A separate app window (no tabs, no address bar) when possible, else a browser tab.
-    Once the console is installed as an app, that app: its window carries the JARVIS icon."""
+    Once the console is installed as an app, that app: its window carries the JARVIS icon.
+    "bureau": the desktop app (shell/), which reuses this server, once it has registered itself."""
     import subprocess
+    if mode == "bureau" and data_dir is not None:
+        from . import winsys
+        app = winsys.app_info(data_dir)
+        if app:
+            try:
+                subprocess.Popen(winsys.app_command(app), close_fds=True, cwd=str(Path(app["exe"]).parent))
+                return
+            except OSError:
+                pass
+        mode = "app"   # not started here yet (start-app.bat), or gone: the browser's app window
     # "ui-seen": the browser already holds the access token, so the app may open on its own start page
     if mode == "app" and data_dir is not None and (data_dir / "ui-seen").exists():
         from . import winsys

@@ -21,8 +21,11 @@ tes abonnements Claude via la CLI Claude Code.
 - **Ce que je regarde** : l'aperçu ou l'affichage au premier plan et le texte sélectionné
   partent avec ton message ; **différences et annulation** de chaque fichier modifié par Claude.
 
-La suite prévue (intégration au bureau avec Electron, boîte de réception, déclencheurs, validations
-depuis le téléphone…) est dans [docs/feuille-de-route.md](docs/feuille-de-route.md).
+- **Application de bureau** (Electron) : fenêtres de Windows, barre JARVIS (Ctrl+Alt+J),
+  notifications avec Approuver et Refuser, sites connectés avec leur session.
+
+La suite prévue (boîte de réception, déclencheurs, validations depuis le téléphone…) est dans
+[docs/feuille-de-route.md](docs/feuille-de-route.md).
 
 ---
 
@@ -323,8 +326,8 @@ onglet du navigateur. Ses images et polices du web ne sont chargées qu'au clic 
 **Afficher les images** (pas de pixel espion ni d'accusé de lecture) ; les images du même
 dossier s'affichent directement.
 
-Naviguer dans Odoo ou SharePoint connecté, à l'intérieur de la console, demandera de
-passer à Electron : voir [docs/electron.md](docs/electron.md) (prochaine étape).
+Pour naviguer dans Odoo ou SharePoint en restant connecté, l'application de bureau ouvre
+ces sites dans des fenêtres de JARVIS, chacune avec sa session (voir plus bas).
 
 ### Sessions existantes (Claude Desktop, CLI)
 
@@ -352,14 +355,25 @@ dossier Applications, à glisser dans le Dock. Le lanceur démarre la console si
 l'ouvre ; si l'app est installée (ci-dessus), il ouvre l'app installée, dont la fenêtre
 porte aussi l'icône JARVIS au lieu de celle du navigateur.
 
-### Application de bureau (prototype)
+### Application de bureau
 
-**`start-app.bat`** (il faut Node.js 22.12 ou plus) lance JARVIS comme une application de bureau
-Electron. En affichage **Intégré au bureau**, chaque discussion, aperçu ou affichage devient une vraie
-fenêtre de Windows (Alt+Tab, ancrage, plusieurs écrans) ; **Ctrl+Alt+J** ramène la fenêtre JARVIS sur
-une nouvelle demande ; l'icône de la zone de notification montre les tâches en cours et à valider.
-Configuration → Interface → **Affichage** repasse à une seule fenêtre. Détails, état et limites :
-[docs/electron.md](docs/electron.md).
+**`build-app.bat`** (il faut Node.js 22.12 ou plus) construit et installe l'application de bureau
+JARVIS (Electron), pour l'utilisateur, sans droits d'administrateur ; `start-app.bat` la lance sans
+l'installer. En affichage **Intégré au bureau** :
+
+- chaque discussion, aperçu ou affichage devient une vraie fenêtre de Windows (Alt+Tab, ancrage,
+  plusieurs écrans) ;
+- **Ctrl+Alt+J** appelle la **barre JARVIS** (la barre de commande) en bas de l'écran ; Échap la
+  range ;
+- une validation en attente produit une notification avec **Approuver** et **Refuser** ;
+- les liens et les pages qu'affiche Claude (Odoo, SharePoint, Outlook web) s'ouvrent dans des
+  fenêtres de sites, chacune avec sa session : on y reste connecté ;
+- l'icône de la zone de notification montre les tâches en cours et à valider.
+
+Configuration → Général → **Ouvrir avec** « Application de bureau JARVIS » la fait ouvrir par
+`start.bat` et le lanceur ; **Démarrer avec la session** la démarre discrètement. Configuration →
+Interface → **Affichage** repasse à une seule fenêtre. L'application se met à jour avec JARVIS (en un
+clic ou `git pull`). Détails : [docs/electron.md](docs/electron.md).
 
 ### Routines
 
@@ -459,7 +473,7 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |
 | `console/store.py` | persistance SQLite |
 | `static/` | interface (HTML, CSS, modules JavaScript sans dépendance) |
-| `shell/` | application de bureau Electron (prototype) : serveur, fenêtres natives, zone de notification |
+| `shell/` | application de bureau Electron : fenêtres natives, barre JARVIS, sites connectés, notifications, installateur |
 
 ## Installer sur un autre poste
 
