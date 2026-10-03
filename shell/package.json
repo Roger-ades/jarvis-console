@@ -1,16 +1,73 @@
 {
-  "name": "jarvis-shell",
+  "name": "jarvis",
   "productName": "JARVIS",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Application de bureau de la console JARVIS (prototype) : fenêtres intégrées au bureau, icône de notification, raccourci global.",
+  "description": "Application de bureau de la console JARVIS : fenêtres intégrées au bureau, barre flottante, notifications, sites connectés.",
+  "author": "JARVIS",
   "main": "main.js",
   "license": "MIT",
   "scripts": {
     "postinstall": "install-electron",
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "npx --yes electron-builder@26.15.3 --publish never",
+    "dist:win": "npx --yes electron-builder@26.15.3 --win nsis --publish never",
+    "dist:mac": "npx --yes electron-builder@26.15.3 --mac dmg --publish never",
+    "dist:dir": "npx --yes electron-builder@26.15.3 --dir --publish never"
   },
   "devDependencies": {
     "electron": "^44.5.1"
+  },
+  "build": {
+    "appId": "local.jarvis.console",
+    "productName": "JARVIS",
+    "executableName": "JARVIS",
+    "extraMetadata": {
+      "main": "loader.js"
+    },
+    "files": [
+      "loader.js",
+      "main.js",
+      "preload.js",
+      "site.html",
+      "site-preload.js",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "publish": null,
+    "protocols": [
+      {
+        "name": "JARVIS",
+        "schemes": [
+          "jarvis"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "../static/img/jarvis.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "JARVIS",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "JARVIS-installation-${version}.${ext}"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "../static/img/icon-512.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": "dir",
+      "icon": "../static/img/icon-512.png",
+      "category": "Utility"
+    }
   }
 }

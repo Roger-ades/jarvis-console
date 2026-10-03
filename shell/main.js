@@ -1,4 +1,4 @@
-// JARVIS desktop app (prototype, see docs/electron.md). It starts the console's Python server, or
+// JARVIS desktop app (see docs/electron.md). It starts the console's Python server, or
 // reuses the one already running, then shows the interface in one of two ways (Configuration →
 // Interface → Affichage):
 //   "integre"  the JARVIS window (top bar, home, command bar, panels) plus one native window of the
@@ -7,6 +7,8 @@
 // Native windows are children of the JARVIS window's page (window.open): one JavaScript context, one
 // live stream, one renderer process. The page asks for every window operation through the preload
 // (window.jarvis) and the main process checks that the request comes from the console's own page.
+// Started by `electron .` (start-app.bat), or by the installed application (loader.js), which runs
+// this file from the JARVIS folder.
 "use strict";
 const { app, BrowserWindow, Menu, Notification, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme,
   screen, session, shell } = require("electron");
@@ -17,7 +19,8 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 
-const ROOT = path.resolve(__dirname, "..");
+// the JARVIS folder; the installed application names it (loader.js) when it runs the copy packed with it
+const ROOT = app.isPackaged && process.env.JARVIS_ROOT ? path.resolve(process.env.JARVIS_ROOT) : path.resolve(__dirname, "..");
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
 const HEAD_H = 38;                       // a window's header (.win-head): the native buttons sit in it
@@ -495,7 +498,7 @@ ipcMain.on("site:nav", (e, { op, url } = {}) => {
 // its own: a link forged elsewhere (a web page, another program) decides nothing. A click elsewhere on
 // it brings the discussion forward. Not shown while the user looks at that discussion.
 const notes = new Map();                 // approval id (or task:kind) -> {n, nonce, tid, aid}
-if (process.env.JARVIS_TEST) global.jarvisTest = { notes };   // (the tests read the secrets)
+if (process.env.JARVIS_TEST) global.jarvisTest = { notes, file: __filename, root: ROOT };   // (the tests read the secrets)
 
 const clipText = (s, n) => { const t = String(s || ""); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 const xml = (s) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]));
@@ -577,8 +580,10 @@ function handleLink(raw) {
 function registerApp(data) {
   try {
     fs.writeFileSync(path.join(data, "app.json"), JSON.stringify({ exe: process.execPath, args: APP_ARGS, aumid: AUMID,
-      version: app.getVersion(), electron: process.versions.electron, at: new Date().toISOString() }, null, 2));
+      version: app.getVersion(), electron: process.versions.electron, packaged: app.isPackaged, at: new Date().toISOString() }, null, 2));
   } catch { /* the console keeps opening the browser */ }
+  // the installed application finds the JARVIS folder there (loader.js), even after start-app.bat only
+  try { fs.writeFileSync(path.join(app.getPath("userData"), "dossier.json"), JSON.stringify({ root: ROOT }, null, 2)); } catch { /* asked */ }
 }
 
 const quoteArg = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
@@ -602,13 +607,25 @@ function writeShortcut(file) {
 }
 
 /** The Start menu entry "JARVIS" (and the Desktop one if the user made it) follows this app. Not for an
- * installed app: its installer made them. */
+ * installed app: its installer made them. The start with the session (Configuration → Général, with the
+ * desktop app) follows it in both cases: after installing the application, it starts the installed one. */
 function ensureShortcuts() {
-  if (!IS_WIN || app.isPackaged) return;
+  if (!IS_WIN) return;
   const { programs, desktop } = shortcutDirs();
   try {
-    writeShortcut(path.join(programs, "JARVIS.lnk"));
-    if (fs.existsSync(path.join(desktop, "JARVIS.lnk"))) writeShortcut(path.join(desktop, "JARVIS.lnk"));
+    if (!app.isPackaged) {
+      writeShortcut(path.join(programs, "JARVIS.lnk"));
+      if (fs.existsSync(path.join(desktop, "JARVIS.lnk"))) writeShortcut(path.join(desktop, "JARVIS.lnk"));
+    }
+    // console/winsys.py, set_startup: the app's entry has --demarrage; the server's own (pythonw) stays
+    const startup = path.join(programs, "Startup", "JARVIS Console.lnk");
+    const have = fs.existsSync(startup) ? shell.readShortcutLink(startup) : null;
+    const args = [...APP_ARGS, "--demarrage"].map(quoteArg).join(" ");
+    if (have && /--demarrage/.test(have.args || "") && (have.target !== process.execPath || have.args !== args)) {
+      shell.writeShortcutLink(startup, "replace", { target: process.execPath, args, cwd: path.dirname(process.execPath),
+        icon: path.join(ROOT, "static", "img", "jarvis.ico"), iconIndex: 0, appUserModelId: AUMID,
+        description: "JARVIS (application de bureau)" });
+    }
   } catch { /* not essential */ }
 }
 
@@ -801,6 +818,14 @@ if (!app.requestSingleInstanceLock()) {
   // started again (launcher, start.bat with "Application de bureau"): JARVIS comes forward; a second
   // session start (--demarrage) changes nothing
   app.on("second-instance", (_e, argv) => {
+    // the installed application starts while this one runs from start-app.bat: it takes over
+    const other = path.resolve(String(argv[0] || ""));
+    if (!app.isPackaged && other !== process.execPath && /^jarvis(\.exe)?$/i.test(path.basename(other)) && fs.existsSync(other)) {
+      app.releaseSingleInstanceLock();
+      spawn(other, argv.slice(1).filter((a) => a !== "--demarrage"), { detached: true, stdio: "ignore" }).unref();
+      quit();
+      return;
+    }
     const link = argv.find((a) => a.startsWith("jarvis://"));
     if (link) handleLink(link);
     else if (!argv.includes("--demarrage")) showHub();
