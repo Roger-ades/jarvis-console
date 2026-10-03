@@ -48,9 +48,16 @@ def test_server_protocol(engine):
     eng = engine
     init = eng._console_mcp("x", CONSOLE_MCP, {"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
     assert init["result"]["protocolVersion"] == "2025-06-18" and "tools" in init["result"]["capabilities"]
-    assert eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"] == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC]
+    tools = eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"]
+    assert tools == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC]
+    # always in Claude's prompt: a tool deferred behind tool search shows only its name, its parameters get guessed
+    assert all(t["_meta"] == {"anthropic/alwaysLoad": True} for t in tools)
     assert eng._console_mcp("x", CONSOLE_MCP, {"method": "notifications/initialized"}) == {"jsonrpc": "2.0", "result": {}}
     assert eng._console_mcp("x", CONSOLE_MCP, {"id": 3, "method": "resources/list"})["error"]["code"] == -32601
     assert "error" in eng._console_mcp("x", "autre", {"id": 4, "method": "tools/list"})
     other = eng._console_mcp("x", CONSOLE_MCP, {"id": 5, "method": "tools/call", "params": {"name": "effacer", "arguments": {}}})
     assert other["result"]["isError"]
+    # wrong parameters (seen: « content »): the answer says which ones to pass
+    wrong = eng._console_mcp("x", CONSOLE_MCP, {"id": 6, "method": "tools/call",
+                                               "params": {"name": "afficher", "arguments": {"content": "# Devis"}}})
+    assert wrong["result"]["isError"] and "passe « fichiers »" in wrong["result"]["content"][0]["text"]

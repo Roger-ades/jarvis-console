@@ -173,3 +173,8 @@ def test_server_lists_the_tool(engine):
     tools = engine._console_mcp("x", CONSOLE_MCP, {"id": 1, "method": "tools/list"})["result"]["tools"]
     assert PRESENT_SPEC in tools and PRESENT_SPEC["name"] == "presenter"
     json.dumps(PRESENT_SPEC)
+
+
+def test_a_call_without_blocks_says_how_to_write_them():
+    doc, problems, _ = display.check({"titre": "Devis", "kind": "fiche", "donnees": "[]"}, str, [])
+    assert doc is None and "passe « blocs »" in problems[0] and "fiche" in problems[0]

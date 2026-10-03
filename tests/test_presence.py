@@ -86,3 +86,22 @@ def test_a_folder_indexed_by_codegraph_asks_for_the_index_first(engine, tmp_path
     plain = tmp_path / "sans-index"
     (plain / ".codegraph").mkdir(parents=True)  # like ~/.codegraph: CodeGraph's settings, no index
     assert "indexé par CodeGraph" not in system_prompt(engine, later(engine, "bonjour", workdir=str(plain)))
+
+
+def test_the_web_applications_of_the_mcp_servers_are_named_without_their_secrets(engine):
+    cfg = engine.cfg.model_copy(deep=True)
+    work = cfg.profile("work")
+    work.mcp.extra_servers = {
+        "odoo": {"command": "uvx", "args": ["mcp-server-odoo"],
+                 "env": {"ODOO_URL": "https://erp.example.com/", "ODOO_DB": "base", "ODOO_API_KEY": "cle-secrete"}},
+        "crm": {"command": "crm-mcp", "env": {"CRM_URL": "https://admin:mdp@crm.example.com"}},  # credentials: left out
+        "local": {"command": "x", "env": {"API_URL": "http://localhost:8069"}},  # not https: left out
+    }
+    engine.cfg_store.save(cfg, "tests")
+    text = system_prompt(engine, later(engine, "bonjour"))
+    assert "- Applications web de tes serveurs MCP" in text and "odoo : https://erp.example.com." in text
+    assert "<adresse>/odoo/sale.order/42" in text
+    assert "cle-secrete" not in text and "base" not in text.split("Applications web")[1].split("\n")[0]
+    assert "crm.example.com" not in text and "mdp" not in text and "localhost:8069" not in text
+    other = engine.create_task("bonjour", profile="personal", not_before=time.time() + 3600)["id"]
+    assert "Applications web" not in system_prompt(engine, other)
