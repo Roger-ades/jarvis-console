@@ -8,7 +8,8 @@
 // live stream, one renderer process. The page asks for every window operation through the preload
 // (window.jarvis) and the main process checks that the request comes from the console's own page.
 "use strict";
-const { app, BrowserWindow, Menu, Tray, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, screen, session,
+  shell } = require("electron");
 const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -30,6 +31,8 @@ let hub = null;                          // the JARVIS window (the console's pag
 let tray = null;
 let mode = "integre";
 let origin = "";
+let port = 0;
+let token = "";                          // the console's access token (data/token), for the app's own calls
 let quitting = false;
 const children = new Map();              // id -> native BrowserWindow
 const closing = new Set();               // ids the page closes itself (no close request back)
@@ -258,7 +261,7 @@ function createHub() {
 function wake() {
   if (!discreet) return;
   discreet = false;
-  for (const w of children.values()) if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
+  for (const w of [...children.values(), ...sites.map((s) => s.win)]) if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
 }
 
 function showHub(newRequest = false) {
@@ -271,6 +274,153 @@ function showHub(newRequest = false) {
 }
 
 function quit() { quitting = true; app.quit(); }
+
+// ------------------------------------------------------------------ connected sites
+// A site the console shows (a link, an address Claude shows from an approved domain, one the user agreed
+// to open) gets a window of its own: a navigation bar (site.html) above a view of the site, in a session
+// of its own (persist:site:<domain>): cookies apart from the console and from the other sites, so the
+// user stays signed in to Odoo or SharePoint. The site's view has no preload and no Node; it may go to
+// any https address (sign-in pages are often elsewhere); a link opened in a new tab to another site, or
+// any plain http address, goes to the system browser.
+const SITE_BAR_H = 44;
+const sites = [];                        // {win, view, partition, label}
+let trusted = [];                        // the approved domains (Configuration → Sécurité), refreshed on each opening
+let siteTheme = "sombre";
+
+async function refreshSiteSettings() {
+  try {
+    const { config } = await call(port, "/api/config", { token });
+    trusted = (config?.security?.trusted_domains || []).map((d) => String(d).toLowerCase());
+    const t = config?.general?.theme;
+    siteTheme = t === "clair" || (t === "systeme" && !nativeTheme.shouldUseDarkColors) ? "clair" : "sombre";
+  } catch { /* the last ones known */ }
+}
+
+/** The session of an address: its approved domain (subdomains included), else its host. */
+function partitionOf(u) {
+  const host = u.hostname.toLowerCase();
+  const label = trusted.find((d) => host === d || host.endsWith(`.${d}`)) || host;
+  return { partition: `persist:site:${label}`, label };
+}
+
+function siteSession(partition) {
+  const ses = session.fromPartition(partition);
+  if (!ses.jarvisReady) {
+    ses.jarvisReady = true;
+    const ok = ["clipboard-sanitized-write", "fullscreen"];      // never camera, microphone, location, notifications…
+    ses.setPermissionRequestHandler((_wc, perm, cb) => cb(ok.includes(perm)));
+    ses.setPermissionCheckHandler((_wc, perm) => ok.includes(perm));
+    const known = loadState().sites || [];
+    if (!known.includes(partition)) saveState({ sites: [...known, partition] });
+  }
+  return ses;
+}
+
+const barColors = () => (siteTheme === "clair" ? { bg: "#f6f8fa", text: "#3f5163" } : { bg: "#1c2430", text: "#aab6c3" });
+
+async function openSite(url, { fresh = false } = {}) {
+  let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== "https:") { openOutside(url); return false; }
+  await refreshSiteSettings();
+  const { partition, label } = partitionOf(u);
+  const live = !fresh && [...sites].reverse().find((s) => s.partition === partition && !s.win.isDestroyed());
+  if (live) {
+    live.view.webContents.loadURL(u.href);
+    if (live.win.isMinimized()) live.win.restore();
+    if (!discreet) { live.win.show(); live.win.focus(); }
+    return true;
+  }
+  createSiteWindow(partition, label, u.href);
+  return true;
+}
+
+function createSiteWindow(partition, label, url) {
+  const c = barColors();
+  const win = new BrowserWindow({
+    ...nextPosition(1180, 820), width: 1180, height: 820, minWidth: 520, minHeight: 320, show: !discreet, title: label,
+    icon: ICON, backgroundColor: c.bg, autoHideMenuBar: true,
+    ...(IS_MAC ? { titleBarStyle: "hiddenInset" } : { titleBarStyle: "hidden", titleBarOverlay: { color: c.bg, symbolColor: c.text, height: SITE_BAR_H } }),
+    webPreferences: { preload: path.join(__dirname, "site-preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  siteSession(partition);
+  const view = new WebContentsView({ webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: true } });
+  win.contentView.addChildView(view);
+  const entry = { win, view, partition, label };
+  sites.push(entry);
+  const layout = () => {
+    if (win.isDestroyed()) return;
+    const [w, h] = win.getContentSize();
+    view.setBounds({ x: 0, y: SITE_BAR_H, width: w, height: Math.max(0, h - SITE_BAR_H) });
+  };
+  win.on("resize", layout);
+  layout();
+  const wc = view.webContents;
+  const state = () => {
+    if (win.isDestroyed() || wc.isDestroyed()) return;
+    const nh = wc.navigationHistory;
+    win.webContents.send("site:state", { url: wc.getURL(), title: wc.getTitle(), canBack: nh.canGoBack(), canForward: nh.canGoForward(),
+      loading: wc.isLoading(), session: label });
+    win.setTitle(`${wc.getTitle() || label} — ${label}`);
+  };
+  for (const ev of ["did-navigate", "did-navigate-in-page", "page-title-updated", "did-start-loading", "did-stop-loading", "did-fail-load"]) wc.on(ev, state);
+  win.webContents.on("did-finish-load", state);
+  wc.on("will-navigate", (e, to) => { if (!/^https:/i.test(to)) { e.preventDefault(); openOutside(to); } });
+  wc.setWindowOpenHandler(({ url: to, disposition }) => {
+    if (!/^https:/i.test(to)) { openOutside(to); return { action: "deny" }; }
+    // a pop-up of the site (sign-in, print…) keeps its session
+    if (disposition === "new-window") {
+      return { action: "allow", overrideBrowserWindowOptions: { width: 640, height: 720, autoHideMenuBar: true, icon: ICON,
+        webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false } } };
+    }
+    // a link opened in a new tab: another window of this site, or the browser for another site
+    let target;
+    try { target = partitionOf(new URL(to)).partition; } catch { return { action: "deny" }; }
+    if (target === partition) openSite(to, { fresh: true }); else openOutside(to);
+    return { action: "deny" };
+  });
+  wc.on("before-input-event", (e, input) => {
+    if (input.type !== "keyDown") return;
+    const nh = wc.navigationHistory;
+    if (input.alt && input.key === "ArrowLeft" && nh.canGoBack()) { nh.goBack(); e.preventDefault(); }
+    else if (input.alt && input.key === "ArrowRight" && nh.canGoForward()) { nh.goForward(); e.preventDefault(); }
+    else if (input.key === "F5") { wc.reload(); e.preventDefault(); }
+  });
+  win.on("closed", () => {
+    const i = sites.indexOf(entry);
+    if (i >= 0) sites.splice(i, 1);
+    if (!wc.isDestroyed()) wc.close();
+  });
+  win.loadFile(path.join(__dirname, "site.html"), { query: { theme: siteTheme, os: process.platform } });
+  wc.loadURL(url);
+}
+
+/** Signed out of every site: their windows close, their sessions are emptied. */
+async function logoutSites() {
+  for (const s of [...sites]) if (!s.win.isDestroyed()) s.win.close();
+  for (const p of loadState().sites || []) {
+    const ses = session.fromPartition(p);
+    await ses.clearStorageData();
+    await ses.clearCache();
+  }
+  saveState({ sites: [] });
+  return true;
+}
+
+ipcMain.on("site:nav", (e, { op, url } = {}) => {
+  const s = sites.find((x) => !x.win.isDestroyed() && x.win.webContents === e.sender);
+  if (!s) return;
+  const wc = s.view.webContents, nh = wc.navigationHistory;
+  if (op === "back" && nh.canGoBack()) nh.goBack();
+  else if (op === "forward" && nh.canGoForward()) nh.goForward();
+  else if (op === "reload") wc.reload();
+  else if (op === "stop") wc.stop();
+  else if (op === "external") openOutside(wc.getURL());
+  else if (op === "go" && typeof url === "string" && url.trim()) {
+    const to = /^[a-z][\w+.-]*:/i.test(url.trim()) ? url.trim() : `https://${url.trim()}`;
+    if (/^https:\/\//i.test(to)) wc.loadURL(to); else openOutside(to);
+  }
+});
 
 // ------------------------------------------------------------------ the OS: launcher, how to start this app
 /** data/app.json: how the console opens this app (start.bat, launcher, session start: console/winsys.py). */
@@ -358,6 +508,7 @@ function updateTray(s = {}) {
     { label: "Ouvrir JARVIS", click: () => showHub() },
     { label: "Nouvelle demande", accelerator: SHORTCUT, click: () => showHub(true) },
     { type: "separator" },
+    { label: "Se déconnecter des sites", enabled: (loadState().sites || []).length > 0, click: () => logoutSites() },
     { label: "Quitter l'application (la console continue de tourner)", click: quit },
   ]));
 }
@@ -397,6 +548,9 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
 
 ipcMain.on("jarvis:status", (e, s) => { if (fromConsole(e)) updateTray(s); });
 
+ipcMain.handle("jarvis:site", (e, url) => (fromConsole(e) ? openSite(String(url || "")) : false));
+ipcMain.handle("jarvis:site-logout", (e) => (fromConsole(e) ? logoutSites() : false));
+
 ipcMain.handle("jarvis:launcher", (e) => {
   if (!fromConsole(e)) return { error: "refusé" };
   try { return { paths: createLauncher() }; } catch (err) { return { error: String(err.message || err) }; }
@@ -413,7 +567,9 @@ ipcMain.handle("jarvis:switch-mode", (e, m) => {
 // ------------------------------------------------------------------ start
 async function main() {
   if (IS_WIN) app.setAppUserModelId(AUMID);
-  const { data, port } = settings();
+  const conf = settings();
+  const data = conf.data;
+  port = conf.port;
   ensureShortcuts();
   origin = `http://127.0.0.1:${port}`;
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) =>
@@ -430,7 +586,6 @@ async function main() {
     }
   }
   registerApp(data);
-  let token;
   try { token = fs.readFileSync(path.join(data, "token"), "utf8").trim(); } catch {
     dialog.showErrorBox("JARVIS", `Jeton d'accès introuvable : ${path.join(data, "token")}`);
     quit();

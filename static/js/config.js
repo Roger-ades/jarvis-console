@@ -466,7 +466,14 @@ function tabInterface() {
     ...(window.jarvis ? [section("Application de bureau", "Réglages de l'application JARVIS (Electron). Raccourci global : Ctrl+Alt+J, nouvelle demande.", grid(
       select("Affichage", "ui.bureau", [["integre", "Intégré au bureau : chaque fenêtre est une fenêtre de l'OS"],
         ["fenetre", "Une fenêtre JARVIS : toute la console dans une fenêtre"]],
-      { help: "Changer d'affichage recharge l'interface ; les tâches continuent côté serveur." })))] : []),
+      { help: "Changer d'affichage recharge l'interface ; les tâches continuent côté serveur." })),
+      h("p", { class: "muted" }, "Les sites (Odoo, SharePoint, Outlook web…) s'ouvrent dans des fenêtres JARVIS, chacun avec sa propre session : "
+        + "tu y restes connecté, sans rien partager avec la console ni avec les autres sites."),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: async () => {
+        if (!(await confirmDialog("Se déconnecter des sites ?", "Les fenêtres de sites se ferment et leurs sessions sont vidées (cookies, données) : il faudra se reconnecter.", "Se déconnecter"))) return;
+        await window.jarvis.siteLogout();
+        toast("Déconnecté de tous les sites.", "ok");
+      } } }, "Se déconnecter des sites")))] : []),
   ];
 }
 

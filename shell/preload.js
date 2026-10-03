@@ -15,6 +15,10 @@ if (mode) {
     /** Counters for the notification area: {running, awaiting, queued}. */
     status: (s) => ipcRenderer.send("jarvis:status", s),
     switchMode: (m) => ipcRenderer.invoke("jarvis:switch-mode", m),
+    /** A site (https) in a window of its own, signed in with its own session. */
+    openSite: (url) => ipcRenderer.invoke("jarvis:site", url),
+    /** Every site's session emptied, their windows closed. */
+    siteLogout: () => ipcRenderer.invoke("jarvis:site-logout"),
     /** "JARVIS" shortcuts (Start menu, Desktop) to this app: {paths} or {error}. */
     createLauncher: () => ipcRenderer.invoke("jarvis:launcher"),
     /** fn({cmd}) — "nouvelle-demande": the global shortcut or the notification area's menu. */

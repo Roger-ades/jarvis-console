@@ -128,6 +128,8 @@ wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
  * {taskId, result: {id, contient, title, kind}} for a tool's result shown by Claude; color: accent. */
 export async function openPreview(opts) {
   if (opts.result) return openResult(opts);
+  // desktop app: a web page opens in a window of its own, signed in with the site's own session
+  if (opts.url && opts.kind !== "image" && window.jarvis?.openSite) { window.jarvis.openSite(opts.url); return; }
   const key = opts.url ? `url:${opts.url}` : `${opts.folder ? `dir:${opts.folder}` : `task:${opts.taskId}`}:${opts.path}`;
   const shown = open.get(key);
   if (shown && wm.has(shown)) { if (wm.isMinimized(shown)) wm.restore(shown); else wm.focus(shown); live.get(shown)?.(); return; }
