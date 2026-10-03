@@ -21,8 +21,8 @@ tes abonnements Claude via la CLI Claude Code.
 - **Ce que je regarde** : l'aperçu ou l'affichage au premier plan et le texte sélectionné
   partent avec ton message ; **différences et annulation** de chaque fichier modifié par Claude.
 
-La suite prévue (déclencheurs, boîte de réception, validations depuis le téléphone…) est dans
-[docs/feuille-de-route.md](docs/feuille-de-route.md).
+La suite prévue (intégration au bureau avec Electron, boîte de réception, déclencheurs, validations
+depuis le téléphone…) est dans [docs/feuille-de-route.md](docs/feuille-de-route.md).
 
 ---
 
@@ -324,7 +324,7 @@ onglet du navigateur. Ses images et polices du web ne sont chargées qu'au clic 
 dossier s'affichent directement.
 
 Naviguer dans Odoo ou SharePoint connecté, à l'intérieur de la console, demandera de
-passer à Electron : voir [docs/electron.md](docs/electron.md) (prévu plus tard).
+passer à Electron : voir [docs/electron.md](docs/electron.md) (prochaine étape).
 
 ### Sessions existantes (Claude Desktop, CLI)
 

@@ -4,13 +4,14 @@ Note de travail. Objectif : qu'une fois dans Jarvis, l'utilisateur n'ait plus de
 Jarvis couvre déjà très bien le pilotage de Claude (sessions parallèles, validations, projets,
 routines, `presenter`). Cette note recense ce qui oblige encore à quitter la console, les pistes pour
 y remédier et l'ordre proposé. Le détail de conception des pistes d'interface est dans
-[ihm.md](ihm.md), celui d'Electron dans [electron.md](electron.md), celui du travail en équipe dans
-[equipe.md](equipe.md).
+[ihm.md](ihm.md), celui de l'intégration au bureau (Electron) dans [electron.md](electron.md), celui du
+travail en équipe dans [equipe.md](equipe.md).
 
 ## Ce qui fait encore sortir de Jarvis
 
 | Moment | Aujourd'hui | Où |
 |---|---|---|
+| Travailler à côté des autres applications | Les fenêtres de JARVIS vivent dans sa propre fenêtre, sur son propre fond : elles ne se rangent pas à côté d'Excel ou d'Outlook | [electron.md](electron.md) |
 | Ouvrir Odoo, SharePoint, Outlook web connectés | « Ouvrir dans le navigateur » : ces sites refusent l'affichage intégré, et une iframe n'a pas leurs cookies | [electron.md](electron.md) |
 | Lire ou modifier un Word, un Excel | « Ouvrir avec l'application » | `static/js/viewer.js` |
 | Retoucher un fichier écrit par Claude, revenir en arrière | Aperçu seulement : pas d'édition, pas de différences, pas d'annulation | — |
@@ -50,10 +51,12 @@ exemple) : c'est la porte d'entrée principale des injections.
 
 ### 3. Une boîte de réception unique
 
-Réunir sur un écran d'accueil ce qui est aujourd'hui éparpillé entre fenêtres, historique et notes :
-validations et questions en attente de toutes les discussions, résultats de routines non lus,
-propositions, rappels. Avec un « brief du matin » (mails, devis Odoo en attente, agenda) en affichage
-`presenter`. Au passage, les commandes du compte (`~/.claude/commands`) en boutons partout.
+Réunir ce qui est aujourd'hui éparpillé entre fenêtres, historique et notes : validations et
+questions en attente de toutes les discussions, résultats de routines non lus, propositions, rappels.
+Avec un « brief du matin » (mails, devis Odoo en attente, agenda) en affichage `presenter`. Après le
+passage à Electron, elle prend la forme de l'icône de la zone de notification (compteurs) et d'un
+onglet de la fenêtre JARVIS. Au passage, les commandes du compte (`~/.claude/commands`) en boutons
+partout.
 
 ### 4. Les fichiers sans quitter Jarvis
 
@@ -63,12 +66,22 @@ propositions, rappels. Avec un « brief du matin » (mails, devis Odoo en attent
 - Skills docx, xlsx et pdf installées dans chaque profil, pour que Claude produise de vrais fichiers
   Office.
 
-### 5. Le web connecté dans la console
+### 5. JARVIS intégré au bureau, et le web connecté (Electron)
 
-- Tout de suite : l'option `--chrome` existe par profil (`Profile.chrome`) ; un interrupteur par
+Détail dans [electron.md](electron.md).
+
+- **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le fond de la console :
+  elles s'intercalent avec les autres applications, s'ancrent, changent d'écran, apparaissent dans
+  Alt+Tab. Une barre flottante (la barre de commande) s'appelle par un raccourci global ; une icône
+  de la zone de notification montre les tâches et les validations en attente. Le style de JARVIS est
+  conservé : seuls les bords des fenêtres (ombre, coins, boutons) deviennent ceux de Windows.
+- **Sites connectés** : une fenêtre par site (Odoo, SharePoint, Outlook web) avec sa propre session.
+- **Notifications** avec Approuver et Refuser.
+- En attendant : l'option `--chrome` existe par profil (`Profile.chrome`) ; un interrupteur par
   discussion laisserait Claude agir dans Odoo avec la session Chrome de l'utilisateur.
-- À terme : Electron ([electron.md](electron.md)), pour Odoo, SharePoint et Outlook connectés à
-  l'intérieur de Jarvis. C'est le plus gros chantier (environ 100 Mo, signature).
+
+C'est le plus gros chantier (outillage Node pour la coquille, environ 100 Mo, signature) ; le mode
+navigateur reste disponible.
 
 ### 6. Jarvis loin du bureau
 
@@ -92,13 +105,17 @@ propositions, rappels. Avec un « brief du matin » (mails, devis Odoo en attent
 
 1. **« Ce que je regarde », différences et annulation des fichiers** : petits chantiers, utiles tous
    les jours. *Fait.*
-2. Boîte de réception, actions du compte en boutons.
-3. Déclencheurs : dossier surveillé, enchaînement.
-4. Validations depuis le téléphone : sans elles, routines et déclencheurs restent bloqués dès que
-   l'utilisateur n'est pas là.
-5. Bloc `formulaire`, puis `lancer_discussion`.
-6. Aperçu Office, index des documents.
-7. Electron, puis le hub d'équipe.
+2. **Electron : JARVIS intégré au bureau**, en commençant par un prototype sous Windows
+   ([electron.md](electron.md)). Avant les autres points d'interface : il change le modèle de
+   fenêtres sur lequel ils s'appuient, et apporte l'icône de notification, les notifications et les
+   sites connectés.
+3. Boîte de réception, actions du compte en boutons.
+4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
+5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
+   routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne.
+6. Bloc `formulaire`, puis `lancer_discussion`.
+7. Aperçu Office, index des documents.
+8. Hub d'équipe ([equipe.md](equipe.md)).
 
 ## Ce qui est en place (étape 1)
 
