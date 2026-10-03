@@ -39,15 +39,18 @@ export function setupBar({ dock, popups, menu, notices }) {
     const b = e.target.closest("button, a");
     if (b && !b.closest(".bm-status") && !b.matches("#btn-claudeai, #btn-arrange")) toggleMenu(false);
   });
+  // The bar's own window measures it: a ResizeObserver reports when the window that created it renders, and
+  // the page's window is hidden (it rarely renders: the bar kept its size, the menu barely showed).
+  const view = doc.defaultView;
   let timer = 0;
   const fit = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
+    view.clearTimeout(timer);
+    timer = view.setTimeout(() => {
       const above = Math.max(0, ...popups.filter((p) => !p.hidden).map((p) => p.offsetHeight + 12));
       window.jarvis.win("bar-fit", null, { height: Math.ceil(notes.offsetHeight + toasts.offsetHeight + dock.offsetHeight + above) });
     }, 16);
   };
-  const sizes = new ResizeObserver(fit);
+  const sizes = new view.ResizeObserver(fit);
   for (const x of [dock, toasts, notes]) sizes.observe(x);
   for (const p of popups) new MutationObserver(fit).observe(p, { attributes: true, attributeFilter: ["hidden"], childList: true, subtree: true });
   // Échap: what is open above the bar first (its own handlers), then the menu, then the bar goes away
