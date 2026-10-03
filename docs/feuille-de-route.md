@@ -68,7 +68,7 @@ partout.
 
 ### 5. JARVIS intégré au bureau, et le web connecté (Electron)
 
-Détail dans [electron.md](electron.md).
+Détail dans [electron.md](electron.md). *En place : `build-app.bat` installe l'application.*
 
 - **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le fond de la console :
   elles s'intercalent avec les autres applications, s'ancrent, changent d'écran, apparaissent dans
@@ -80,8 +80,8 @@ Détail dans [electron.md](electron.md).
 - En attendant : l'option `--chrome` existe par profil (`Profile.chrome`) ; un interrupteur par
   discussion laisserait Claude agir dans Odoo avec la session Chrome de l'utilisateur.
 
-C'est le plus gros chantier (outillage Node pour la coquille, environ 100 Mo, signature) ; le mode
-navigateur reste disponible.
+C'était le plus gros chantier (outillage Node pour l'application, environ 100 Mo, signature) ; le
+mode navigateur reste disponible.
 
 ### 6. Jarvis loin du bureau
 
@@ -107,8 +107,9 @@ navigateur reste disponible.
    les jours. *Fait.*
 2. **Electron : JARVIS intégré au bureau** ([electron.md](electron.md)). Avant les autres points
    d'interface : il change le modèle de fenêtres sur lequel ils s'appuient, et apporte l'icône de
-   notification, les notifications et les sites connectés. *Prototype en place (`start-app.bat`), à
-   valider sous Windows.*
+   notification, les notifications et les sites connectés. *Fait : application de bureau
+   (`build-app.bat`), fenêtres natives, barre JARVIS, sites connectés, notifications avec Approuver
+   et Refuser ; validée sous Windows.*
 3. Boîte de réception, actions du compte en boutons.
 4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
