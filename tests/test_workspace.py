@@ -172,7 +172,10 @@ def test_open_from_the_project_never_runs_a_program(client, monkeypatch):  # noq
     import console.engine as engine_mod
     calls = []
     monkeypatch.setattr(engine_mod.os, "startfile", lambda p: calls.append(p), raising=False)
-    monkeypatch.setattr(engine_mod.subprocess, "Popen", lambda args, **kw: calls.append(args))
+    real_popen = engine_mod.subprocess.Popen
+    # only the opening commands count: the console's background checks (version, limits) keep their real Popen
+    monkeypatch.setattr(engine_mod.subprocess, "Popen", lambda args, **kw: calls.append(args)
+                        if isinstance(args, list) and args[:1] in (["explorer"], ["open"], ["xdg-open"]) else real_popen(args, **kw))
     h = {"X-Console-Token": client.token}
     folder = Path(client.get("/api/workspace", params={"profile": "work"}, headers=h).json()["folder"])
     (folder / "go.bat").write_text("echo", encoding="utf-8")

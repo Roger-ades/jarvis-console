@@ -173,11 +173,23 @@ async function save(r) {
   catch (e) { toast(e.message, "err"); return false; }
 }
 
-function editor(r = null) {
+/** The routine editor, also opened from a project page (its folder already filled in); `after` runs once saved or deleted. */
+export function openRoutineEditor(context, r = null, defaults = {}, after = null) {
+  ctx = context;
+  editor(r, defaults, after);
+}
+
+/** A routine switched on or off from elsewhere (a project page). */
+export async function setRoutineEnabled(r, enabled) {
+  await api("/api/routines", { method: "POST", body: { ...r, enabled } });
+}
+
+function editor(r = null, defaults = {}, after = null) {
+  const done = after || load;
   const profiles = ctx.profiles();
   const presets = ctx.presets().filter((p) => p.enabled && !p.require_confirm);
   const cur = r || { name: "", prompt: "", profile: ctx.currentProfile(), preset: "", model: "", effort: "", workdir: "",
-    schedule: { kind: "daily", time: "08:00", days: [0, 1, 2, 3, 4], every_min: 60, at: null }, enabled: true, open_window: true, catch_up: false };
+    schedule: { kind: "daily", time: "08:00", days: [0, 1, 2, 3, 4], every_min: 60, at: null }, enabled: true, open_window: true, catch_up: false, ...defaults };
   const sch = { kind: "daily", time: "08:00", days: [0, 1, 2, 3, 4], every_min: 60, at: null, ...cur.schedule };
   const field = (label, control, help) => h("label", { class: "field" }, h("span", {}, label), control, help ? h("small", {}, help) : null);
   const name = h("input", { type: "text", value: cur.name, placeholder: "Ex. Résumé des mails du matin" });
@@ -235,13 +247,13 @@ function editor(r = null) {
     try {
       await api("/api/routines", { method: "POST", body });
       close();
-      await load();
+      await done();
       toast("Routine enregistrée.", "ok");
     } catch (e) { err.hidden = false; err.textContent = e.message; }
   };
   const remove = async () => {
     if (!(await confirmDialog("Supprimer la routine ?", `« ${r.name} » ne sera plus lancée. Les tâches déjà exécutées restent dans l'historique.`, "Supprimer", "danger"))) return;
-    try { await api(`/api/routines/${r.id}`, { method: "DELETE" }); close(); await load(); } catch (e) { toast(e.message, "err"); }
+    try { await api(`/api/routines/${r.id}`, { method: "DELETE" }); close(); await done(); } catch (e) { toast(e.message, "err"); }
   };
   const box = h("div", { class: "dialog routine-ed", role: "dialog", "aria-modal": "true" },
     h("h3", {}, r ? "Modifier la routine" : "Nouvelle routine"),

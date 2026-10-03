@@ -1,14 +1,17 @@
 // Project = a working folder of an account, like a claude.ai Project: its instructions
 // (CLAUDE.md of the folder and of the account), what Claude remembers there, its files and
 // its discussions. The panel follows the folder chosen in the request bar.
+import { renderActions } from "./actions.js";
 import { api } from "./api.js";
 import { fmtSize } from "./attach.js";
 import { pickFolder } from "./folderpicker.js";
 import { mdElement } from "./md.js";
-import { STATUS, confirmDialog, dialog, fmtDate, h, toast } from "./util.js";
+import { allNotes, renderProjectNotes } from "./notes.js";
+import { projectTint } from "./tint.js";
+import { STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
 
-const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["rules", "Règles"]];
+const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const join = (a, b) => (a ? `${a}/${b}` : b);
@@ -28,12 +31,16 @@ export function toggleProject(context) {
 /** The request bar changed account or folder: follow it while open. */
 export function projectFollow() { if (ctx && !el().hidden) load(); }
 
+/** Projects or routines changed (an action added or validated, a routine accepted): the Actions tab follows. */
+export function projectActionsChanged() { if (ctx && ws && !el().hidden && tab === "actions") render(); }
+
 async function load(folder = null) {
   loading = true;
   render();
-  const pid = ctx.currentProfile();
-  const q = new URLSearchParams({ profile: pid });
   const f = folder ?? ctx.workdir();
+  // a project is read with its own account: its memory lives in that account's configuration
+  const pid = (f && ctx.project(f)?.profile) || ctx.currentProfile();
+  const q = new URLSearchParams({ profile: pid });
   if (f) q.set("folder", f);
   try {
     ws = await api(`/api/workspace?${q}`);
@@ -46,6 +53,21 @@ async function load(folder = null) {
 }
 
 const scope = () => ({ profile: ws.profile, folder: ws.folder });
+/** The colors of the panel's dialogs: the account's, mixed with the project's in a project. */
+const tint = () => (ws ? projectTint(ws.folder, ws.profile) : null);
+const fkey = (f) => String(f || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+const notesHere = (folder) => allNotes().filter((n) => fkey(n.folder) === fkey(folder)).length;
+
+function renderNotes(body) {
+  if (!ctx.project(ws.folder)) {
+    body.append(h("p", { class: "pj-lead pad" }, "Les notes appartiennent à un projet (ou sont générales, depuis le bouton Notes). ",
+      "Donne d'abord un nom à ce dossier pour y prendre des notes."),
+    h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small primary",
+      on: { click: async () => { if (await ctx.editProject(ws.folder, ws.profile)) render(); } } }, "En faire un projet")));
+    return;
+  }
+  renderProjectNotes(body, ws.folder, () => { if (tab === "notes") render(); });
+}
 
 /** Any folder of the disk becomes a project: it joins the list of the request bar too. */
 async function browse() {
@@ -59,6 +81,7 @@ function render() {
   const d = el();
   if (d.hidden) return;
   const proj = ws ? ctx.project(ws.folder) : null;
+  paint(d, proj ? tint() : null); // a project's panel: the colors of the account and of the project
   const head = h("div", { class: "drawer-head" }, h("h2", {}, proj ? h("span", { class: "pj-name", style: { "--pc": proj.color } }, proj.name) : "Projet"),
     ws ? h("span", { class: "badge", style: { "--pc": ctx.profiles().find((p) => p.id === ws.profile)?.color || "var(--accent)" } }, ws.profile_name) : null,
     ws ? h("button", { type: "button", class: "btn small", title: proj ? "Nom, couleur, compte, autorisations et modèle par défaut" : "Donner un nom et des réglages par défaut à ce dossier",
@@ -69,6 +92,7 @@ function render() {
     h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { d.hidden = true; } } }));
   if (!ws) { d.replaceChildren(head, h("div", { class: "empty-row" }, loading ? "Chargement…" : "Projet indisponible.")); return; }
   const folders = [...new Set([...ws.folders, ...ctx.workdirOptions(), ws.folder])];
+  const toReview = (proj?.actions || []).filter((a) => a.status !== "ok").length;
   const sel = h("select", { class: "pj-folder", title: ws.folder }, ...folders.map((f, i) =>
     h("option", { value: f, title: f }, i === 0 ? `${baseName(f)} (dossier du compte)` : baseName(f))),
     h("option", { value: "__other__" }, "Autre dossier…"));
@@ -77,11 +101,14 @@ function render() {
   const tabs = h("div", { class: "pj-tabs", role: "tablist" }, ...TABS.map(([id, label]) => h("button", {
     type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id),
     on: { click: () => { tab = id; note = null; render(); } } }, label, id === "memory" && ws.memory.files.length ? h("span", { class: "cnt" }, String(ws.memory.files.length))
-      : id === "rules" && ws.rules?.length ? h("span", { class: "cnt" }, String(ws.rules.length)) : null)));
+      : id === "rules" && ws.rules?.length ? h("span", { class: "cnt" }, String(ws.rules.length))
+      : id === "actions" && toReview ? h("span", { class: "cnt warn", title: "Actions à valider" }, String(toReview))
+      : id === "notes" && notesHere(ws.folder) ? h("span", { class: "cnt" }, String(notesHere(ws.folder))) : null)));
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick), h("small", { title: ws.folder }, ws.folder)), tabs, body);
-  ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules })[tab](body);
+  ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules,
+    actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes })[tab](body);
 }
 
 // ------------------------------------------------------------ instructions
@@ -127,7 +154,7 @@ async function renderMemory(body) {
       catch (e) { toast(e.message, "err"); } } } }, "Enregistrer");
     area.addEventListener("input", () => { save.disabled = area.value === note.text; });
     const del = h("button", { type: "button", class: "btn small danger", on: { click: async () => {
-      if (!(await confirmDialog("Supprimer cette note ?", `${note.name} sera effacée de la mémoire de Claude pour ce dossier.`, "Supprimer", "danger"))) return;
+      if (!(await confirmDialog("Supprimer cette note ?", `${note.name} sera effacée de la mémoire de Claude pour ce dossier.`, "Supprimer", "danger", tint()))) return;
       try { await api(`/api/workspace/memory?${new URLSearchParams({ ...scope(), name: note.name })}`, { method: "DELETE" }); note = null; load(ws.folder); }
       catch (e) { toast(e.message, "err"); } } } }, "Supprimer");
     body.append(h("section", { class: "pj-card" }, h("div", { class: "row" },
@@ -136,7 +163,11 @@ async function renderMemory(body) {
     return;
   }
   const files = ws.memory.files;
-  if (!files.length) { body.append(h("div", { class: "empty-row" }, "Claude n'a encore rien mémorisé pour ce dossier.")); return; }
+  if (!files.length) {
+    body.append(h("div", { class: "empty-row" }, `Claude n'a encore rien mémorisé pour ce dossier avec le compte ${ws.profile_name}. `,
+      "Il n'écrit ici que ce qui lui semble utile pour les prochaines sessions ; demande-lui « retiens que… » pour qu'il le fasse."));
+    return;
+  }
   body.append(h("div", { class: "drawer-list flat" }, ...files.map((f) => h("div", { class: "hrow", style: { "--pc": "var(--violet)" },
     on: { click: async () => {
       try { note = await api(`/api/workspace/memory?${new URLSearchParams({ ...scope(), name: f.name })}`); render(); }
@@ -215,7 +246,7 @@ async function bringSession() {
       "La session elle-même passe dans ce projet (même session, pas de copie) ; Claude Desktop suit. Ferme-la d'abord dans Claude Desktop si elle y est ouverte."),
     search, list, msg),
     buttons: [{ label: "Annuler", value: false }, { label: "Déplacer ici", value: true, cls: "primary" }],
-    onOpen: (box) => { box.classList.add("ctx-dialog"); search.focus(); },
+    onOpen: (box) => { box.classList.add("ctx-dialog"); search.focus(); }, tint: tint(),
   });
   if (!ok) return;
   if (!chosen) { toast("Choisis la session à déplacer.", "warn"); return; }
@@ -230,7 +261,7 @@ async function bringSession() {
 
 async function resumeHere(r) {
   const text = await dialog({ title: `Reprendre « ${r.title} »`, body: "La même session continue dans la console.",
-    input: { placeholder: "Ton message pour la continuer" },
+    input: { placeholder: "Ton message pour la continuer" }, tint: tint(),
     buttons: [{ label: "Annuler", value: null }, { label: "Reprendre", value: true, cls: "primary" }] });
   if (text && text.trim()) ctx.launch(`/api/sessions/${r.profile}/${r.id}/resume`, { prompt: text.trim(), fork: false });
 }
@@ -279,7 +310,7 @@ function renderRules(body) {
     h("span", { class: "i", svg: "shield" }),
     h("div", { class: "hm" }, h("div", { class: "ht mono" }, r.pattern), h("div", { class: "hs" }, r.created ? `mémorisée ${fmtDate(r.created)}` : "")),
     h("button", { type: "button", class: "btn small ghost", title: "Ne plus autoriser sans validation", on: { click: async () => {
-      if (!(await confirmDialog("Retirer cette règle ?", `${r.pattern} demandera de nouveau une validation dans ce projet.`, "Retirer", "danger"))) return;
+      if (!(await confirmDialog("Retirer cette règle ?", `${r.pattern} demandera de nouveau une validation dans ce projet.`, "Retirer", "danger", tint()))) return;
       try { await api(`/api/workspace/rules?${new URLSearchParams({ ...scope(), pattern: r.pattern })}`, { method: "DELETE" }); load(ws.folder); }
       catch (e) { toast(e.message, "err"); }
     } } }, "Retirer")))));

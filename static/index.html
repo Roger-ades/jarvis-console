@@ -32,6 +32,9 @@
       <button class="btn ghost" id="btn-project" title="Projet : consignes, mémoire, fichiers et discussions du dossier de travail">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/><path d="M8 7h8M8 11h6"/></svg><span class="lbl">Projet</span>
       </button>
+      <button class="btn ghost" id="btn-notes" title="Notes générales et de projet, avec rappels">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/><path d="M8.5 8.5h7M8.5 12h4.5"/></svg><span class="lbl">Notes</span><span class="nt-count" hidden></span>
+      </button>
       <button class="btn ghost" id="btn-history" title="Historique des tâches">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Historique</span>
       </button>
@@ -156,7 +159,9 @@
   <aside id="sessions" class="drawer wide" hidden aria-label="Sessions Claude Code"></aside>
   <aside id="routines" class="drawer wide" hidden aria-label="Routines"></aside>
   <aside id="project" class="drawer wide" hidden aria-label="Projet"></aside>
+  <aside id="notes" class="drawer wide" hidden aria-label="Notes"></aside>
   <div id="modal-root"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="reminders" class="reminders" aria-live="assertive"></div>
 </body>
 </html>

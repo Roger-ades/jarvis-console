@@ -4,6 +4,7 @@
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
 import { copyText, downloadBlob, h, toast } from "./util.js";
+import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
@@ -151,10 +152,9 @@ export async function openPreview(opts) {
       act("min", "Réduire", () => wm.minimize(id)),
       act("max", "Agrandir / rétablir (double-clic sur la barre)", () => wm.toggleMax(id)),
       act("close", "Fermer (Échap)", close)));
-  const el = h("section", { class: `win pv-win k-${kind}`, role: "dialog", "aria-label": `Aperçu ${title}`,
-    style: { "--pc": opts.color || "var(--accent)" } }, head, body);
+  const el = paint(h("section", { class: `win pv-win k-${kind}`, role: "dialog", "aria-label": `Aperçu ${title}` }, head, body), opts.color);
   wm.register(id, el, { handle: head, ephemeral: true, size: SIZES[kind] || SIZES.other, fresh: true,
-    meta: { title, subtitle: opts.path || opts.url, color: opts.color, icon: kind === "image" ? "image" : kind === "web" ? "globe" : "file", onClose: close } });
+    meta: { title, subtitle: opts.path || opts.url, color: colorOf(opts.color), icon: kind === "image" ? "image" : kind === "web" ? "globe" : "file", onClose: close } });
   const fitImage = (img) => img.addEventListener("load", () => {
     if (img.naturalWidth) wm.setSize(id, Math.max(360, img.naturalWidth + 34), Math.max(220, img.naturalHeight + 86));
   }, { once: true });
@@ -280,10 +280,10 @@ async function openResult(opts) {
       act("min", "Réduire", () => wm.minimize(id)),
       act("max", "Agrandir / rétablir (double-clic sur la barre)", () => wm.toggleMax(id)),
       act("close", "Fermer (Échap)", close)));
-  const el = h("section", { class: `win pv-win k-${kind === "mail" || kind === "html" ? "html" : "text"}`, role: "dialog",
-    "aria-label": `Aperçu ${result.title || "résultat"}`, style: { "--pc": opts.color || "var(--accent)" } }, head, body);
+  const el = paint(h("section", { class: `win pv-win k-${kind === "mail" || kind === "html" ? "html" : "text"}`, role: "dialog",
+    "aria-label": `Aperçu ${result.title || "résultat"}` }, head, body), opts.color);
   wm.register(id, el, { handle: head, ephemeral: true, size: kind === "mail" ? { w: 860, h: 820 } : SIZES[kind] || SIZES.text, fresh: true,
-    meta: { title: result.title || "Résultat", subtitle: subtitle.textContent, color: opts.color, icon, onClose: close } });
+    meta: { title: result.title || "Résultat", subtitle: subtitle.textContent, color: colorOf(opts.color), icon, onClose: close } });
 
   const q = (remote) => `/api/tasks/${taskId}/result?id=${encodeURIComponent(result.id)}&contient=${encodeURIComponent(result.contient || "")}&remote=${remote}`;
   let v;

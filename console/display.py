@@ -20,11 +20,12 @@ from .config import trusted_url, web_domain
 
 WHERE = ("conversation", "fenetre", "modale")
 KINDS = ("texte", "images", "resultats", "tableau", "graphique", "fiche", "chronologie", "chiffres",
-         "progression", "schema", "fichiers", "choix", "actions")
+         "progression", "schema", "fichiers", "choix", "actions", "application")
 CHARTS = ("barres", "courbe", "secteurs")
 MAX_BLOCKS = 20
 MAX_JSON = 600 * 1024
 MAX_SVG = 300 * 1024
+MAX_APP = 300 * 1024
 IMG_EXT = re.compile(r"\.(png|jpe?g|gif|webp|svg|bmp)$", re.I)
 _KEY = re.compile(r"[^\w.-]+")
 
@@ -85,6 +86,14 @@ TOOL_SPEC = {
                         "multiple": {"type": "boolean", "description": "choix : plusieurs réponses possibles."},
                         "boutons": {"type": "array", "items": {"type": "object"}, "description":
                                     "actions : [{libelle, message}] (le message t'est renvoyé au clic) ou [{libelle, url}]."},
+                        "html": {"type": "string", "description": (
+                            "application : une petite page HTML complète (CSS et JavaScript en ligne) : calculateur, "
+                            "simulateur, tri, saisie… Elle tourne isolée, sans réseau ni accès aux fichiers : mets-y les "
+                            "données dont elle a besoin. jarvis.envoyer(texte ou objet) t'envoie un message ; "
+                            "jarvis.action(nom, arguments) propose de lancer une action du projet. Chaque envoi part au "
+                            "clic de l'utilisateur.")},
+                        "hauteur": {"type": "integer", "minimum": 120, "maximum": 1200,
+                                    "description": "application : hauteur en pixels (400 par défaut)."},
                     },
                     "required": ["type"],
                 },
@@ -333,6 +342,18 @@ class Checker:
         # drawn as an image (never in the page): no script runs and nothing loads from the web
         return {"svg": svg}
 
+    def _application(self, b, where):
+        html = str(b.get("html") or "").strip()
+        if not html:
+            self.problems.add(where, "html vide")
+            return None
+        if len(html.encode("utf-8")) > MAX_APP:
+            self.problems.add(where, "application trop volumineuse (300 Ko au plus)")
+            return None
+        h = _num(b.get("hauteur"))
+        # run by the UI in a sandboxed frame of the preview origin, with no network (see content.app_page)
+        return {"html": html, "hauteur": int(max(120, min(1200, h))) if h else 400}
+
     def _fichiers(self, b, where):
         paths = []
         for p in _list(b.get("fichiers"), 40):
@@ -407,6 +428,8 @@ def summary(doc: dict) -> str:
             parts.append(f"{len(b['elements'])} résultat(s)")
         elif k == "graphique":
             parts.append(f"graphique en {b['forme']}")
+        elif k == "application":
+            parts.append(f"application ({len(b['html']) // 1024 + 1} Ko)")
         else:
             parts.append(k)
     return ", ".join(parts)

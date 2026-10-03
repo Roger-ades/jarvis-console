@@ -77,12 +77,59 @@ def policy(origin: str, ancestors: str, remote: bool) -> str:
             f"frame-ancestors {ancestors}; sandbox allow-popups allow-popups-to-escape-sandbox")
 
 
+# ---------------------------------------------------------------- applications written by Claude
+# (block "application" of the tool "presenter"). Its script runs, so it gets two frames of this origin:
+# a shell without script whose only allowed frame is the application, and the application itself, sandboxed
+# (opaque origin) and without any network. Navigating the application elsewhere is refused by the shell's
+# frame-src, so what the user types in it can only leave through the console: window.jarvis posts to the
+# console page, which checks the frame, waits for a click and sends it on (a message to the session, or a
+# project action after a confirmation).
+APP_BRIDGE = """<script>(function(){
+for (const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCSessionDescription",
+                 "RTCIceCandidate","RTCRtpSender","RTCRtpReceiver"]) { try { delete window[k]; } catch (e) {} }
+const send = (type, data) => window.top.postMessage(Object.assign({jarvisApp: 1, type: type}, data), "*");
+Object.defineProperty(window, "jarvis", {value: Object.freeze({
+  envoyer(contenu) { send("message", {contenu: typeof contenu === "string" ? contenu : JSON.stringify(contenu, null, 2)}); },
+  action(nom, args) { send("action", {nom: String(nom || ""), arguments: args == null ? "" : String(args)}); },
+}), writable: false, configurable: false});
+})();</script>"""
+APP_STYLE = ("<style>html{color-scheme:light dark}body{margin:12px 14px;font:14px/1.45 'Segoe UI',system-ui,"
+             "sans-serif}</style>")
+
+
+def app_page(html: str) -> str:
+    """The application, after the console's bridge (and without redirections nor network hints)."""
+    html = _DOCTYPE.sub("", _HINTS.sub("", _REFRESH.sub("", html)))
+    return f'<!doctype html><meta charset="utf-8">{APP_BRIDGE}{APP_STYLE}' + html
+
+
+def app_policy(ancestors: str) -> str:
+    return ("default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; "
+            "img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; "
+            "child-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'; "
+            f"frame-ancestors {ancestors}; sandbox allow-scripts allow-forms allow-modals")
+
+
+def shell_page(app_url: str, title: str) -> str:
+    return ('<!doctype html><meta charset="utf-8"><title>' + html_mod.escape(title) + '</title>'
+            "<style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%;display:block}</style>"
+            f'<iframe sandbox="allow-scripts allow-forms allow-modals" src="{html_mod.escape(app_url)}" '
+            'allow="clipboard-write" referrerpolicy="no-referrer"></iframe>')
+
+
+def shell_policy(app_url: str, ancestors: str) -> str:
+    return (f"default-src 'none'; style-src 'unsafe-inline'; frame-src {app_url}; form-action 'none'; "
+            f"base-uri 'none'; frame-ancestors {ancestors}")
+
+
 @dataclass
 class Entry:
     page: bytes
     remote: bool
     resolve: Callable[[str], Path | None] | None  # a file next to the page ("images/logo.png"), or None
     expires: float
+    kind: str = "page"   # page | app | shell
+    target: str = ""     # shell: the address of its application
 
 
 class ContentStore:
@@ -93,18 +140,25 @@ class ContentStore:
         self._lock = threading.Lock()
 
     def put(self, page: str, *, remote: bool = False, resolve: Callable[[str], Path | None] | None = None,
-            style: str = "") -> str:
-        data = prepare(page, style).encode("utf-8")
+            style: str = "", kind: str = "page", target: str = "", cid: str | None = None) -> str:
+        data = (prepare(page, style) if kind == "page" else page).encode("utf-8")
         if len(data) > MAX_PAGE:
             raise ValueError("page trop volumineuse pour un aperçu (plus de 20 Mo)")
-        cid = secrets.token_urlsafe(24)
+        cid = cid or secrets.token_urlsafe(24)
         with self._lock:
             now = time.time()
             self._items = {k: e for k, e in self._items.items() if e.expires > now}
-            self._items[cid] = Entry(data, remote, resolve, now + TTL)
+            self._items[cid] = Entry(data, remote, resolve, now + TTL, kind, target)
             while len(self._items) > MAX_ITEMS or sum(len(e.page) for e in self._items.values()) > MAX_TOTAL:
                 self._items.pop(next(iter(self._items)))  # the oldest first
         return cid
+
+    def put_app(self, html: str, title: str, address: Callable[[str], str]) -> str:
+        """An application and its shell: the address of the shell (address(cid) → its URL)."""
+        app_cid = secrets.token_urlsafe(24)
+        self.put(app_page(html), kind="app", cid=app_cid)
+        url = address(app_cid)
+        return self.put(shell_page(url, title), kind="shell", target=url)
 
     def get(self, cid: str) -> Entry | None:
         with self._lock:

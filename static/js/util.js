@@ -73,18 +73,24 @@ export const ICONS = {
   flame: S('<path d="M12 3c.6 3.2 4.5 5.3 4.5 10a4.5 4.5 0 0 1-9 0c0-2.3 1.2-3.8 2.3-4.8.2 1.7 1 2.8 2.2 3.3-.4-3 .1-5.6 0-8.5z"/>'),
   max: S('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
   image: S('<rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-8 8"/>'),
+  bolt: S('<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>'),
+  app: S('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/><path d="M6.5 6.5h.01M9 6.5h.01"/>'),
   external: S('<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/>'),
+  note: S('<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/><path d="M8.5 8.5h7M8.5 12h4.5"/>'),
+  bell: S('<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>'),
 };
 
 /** The console's own tool: Claude opens files in preview windows. */
 export const SHOW_TOOL = "mcp__jarvis__afficher";
 export const RESULT_TOOL = "mcp__jarvis__afficher_resultat";
 export const PRESENT_TOOL = "mcp__jarvis__presenter";
+export const PROPOSE_TOOL = "mcp__jarvis__proposer";
 
 /** Icon of a tool call, by family. */
 export function toolIcon(name = "") {
   if (name === SHOW_TOOL || name === RESULT_TOOL) return "eye";
   if (name === PRESENT_TOOL) return "sparkle";
+  if (name === PROPOSE_TOOL) return "bolt";
   if (name.startsWith("mcp__")) return "plug";
   return ({
     Read: "file", NotebookRead: "file", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit",
@@ -161,7 +167,26 @@ export const store = {
 };
 
 /** Modal dialog. Resolves with the clicked button's value (or null). */
-export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls: "primary" }], input = null, onOpen = null }) {
+/** Paints an element with a plain color, or a tint {account, project, color} (see tint.js): --pc is the
+    color (the mix in a project), --pc-a and --pc-p the two colors for the gradients of .tinted. */
+export function paint(el, c) {
+  if (!el) return el;
+  const t = typeof c === "string" || !c ? { color: c, project: "" } : c;
+  el.style.setProperty("--pc", t.color || "var(--accent)");
+  if (t.project) {
+    el.style.setProperty("--pc-a", t.account);
+    el.style.setProperty("--pc-p", t.project);
+    el.classList.add("tinted");
+  } else {
+    el.style.removeProperty("--pc-a");
+    el.style.removeProperty("--pc-p");
+    el.classList.remove("tinted");
+  }
+  return el;
+}
+
+/** tint: the colors of the account (and of the project) the dialog is about. */
+export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls: "primary" }], input = null, onOpen = null, tint = null }) {
   return new Promise((resolve) => {
     const root = $("#modal-root");
     const field = input ? h("input", { type: input.type || "text", value: input.value || "", placeholder: input.placeholder || "" }) : null;
@@ -170,6 +195,7 @@ export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls
     const content = typeof body === "string" ? h("p", {}, body) : body;
     const box = h("div", { class: "dialog", role: "dialog", "aria-modal": "true" },
       h("h3", {}, title), h("div", { class: "dialog-body" }, content, field), h("div", { class: "dialog-actions" }, actions));
+    if (tint) paint(box, tint);
     const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) done(null); } } }, box);
     function onKey(e) {
       if (e.key === "Escape") { e.stopPropagation(); done(null); }
@@ -182,8 +208,8 @@ export function dialog({ title, body, buttons = [{ label: "OK", value: true, cls
   });
 }
 
-export const confirmDialog = (title, message, label = "Confirmer", cls = "primary") =>
-  dialog({ title, body: message, buttons: [{ label: "Annuler", value: false }, { label, value: true, cls }] });
+export const confirmDialog = (title, message, label = "Confirmer", cls = "primary", tint = null) =>
+  dialog({ title, body: message, buttons: [{ label: "Annuler", value: false }, { label, value: true, cls }], tint });
 
 export function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -205,11 +231,18 @@ export const TOOL_LABELS = {
 export function toolLabel(name) {
   if (!name) return "Outil";
   if (name === SHOW_TOOL || name === RESULT_TOOL || name === PRESENT_TOOL) return "Affichage";
+  if (name === PROPOSE_TOOL) return "Proposition pour le projet";
   if (name.startsWith("mcp__")) {
     const [server, ...rest] = name.slice(5).split("__");
     return `${server.replace(/^claude_ai_/, "")} · ${rest.join("__")}`;
   }
   return TOOL_LABELS[name] || name;
+}
+
+/** "Opus 5.5" for claude-opus-5-5, "Haiku 4.5" for claude-haiku-4-5-20251001. */
+export function modelName(id = "") {
+  const m = id.match(/(opus|sonnet|haiku|fable)-(\d+)-(\d+)/i);
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}.${m[3]}` : id || "modèle";
 }
 
 export const STATUS = {

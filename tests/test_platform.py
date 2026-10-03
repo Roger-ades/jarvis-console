@@ -32,3 +32,14 @@ def test_macos_defaults(monkeypatch):
 def test_spawn_options_match_the_platform():
     kw = claude_cli.spawn_kwargs()
     assert ("creationflags" in kw) if sys.platform == "win32" else kw == {"start_new_session": True}
+
+
+def test_bundled_cli_is_found_in_both_layouts(tmp_path):
+    """The desktop apps moved the exe into a hashed subfolder with 2.1.286: the newest version wins either way."""
+    for rel in ("Claude/claude-code/2.1.284/claude.exe", "Claude-Work/claude-code/2.1.286/635c1867224a/claude.exe",
+                "Claude/claude-code/2.1.9/ab12/claude.exe"):
+        (tmp_path / rel).parent.mkdir(parents=True)
+        (tmp_path / rel).write_text("")
+    found = claude_cli._bundled(tmp_path, "claude.exe")
+    assert len(found) == 3
+    assert max(found, key=claude_cli._version_key).parent.name == "635c1867224a"

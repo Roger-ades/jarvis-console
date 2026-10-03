@@ -5,13 +5,14 @@
 // could carry data out); local files come through the console's own API, like previews.
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
-import { copyText, h, toast } from "./util.js";
+import { confirmDialog, copyText, h, toast } from "./util.js";
 import { openPreview, fileBlob, pinButton, thumbnail } from "./viewer.js";
+import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const entries = new Map(); // `${taskId}|${key}` -> {taskId, key, doc, rev, answers: Map, mounts: Set, …}
-let settings = { autoImages: () => false };
+let settings = { autoImages: () => false, appAction: null };
 export function configure(s) { settings = { ...settings, ...s }; }
 
 const icon = (name) => h("span", { class: "i", svg: name });
@@ -61,8 +62,7 @@ function redraw(e) {
 /** The element that shows a display; it follows every update until it leaves the page. */
 export function renderDisplay(taskId, key, opts = {}) {
   const e = entry(taskId, key);
-  const root = h("div", { class: `dsp dsp-${opts.mode || "conversation"}`, "data-task": taskId,
-    style: { "--pc": opts.color || "var(--accent)" } });
+  const root = paint(h("div", { class: `dsp dsp-${opts.mode || "conversation"}`, "data-task": taskId }), opts.color);
   if (!e) return root;
   const m = { root, mode: opts.mode || "conversation", color: opts.color };
   e.mounts.add(m);
@@ -182,6 +182,7 @@ const BLOCKS = {
 
   choix: (b, e, m, i) => choice(b, e, i),
   actions: (b, e, m, i) => buttons(b, e, m, i),
+  application: (b, e, m, i) => application(b, e, m, i),
 };
 
 function when(s) {
@@ -240,6 +241,71 @@ function buttons(b, e, m, i) {
       title: x.message, on: { click: () => answer(e, i, { bouton: j }) } }, done?.includes(x.libelle) ? icon("check") : null, x.libelle)),
   done ? h("span", { class: "dsp-done" }, "Envoyé à Claude") : null);
 }
+
+// ---------------------------------------------------------------- application (a small page written by Claude)
+// It runs on the preview origin, inside a sandboxed frame without network (see content.py): the console only
+// listens to that frame, only while the user is in it, and every launch of an action is confirmed here.
+const apps = new Set(); // {frame, e, i, last}
+const APP_URL_AGE = 11 * 3600e3; // the content store keeps a page 12 h
+const APP_GAP = 1500;            // ms between two sends of one application
+
+function appUrl(e, i) {
+  e.apps ??= new Map();
+  const k = `${e.rev}|${i}`;
+  const got = e.apps.get(k);
+  if (got && Date.now() - got.at < APP_URL_AGE) return got.res;
+  const res = api(`/api/tasks/${e.taskId}/displays/${encodeURIComponent(e.key)}/app`, { method: "POST", body: { bloc: i } });
+  e.apps.set(k, { at: Date.now(), res });
+  res.catch(() => e.apps.delete(k));
+  return res;
+}
+
+function application(b, e, m, i) {
+  const frame = h("iframe", { class: "dsp-app-frame", title: b.titre || "Application", referrerpolicy: "no-referrer",
+    style: { height: `${b.hauteur || 400}px` } });
+  const box = h("div", { class: "dsp-app" }, frame,
+    h("div", { class: "dsp-app-note muted" }, icon("app"), "Application isolée : sans réseau ni accès à tes fichiers. Ce qu'elle envoie à Claude part de tes clics."));
+  appUrl(e, i).then((r) => { frame.src = r.url; if (r.hauteur) frame.style.height = `${r.hauteur}px`; },
+    (err) => frame.replaceWith(h("div", { class: "line err" }, err.message)));
+  for (const a of [...apps]) if (!a.frame.isConnected && a.seen) apps.delete(a);
+  apps.add({ frame, e, i, last: 0, seen: false });
+  return box;
+}
+
+window.addEventListener("message", async (ev) => {
+  const d = ev.data;
+  if (!d || d.jarvisApp !== 1 || ev.origin !== "null") return;
+  let app = null;
+  for (const a of apps) {
+    if (a.frame.isConnected) a.seen = true;
+    else if (a.seen) { apps.delete(a); continue; }
+    try { if (ev.source && ev.source === a.frame.contentWindow?.[0]) app = a; } catch { /* another origin: not ours */ }
+  }
+  if (!app) return;
+  if (document.activeElement !== app.frame) return; // the user is not in this application: ignored
+  const now = Date.now();
+  if (now - app.last < APP_GAP) return;
+  app.last = now;
+  const { e, i } = app;
+  const name = e.doc.blocs[i]?.titre || e.doc.titre;
+  if (d.type === "message") {
+    const contenu = String(d.contenu ?? "").slice(0, 8000);
+    if (!contenu.trim()) return;
+    try {
+      await api(`/api/tasks/${e.taskId}/displays/${encodeURIComponent(e.key)}/app-message`, { method: "POST", body: { bloc: i, contenu } });
+      toast(`« ${name} » : envoyé à Claude.`, "ok");
+    } catch (err) { toast(err.message, "err"); }
+  } else if (d.type === "action") {
+    const nom = String(d.nom || "").replace(/^\//, "").trim().slice(0, 64);
+    const args = String(d.arguments ?? "").slice(0, 4000);
+    if (!/^[\w.-]+$/.test(nom) || !settings.appAction) return;
+    const ok = await confirmDialog("Lancer une action du projet ?", h("div", {},
+      h("p", {}, `L'application « ${name} » propose de lancer :`),
+      h("pre", { class: "prop-code" }, `/${nom}${args ? ` ${args}` : ""}`),
+      h("p", { class: "muted" }, "Une nouvelle discussion du projet, avec ses autorisations et ses validations habituelles.")), "Lancer");
+    if (ok) settings.appAction(e.taskId, nom, args);
+  }
+});
 
 // ---------------------------------------------------------------- table
 const isNum = (v) => typeof v === "number";
@@ -494,12 +560,12 @@ export function openDisplayWindow(taskId, key, color) {
       act("min", "Réduire", () => wm.minimize(id)),
       act("max", "Agrandir / rétablir (double-clic sur la barre)", () => wm.toggleMax(id)),
       act("close", "Fermer", close)));
-  const win = h("section", { class: "win pv-win dsp-win", role: "dialog", "aria-label": e.doc.titre, style: { "--pc": color || "var(--accent)" } },
-    head, h("div", { class: "pv-body dsp-wbody" }, view));
+  const win = paint(h("section", { class: "win pv-win dsp-win", role: "dialog", "aria-label": e.doc.titre },
+    head, h("div", { class: "pv-body dsp-wbody" }, view)), color);
   // the title follows updates
   e.mounts.add({ root: win, update: () => { title.textContent = e.doc.titre; } });
   wm.register(id, win, { handle: head, ephemeral: true, size: { w: 780, h: 680 }, fresh: true,
-    meta: { title: e.doc.titre, subtitle: "Affichage de Claude", color, icon: "sparkle", onClose: close } });
+    meta: { title: e.doc.titre, subtitle: "Affichage de Claude", color: colorOf(color), icon: "sparkle", onClose: close } });
   return id;
 }
 
@@ -517,7 +583,7 @@ export function openDisplayModal(taskId, key, color) {
   const onKey = (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); close(); } };
   const close = () => { overlay.remove(); unmount(view); document.removeEventListener("keydown", onKey, true); if (modal?.id0 === id0) modal = null; };
   const act = (ic, label, fn) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, svg: ic, on: { click: fn } });
-  const box = h("div", { class: "dialog dsp-modal", role: "dialog", "aria-modal": "true", "aria-label": e.doc.titre, style: { "--pc": color || "var(--accent)" } },
+  const box = paint(h("div", { class: "dialog dsp-modal", role: "dialog", "aria-modal": "true", "aria-label": e.doc.titre },
     h("div", { class: "dsp-mhead" }, icon("sparkle"), title,
       // pinned: a window that stays in front without blocking the rest of the console
       act("pin", "Épingler au premier plan (dans une fenêtre)", () => {
@@ -527,7 +593,7 @@ export function openDisplayModal(taskId, key, color) {
       }),
       act("max", "Garder dans une fenêtre", () => { close(); openDisplayWindow(taskId, key, color); }),
       act("close", "Fermer (Échap)", close)),
-    h("div", { class: "dsp-mbody" }, view));
+    h("div", { class: "dsp-mbody" }, view)), color);
   const overlay = h("div", { class: "overlay dsp-overlay", on: { mousedown: (ev) => { if (ev.target === overlay) close(); } } }, box);
   e.mounts.add({ root: overlay, update: () => { title.textContent = e.doc.titre; } });
   document.addEventListener("keydown", onKey, true);

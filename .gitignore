@@ -2,6 +2,7 @@
 data/
 .demo-data/
 .demo-work/
+.codegraph/
 .env
 __pycache__/
 *.pyc

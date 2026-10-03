@@ -3,6 +3,7 @@
 The user message drives the scenario, one directive per line:
   TOOL <name> <json input>   call a tool (PreToolUse hook, then permission check)
   ASK                        AskUserQuestion round-trip
+  ASK2                       AskUserQuestion with two questions, long option descriptions
   SLEEP <seconds>
   ENV                        report CLAUDE_CONFIG_DIR in the result
   ARGS                       report argv in the result
@@ -13,6 +14,7 @@ The user message drives the scenario, one directive per line:
   MAIL <subject>             a connector returns a mail (Office 365 format); BIGMAIL: too long, saved to a file
   RESULT <json arguments>    call the console's "afficher_resultat" tool
   PRESENT <json arguments>   call the console's "presenter" tool (a display made of blocks)
+  PROPOSE <json arguments>   call the console's "proposer" tool (an action or a routine for the project)
   VITRINE [ou]               a display with every kind of block (images, results, table, chart…)
   CTX <tokens>               the session's context now weighs that much (usage of the next calls)
   /compact                   compact the context, as Claude Code does
@@ -477,9 +479,16 @@ def turn(text: str):
             out({"type": "user", "parent_tool_use_id": None, "message": {"content": [
                 {"type": "tool_result", "tool_use_id": tid, "is_error": not ok, "content": why}]}})
             lines.append(f"{name}:{'ok' if ok else 'refus'}")
-        elif cmd == "ASK":
+        elif cmd in ("ASK", "ASK2"):
             q = {"questions": [{"question": "Quelle couleur ?", "header": "Couleur", "multiSelect": False,
                                 "options": [{"label": "Bleu", "description": ""}, {"label": "Rouge", "description": ""}]}]}
+            if cmd == "ASK2":
+                long = "Une description d'option assez longue pour occuper plusieurs lignes dans une fenêtre étroite. " * 2
+                q = {"questions": [
+                    {"question": "Où et quand la routine doit-elle tourner ?", "header": "Routine", "multiSelect": False,
+                     "options": [{"label": f"Option {i}", "description": long} for i in (1, 2, 3)]},
+                    {"question": "Que faire du serveur JS ?", "header": "Nettoyage", "multiSelect": False,
+                     "options": [{"label": "Les supprimer", "description": long}, {"label": "Les garder", "description": long}]}]}
             perm = request({"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "input": q})
             lines.append("réponses=" + json.dumps((perm.get("updatedInput") or {}).get("answers"), ensure_ascii=False))
         elif cmd == "SLEEP":
@@ -524,6 +533,8 @@ def turn(text: str):
             lines.append(mail(raw.strip()[len(cmd):].strip() or "Devis", big=cmd == "BIGMAIL"))
         elif cmd == "PRESENT":
             lines.append(console_tool("presenter", json.loads(raw.strip()[7:].strip() or "{}")))
+        elif cmd == "PROPOSE":
+            lines.append(console_tool("proposer", json.loads(raw.strip()[7:].strip() or "{}")))
         elif cmd == "VITRINE":
             lines.append(showcase(parts[1] if len(parts) > 1 else "conversation"))
         elif cmd == "RESULT":

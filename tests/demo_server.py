@@ -48,7 +48,7 @@ def seed_sessions(p):
 
 
 def main():
-    port = int(os.environ.get("DEMO_PORT", "8790"))
+    port = int(os.environ.get("PORT") or os.environ.get("DEMO_PORT", "8790"))
     data = Path(os.environ.get("DEMO_DATA", ROOT / ".demo-data"))
     data.mkdir(parents=True, exist_ok=True)
     store = ConfigStore(data)

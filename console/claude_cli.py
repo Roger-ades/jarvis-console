@@ -32,7 +32,16 @@ def spawn_kwargs() -> dict:
 
 
 def _version_key(p: Path) -> tuple:
-    return tuple(int(x) for x in re.findall(r"\d+", p.parent.name)) or (0,)
+    """The version folder right under claude-code/ (the exe sits in it or in a hashed subfolder)."""
+    parts = p.parts
+    ver = parts[parts.index("claude-code") + 1] if "claude-code" in parts[:-1] else p.parent.name
+    return tuple(int(x) for x in re.findall(r"\d+", ver)) or (0,)
+
+
+def _bundled(root: Path, name: str) -> list[Path]:
+    """CLIs shipped with the desktop apps: claude-code/<ver>/<exe> (before 2.1.286) or claude-code/<ver>/<hash>/<exe>."""
+    return [p for pat in (f"Claude*/claude-code/*/{name}", f"Claude*/claude-code/*/*/{name}")
+            for p in root.glob(pat) if p.is_file()]
 
 
 def _search_path() -> str:
@@ -53,10 +62,9 @@ def find_cli(configured: str = "") -> str | None:
         return str(local)
     if WIN:
         appdata = os.environ.get("APPDATA")
-        bundled = list(Path(appdata).glob("Claude*/claude-code/*/claude.exe")) if appdata else []
+        bundled = _bundled(Path(appdata), "claude.exe") if appdata else []
     else:
-        support = Path.home() / "Library" / "Application Support"
-        bundled = [p for p in support.glob("Claude*/claude-code/*/claude") if p.is_file()] if MAC else []
+        bundled = _bundled(Path.home() / "Library" / "Application Support", "claude") if MAC else []
     if bundled:
         return str(max(bundled, key=_version_key))
     return shutil.which("claude")
@@ -261,10 +269,12 @@ def open_terminal(title: str, cli: str, args: list[str], env: dict, cwd: str):
 
 
 def oneshot(cli: list[str], env: dict, cwd: str, prompt: str, model: str = "haiku", timeout: float = 120) -> dict:
-    """One short request (no tool, no MCP, not saved as a session).
-    Returns {"text": answer, "events": rate-limit infos, "error": message or ""}."""
+    """One short request (no tool, no MCP, no thinking, not saved as a session): the cheapest call,
+    whatever model or effort the account's sessions use. Haiku has no effort levels, so its lowest
+    effort is thinking off. Returns {"text": answer, "events": rate-limit infos, "error": message or ""}."""
     cmd = [*cli, "-p", prompt, "--model", model, "--max-turns", "1", "--tools", "",
            "--strict-mcp-config", "--no-session-persistence", "--output-format", "stream-json", "--verbose"]
+    env = {**env, "MAX_THINKING_TOKENS": "0"}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                            cwd=cwd, env=env, timeout=timeout, stdin=subprocess.DEVNULL, **spawn_kwargs())

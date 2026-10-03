@@ -53,7 +53,7 @@ def test_probe_command_is_minimal(monkeypatch):
     seen = {}
 
     def run(cmd, **kw):
-        seen["cmd"] = cmd
+        seen["cmd"], seen["env"] = cmd, kw["env"]
         from types import SimpleNamespace
         return SimpleNamespace(stdout='{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}\n', stderr="")
     monkeypatch.setattr(claude_cli.subprocess, "run", run)
@@ -61,6 +61,7 @@ def test_probe_command_is_minimal(monkeypatch):
     cmd = seen["cmd"]
     assert cmd[cmd.index("--model") + 1] == "haiku" and cmd[cmd.index("--tools") + 1] == ""
     assert "--no-session-persistence" in cmd and "--strict-mcp-config" in cmd and "--max-turns" in cmd
+    assert seen["env"]["MAX_THINKING_TOKENS"] == "0"  # Haiku has no effort levels: thinking off is the lowest
 
 
 def test_stale_limits_are_refreshed_at_start(engine):

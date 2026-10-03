@@ -3,9 +3,10 @@ import { api } from "./api.js";
 import { Attacher } from "./attach.js";
 import { mdElement } from "./md.js";
 import {
-  ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, toast, toolIcon, toolLabel,
+  ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, modelName, toast, toolIcon, toolLabel,
 } from "./util.js";
 import { openDisplayModal, openDisplayWindow, renderDisplay, setAnswer, setDoc } from "./display.js";
+import { paint, taskTint } from "./tint.js";
 import { openPreview, revealImage, thumbnail } from "./viewer.js";
 import * as wm from "./wm.js";
 
@@ -50,12 +51,6 @@ function toolChips(tools, max = 99) {
     ...list.slice(0, max).map(([name, n]) => h("span", { class: `tchip${name.startsWith("mcp__") ? " mcp" : ""}`, title: name },
       name.startsWith("mcp__") ? svg("plug") : null, h("span", {}, toolLabel(name)), h("b", {}, String(n)))),
     list.length > max ? h("span", { class: "tchip more" }, `+${list.length - max}`) : null);
-}
-
-/** "Opus 5.5" for claude-opus-5-5, "Haiku 4.5" for claude-haiku-4-5-20251001. */
-function modelName(id = "") {
-  const m = id.match(/(opus|sonnet|haiku|fable)-(\d+)-(\d+)/i);
-  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}.${m[3]}` : id || "modèle";
 }
 
 function dismissable(el, onClose) {
@@ -145,7 +140,7 @@ export class TaskWindow {
   // ------------------------------------------------------------ layout
   build() {
     const t = this.task;
-    this.el = h("section", { class: "win", "data-id": t.id, style: { "--pc": t.color }, "aria-label": t.title });
+    this.el = paint(h("section", { class: "win", "data-id": t.id, "aria-label": t.title }), taskTint(t));
     this.whoName = h("span", { class: "nm" });
     this.titleEl = h("span", { class: "win-title" });
     this.statusEl = h("span", { class: "status" });
@@ -353,11 +348,15 @@ export class TaskWindow {
     return [...new Set(out)].join(", ");
   }
 
+  /** The account's color, mixed with the project's when the discussion is in a project. */
+  tint() { return taskTint(this.task); }
+  repaint() { paint(this.el, this.tint()); }
+
   update(t) {
     const before = this.task?.status;
     this.task = t;
     if (before && before !== t.status && !ACTIVE.has(t.status)) this.refreshActivity();  // the final figures
-    this.el.style.setProperty("--pc", t.color);
+    this.repaint();
     this.el.setAttribute("aria-label", t.title);
     this.whoName.textContent = t.profile_name;
     this.titleEl.textContent = t.title;
@@ -383,6 +382,7 @@ export class TaskWindow {
         svg("bot"), h("span", {}, `Équipe · ${Object.values(t.team_agents || {}).join(" / ")}`)));
     }
     if (t.routine) bits.push(chip("clock", `Routine · ${t.routine.name}`, "Lancée par une routine"));
+    if (t.action) bits.push(chip("bolt", `Action · /${t.action}`, "Exécution d'une action du projet : elle figure dans son historique (onglet Actions du projet)"));
     if (t.resumed_from) bits.push(chip(t.origin === "copie" ? "branch" : "retry",
       t.origin === "reprise desktop" ? "Reprise Claude Desktop" : t.origin === "copie" ? "Copie d'une discussion"
         : t.origin === "déplacée" ? "Déplacée dans ce projet" : "Reprise",
@@ -601,7 +601,7 @@ export class TaskWindow {
         title: f.context ? `Contexte : transcription de « ${f.title} »` : `Aperçu : ${f.path}`,
       }, svg(f.context ? "link" : "clip"), h("span", {}, f.context ? f.title : f.name))));
       box.append(list);
-      list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.task.color));
+      list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.tint()));
     }
     return box;
   }
@@ -614,7 +614,7 @@ export class TaskWindow {
   askUrl(u) {
     let host = u;
     try { host = new URL(u).hostname; } catch { /* shown as is */ }
-    const open = () => openPreview({ url: u, kind: "web", color: this.task.color });
+    const open = () => openPreview({ url: u, kind: "web", color: this.tint() });
     const trust = async () => {
       try {
         const r = await api("/api/security/trust", { method: "POST", body: { domain: host } });
@@ -635,7 +635,7 @@ export class TaskWindow {
   /** Markdown with previews: thumbnails for local images, web images on demand. */
   md(text, cls = "md") {
     const node = mdElement(text, cls);
-    node.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.task.color));
+    node.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.tint()));
     if (this.ctx.autoImages?.()) node.querySelectorAll(".ext-img").forEach(revealImage);
     return node;
   }
@@ -725,9 +725,9 @@ export class TaskWindow {
         const refs = [...(d.files || []).map((p) => h("a", { href: "#", class: `fileref${IMG_FILE.test(p) ? " img" : ""}`, "data-path": p, title: `Aperçu : ${p}` },
           p.split(/[\\/]/).pop())),
         ...(d.urls || []).map((u) => h("a", { href: "#", class: "showurl", title: u,
-          on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.task.color }); } } }, u.replace(/^https:\/\//, ""))),
+          on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.tint() }); } } }, u.replace(/^https:\/\//, ""))),
         ...(d.results || []).map((r) => h("a", { href: "#", class: "showurl", title: `Résultat de ${r.tool}`,
-          on: { click: (e) => { e.preventDefault(); openPreview({ taskId: this.id, result: r, color: this.task.color }); } } },
+          on: { click: (e) => { e.preventDefault(); openPreview({ taskId: this.id, result: r, color: this.tint() }); } } },
           `${r.kind === "mail" ? "mail" : "résultat"} « ${r.title} »`))];
         const list = [];
         refs.forEach((r, i) => list.push(...(i ? [", ", r] : [r])));
@@ -741,13 +741,13 @@ export class TaskWindow {
         setDoc(this.id, d);
         this.displayCards = this.displayCards || new Map();
         if (this.displayCards.get(d.key)?.isConnected) break;
-        const color = this.task.color;
+        const color = this.tint();
         const card = d.ou === "conversation"
           ? renderDisplay(this.id, d.key, { mode: "conversation", color })
           : h("div", { class: "line shown" }, svg("sparkle"), h("span", {}, d.ou === "modale" ? "Affiché au premier plan : " : "Affiché dans une fenêtre : ",
             h("a", { href: "#", class: "showurl", on: { click: (e) => {
               e.preventDefault();
-              if (d.ou === "modale") openDisplayModal(this.id, d.key, color); else openDisplayWindow(this.id, d.key, color);
+              if (d.ou === "modale") openDisplayModal(this.id, d.key, this.tint()); else openDisplayWindow(this.id, d.key, this.tint());
             } } }, `« ${d.titre} »`)));
         this.displayCards.set(d.key, card);
         this.push(card, parent);
@@ -816,7 +816,7 @@ export class TaskWindow {
     const url = d.name === "WebFetch" && /^https:\/\//i.test(d.input?.url || "") ? d.input.url : "";
     const peek = path || url ? h("button", {
       type: "button", class: "pv-btn", title: path ? `Aperçu : ${path}` : `Aperçu : ${url}`, svg: "eye",
-      on: { click: (e) => { e.preventDefault(); e.stopPropagation(); openPreview(path ? { taskId: this.id, path, color: this.task.color } : { url, kind: "web" }); } },
+      on: { click: (e) => { e.preventDefault(); e.stopPropagation(); openPreview(path ? { taskId: this.id, path, color: this.tint() } : { url, kind: "web" }); } },
     }) : null;
     const row = h("details", { class: `tool${d.name?.startsWith("mcp__") ? " mcp" : ""}` },
       h("summary", {}, h("span", { class: "ti", svg: toolIcon(d.name) }), h("span", { class: "tn" }, label),
@@ -876,7 +876,7 @@ export class TaskWindow {
     if (!d.is_error && t.path && t.name !== "Read" && IMG_FILE.test(t.path)) {
       const ref = h("a", { href: "#", class: "fileref img", "data-path": t.path, title: `Aperçu : ${t.path}` }, t.path);
       this.push(h("div", { class: "md msg assistant created" }, h("p", {}, "Image créée : ", ref)), t.parent);
-      thumbnail(ref, this.id, this.task.color);
+      thumbnail(ref, this.id, this.tint());
     }
     t.group._pending = Math.max(0, t.group._pending - 1);
     this.refreshGroup(t.group);
@@ -906,7 +906,8 @@ export class TaskWindow {
     for (const [id, el] of this.apprEls) if (!ids.has(id)) { el.remove(); this.apprEls.delete(id); }
     for (const p of pending) {
       if (this.apprEls.has(p.id)) continue;
-      const el = p.kind === "question" ? this.questionCard(p) : p.kind === "plan" ? this.planCard(p) : this.approvalCard(p);
+      const el = p.kind === "question" ? this.questionCard(p) : p.kind === "plan" ? this.planCard(p)
+        : p.kind === "proposal" ? this.proposalCard(p) : this.approvalCard(p);
       this.apprEls.set(p.id, el);
       this.approvals.append(el);
     }
@@ -962,6 +963,40 @@ export class TaskWindow {
     return el;
   }
 
+  /** Claude proposes an action or a routine for the project: shown in full, written or saved only on a click. */
+  proposalCard(p) {
+    const x = p.input || {};
+    const action = x.quoi === "action";
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", {}, v)) : null);
+    const go = (answers) => this.decide(p, "allow", msg.value, answers, el);
+    const buttons = action
+      ? [h("button", { type: "button", class: "btn ok", on: { click: () => go(null) } }, x.remplace != null ? "Remplacer l'action" : "Ajouter l'action")]
+      : [h("button", { type: "button", class: "btn", on: { click: () => go({ activer: "non" }) } }, "Ajouter désactivée"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => go({ activer: "oui" }) } }, "Ajouter et activer")];
+    const fields = action
+      ? [field("Commande", `/${x.nom}`), field("Bouton", x.libelle || x.nom), field("À saisir", x.parametre), field("Fichier", x.fichier)]
+      : [field("Nom", x.nom), field("Quand", x.planification), field("Compte", x.compte), field("Autorisations", x.preset),
+        field("Modèle", x.modele), field("Dossier", x.dossier)];
+    el.append(...[
+      this.apprHead(action ? "bolt" : "clock", action ? "Nouvelle action proposée" : "Nouvelle routine proposée", `Projet « ${x.projet || ""} »`),
+      h("div", { class: "appr-reason" }, x.description || p.reason),
+      h("div", { class: "prop-fields" }, ...fields.filter(Boolean)),
+      h("div", { class: "prop-note muted" }, action
+        ? "Ces consignes seront suivies à chaque clic sur le bouton, avec les autorisations du projet. Relis-les : rien n'est écrit avant ton accord."
+        : "Elle tournera seule, avec ces autorisations ; une validation demandée attendra ton retour. Rien n'est enregistré avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        ...buttons),
+      h("details", { open: true }, h("summary", { class: "muted" }, action ? "Contenu du fichier" : "Demande envoyée à chaque exécution"),
+        h("pre", { class: "prop-code" }, action ? x.contenu || "" : x.consigne || "")),
+      action && x.remplace != null ? h("details", {}, h("summary", { class: "muted" }, "Contenu actuel, qui sera remplacé"),
+        h("pre", { class: "prop-code" }, x.remplace)) : null,
+    ].filter(Boolean));
+    return el;
+  }
+
   planCard(p) {
     const msg = h("input", { type: "text", placeholder: "Remarque (facultatif)" });
     const el = h("div", { class: "appr" });
@@ -973,11 +1008,18 @@ export class TaskWindow {
     return el;
   }
 
+  /** Several questions: one at a time, with tabs, so none is missed in a small window; all must be answered. */
   questionCard(p) {
-    const el = h("div", { class: "appr" }, this.apprHead("help", "Question de Claude"));
     const qs = (p.input && p.input.questions) || [];
     const state = qs.map(() => ({ sel: new Set(), other: "" }));
-    qs.forEach((q, i) => {
+    const answered = (i) => state[i].sel.size > 0 || state[i].other.trim() !== "";
+    const many = qs.length > 1;
+    let cur = 0;
+    const tabs = many ? h("div", { class: "q-tabs", role: "tablist" }) : null;
+    const counter = many ? h("span", { class: "q-count" }) : null;
+    const prev = h("button", { type: "button", class: "btn", on: { click: () => show(cur - 1) } }, "Précédent");
+    const next = h("button", { type: "button", class: "btn primary", on: { click: () => (cur < qs.length - 1 ? show(cur + 1) : answer()) } });
+    const pages = qs.map((q, i) => {
       const opts = h("div", { class: "q-opts" });
       for (const o of q.options || []) {
         const b = h("button", { type: "button", class: "btn q-opt" }, o.label, o.description ? h("small", {}, o.description) : null);
@@ -986,26 +1028,63 @@ export class TaskWindow {
           if (q.multiSelect) { s.has(o.label) ? s.delete(o.label) : s.add(o.label); }
           else { s.clear(); s.add(o.label); opts.querySelectorAll(".q-opt").forEach((x) => x.classList.remove("sel")); }
           b.classList.toggle("sel", s.has(o.label));
+          refresh();
+          // a single choice moves on to the next question still without an answer
+          if (!q.multiSelect && many) {
+            const todo = qs.findIndex((_, j) => j > i && !answered(j));
+            if (todo >= 0) setTimeout(() => show(todo), 180);
+          }
         });
         opts.append(b);
       }
       const other = h("input", { type: "text", placeholder: "Autre réponse…" });
-      other.addEventListener("input", () => { state[i].other = other.value; });
-      el.append(h("div", { class: "q" }, h("div", { class: "q-title" }, q.question || q.header || ""), opts, other));
+      other.addEventListener("input", () => { state[i].other = other.value; refresh(); });
+      other.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); next.click(); } });
+      return h("div", { class: "q" }, h("div", { class: "q-title" }, q.question || q.header || ""),
+        q.multiSelect ? h("div", { class: "q-hint" }, "Plusieurs choix possibles.") : null, opts, other);
     });
+    const refresh = () => {
+      if (many) {
+        tabs.replaceChildren(...qs.map((q, i) => h("button", {
+          type: "button", role: "tab", class: `q-tab${i === cur ? " on" : ""}${answered(i) ? " done" : ""}`,
+          "aria-selected": i === cur ? "true" : "false", on: { click: () => show(i) },
+        }, answered(i) ? h("span", { svg: "check" }) : h("span", { class: "q-num" }, String(i + 1)), q.header || `Question ${i + 1}`)));
+        counter.textContent = `${qs.filter((_, i) => answered(i)).length} / ${qs.length} répondue(s)`;
+      }
+      prev.hidden = !many || cur === 0;
+      next.textContent = many && cur < qs.length - 1 ? "Suivant" : "Répondre";
+    };
+    const show = (i) => {
+      cur = Math.max(0, Math.min(qs.length - 1, i));
+      pages.forEach((pg, j) => { pg.hidden = j !== cur; });
+      refresh();
+      const box = el.closest(".win-approvals");  // back to the top of the card: tabs and title in view
+      if (box) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    };
     const answer = () => {
+      const missing = qs.findIndex((_, i) => !answered(i));
+      if (missing >= 0) {
+        show(missing);
+        toast(many ? `Il reste ${qs.filter((_, i) => !answered(i)).length} question(s) sans réponse.` : "Choisis au moins une réponse.", "warn");
+        return;
+      }
       const answers = {};
       qs.forEach((q, i) => {
         const vals = [...state[i].sel];
         if (state[i].other.trim()) vals.push(state[i].other.trim());
-        if (vals.length) answers[q.question] = vals.join(", ");
+        answers[q.question] = vals.join(", ");
       });
-      if (!Object.keys(answers).length) { toast("Choisis au moins une réponse.", "warn"); return; }
       this.decide(p, "allow", "", answers, el);
     };
-    el.append(h("div", { class: "appr-actions" },
-      h("button", { type: "button", class: "btn ghost", on: { click: () => this.decide(p, "deny", "Pas de réponse.", null, el) } }, "Ignorer"),
-      h("button", { type: "button", class: "btn primary", on: { click: answer } }, "Répondre")));
+    const el = h("div", { class: "appr q-card" },
+      h("div", { class: "appr-head" }, h("span", { class: "ai", svg: "help" }),
+        h("b", {}, many ? `${qs.length} questions de Claude` : "Question de Claude"), counter),
+      tabs, ...pages,
+      h("div", { class: "appr-actions q-actions" },
+        h("button", { type: "button", class: "btn ghost", on: { click: () => this.decide(p, "deny", "Pas de réponse.", null, el) } }, "Ignorer"),
+        h("span", { class: "grow" }), prev, next));
+    pages.forEach((pg, j) => { pg.hidden = j !== 0; });
+    refresh();
     return el;
   }
 

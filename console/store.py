@@ -1,4 +1,4 @@
-"""Persistence: tasks, their event streams, the audit log and UI state (SQLite)."""
+"""Persistence: tasks, their event streams, the audit log, notes and UI state (SQLite)."""
 from __future__ import annotations
 
 import csv
@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 CREATE INDEX IF NOT EXISTS audit_task ON audit(task_id);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS notes (
+    id TEXT PRIMARY KEY, created REAL NOT NULL, updated REAL NOT NULL,
+    folder TEXT NOT NULL, data TEXT NOT NULL);
 """
 
 
@@ -144,6 +147,30 @@ class Store:
                         r["profile"] or "", r["preset"] or "", r["kind"],
                         json.dumps(r["detail"], ensure_ascii=False)])
         return buf.getvalue()
+
+    # -------------------------------------------------------- notes
+    def save_note(self, note: dict):
+        with self._lock:
+            self.db.execute(
+                "INSERT INTO notes(id, created, updated, folder, data) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET updated=excluded.updated, folder=excluded.folder, "
+                "data=excluded.data",
+                (note["id"], note["created"], note["updated"], note["folder"],
+                 json.dumps(note, ensure_ascii=False)))
+
+    def get_note(self, note_id: str) -> dict | None:
+        with self._lock:
+            row = self.db.execute("SELECT data FROM notes WHERE id=?", (note_id,)).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def list_notes(self) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute("SELECT data FROM notes ORDER BY updated DESC").fetchall()
+        return [json.loads(r["data"]) for r in rows]
+
+    def delete_note(self, note_id: str) -> bool:
+        with self._lock:
+            return self.db.execute("DELETE FROM notes WHERE id=?", (note_id,)).rowcount > 0
 
     # -------------------------------------------------------- key/value
     def kv_get(self, key: str, default=None):

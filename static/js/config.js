@@ -393,7 +393,7 @@ function tabModels() {
         select("Autres sous-agents de Claude Code", "team.subagent_default", modelOptions([[draft.team.subagent_default, draft.team.subagent_default]]),
           { help: "Explore, general-purpose… n'héritent plus du modèle du chef." })),
       area("Règles données au chef", "team.instructions", { rows: 7 })),
-    section("Consignes système", "Ajoutées au prompt système de Claude Code (--append-system-prompt-file), pour chaque tâche.",
+    section("Consignes système", "Ajoutées au prompt système de Claude Code (--append-system-prompt-file), pour chaque tâche, après le contexte JARVIS que la console envoie toujours (la console, son fonctionnement, le compte, le projet, les dossiers et les autorisations de la discussion).",
       area("Consignes de sécurité (tous profils)", "general.security_instructions", { rows: 5 }),
       ...draft.profiles.map((p, i) => area(`Consignes additionnelles · ${p.name}`, `profiles.${i}.instructions`, { rows: 4 }))),
   ];

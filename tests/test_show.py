@@ -1,7 +1,7 @@
 """The console's own MCP server: Claude opens files in the interface with mcp__jarvis__afficher."""
 import os
 
-from console.engine import CONSOLE_MCP, PRESENT_SPEC, RESULT_SPEC, SHOW_SPEC
+from console.engine import CONSOLE_MCP, PRESENT_SPEC, PROPOSE_SPEC, RESULT_SPEC, SHOW_SPEC
 
 from .conftest import task_status, wait_for
 
@@ -48,7 +48,7 @@ def test_server_protocol(engine):
     eng = engine
     init = eng._console_mcp("x", CONSOLE_MCP, {"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
     assert init["result"]["protocolVersion"] == "2025-06-18" and "tools" in init["result"]["capabilities"]
-    assert eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"] == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC]
+    assert eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"] == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC]
     assert eng._console_mcp("x", CONSOLE_MCP, {"method": "notifications/initialized"}) == {"jsonrpc": "2.0", "result": {}}
     assert eng._console_mcp("x", CONSOLE_MCP, {"id": 3, "method": "resources/list"})["error"]["code"] == -32601
     assert "error" in eng._console_mcp("x", "autre", {"id": 4, "method": "tools/list"})

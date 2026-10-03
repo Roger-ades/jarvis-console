@@ -1,11 +1,13 @@
 // Main: command bar, task windows, live stream, shortcuts, notifications.
+import { runAction } from "./actions.js";
 import { ApiError, api, bootstrapAuth, openStream } from "./api.js";
 import { Attacher, hasFiles } from "./attach.js";
 import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
 import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
-import { projectFollow, toggleProject } from "./project.js";
+import { projectActionsChanged, projectFollow, toggleProject } from "./project.js";
+import { editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
@@ -15,8 +17,9 @@ import { showSession, toggleSessions } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
+import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, statusLabel, store, toast } from "./util.js";
+import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
 import { configure as configureDisplays, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
 import * as wm from "./wm.js";
@@ -33,6 +36,7 @@ const MAX_HISTORY = 100;
 const profiles = () => S.config?.profiles || [];
 const profile = (id = S.profile) => profiles().find((p) => p.id === id) || profiles()[0];
 const theme = () => S.config?.general.theme || "sombre";
+setAccounts({ color: (pid) => profile(pid)?.color, current: () => S.profile });
 
 document.querySelectorAll("[data-logo]").forEach(mountLogo);
 
@@ -61,13 +65,15 @@ async function boot() {
   initLimits(await api("/api/limits").catch(() => ({})), () => { renderPills(); renderHome(); }, onLimitAlert);
   renderHome();
   renderPills();
+  initNotes(notesCtx);
   setInterval(renderPills, 60_000); // a window past its reset time goes back to 0
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
     probe: ({ profile: pid, probe }) => { S.probes[pid] = { ...(S.probes[pid] || {}), ...probe }; updateProbe(pid, probe); renderPills(); },
     config: reloadConfig, deleted: ({ id }) => { S.tasks.delete(id); closeWindow(id); renderHistory(); },
-    reload: resync, routines: routinesChanged, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
-    projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); },
+    reload: resync, routines: (p) => { routinesChanged(p); projectActionsChanged(); }, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
+    projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); projectActionsChanged(); },
+    notes: notesChanged,
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
   checkVersion();
@@ -127,9 +133,11 @@ function recolorTasks() {
     t.profile_name = p.name;
     S.windows.get(t.id)?.update(t);
   }
+  for (const w of S.windows.values()) w.repaint();
   renderTaskbar();
   renderHistory();
   renderHome();
+  notesRecolor();
 }
 
 // ------------------------------------------------------------ top bar & state
@@ -271,7 +279,9 @@ function selectProfile(id, remember = true) {
   $("#commandbar").style.setProperty("--pc", p.color);
   input.style.setProperty("--pc", p.color);
 
-  const models = new Map([["", `défaut du profil (${p.default_model})`]]);
+  const dm = p.default_model || "default";
+  const dres = (S.probes[p.id]?.models || []).find((m) => m.value === dm)?.resolved;
+  const models = new Map([["", `défaut du compte ${p.name} (${dres ? modelName(dres) : dm === "default" ? "celui de Claude Code" : dm})`]]);
   for (const m of S.meta?.base_models || []) if (m !== "default") models.set(m, m);
   for (const m of S.probes[p.id]?.models || []) if (m.value && m.value !== "default") models.set(m.value, m.label ? `${m.value} — ${m.label}` : m.value);
   $("#opt-model").replaceChildren(...[...models].map(([v, l]) => option(v, l)));
@@ -405,6 +415,9 @@ function refreshProjectsUI() {
   }
   updateProjectButton();
   renderHome();
+  for (const w of S.windows.values()) w.repaint();
+  renderTaskbar();
+  notesRecolor();
 }
 
 async function newProject() {
@@ -657,7 +670,17 @@ const winCtx = {
   move: (t) => moveTask(t),
   projectName: (folder) => projectFor(folder)?.name || "",
 };
-configureDisplays({ autoImages: winCtx.autoImages });
+configureDisplays({
+  autoImages: winCtx.autoImages,
+  // jarvis.action() of an application, confirmed by the user: the action of the discussion's project
+  appAction: (taskId, name, args) => {
+    const t = S.tasks.get(taskId);
+    const proj = projectFor(t?.workdir);
+    const a = proj?.actions?.find((x) => x.name === name);
+    if (!a) { toast(proj ? `Action introuvable dans « ${proj.name} » : /${name}` : "Cette discussion n'est pas dans un projet.", "err"); return; }
+    runAction(panelCtx, proj.folder, a, { args });
+  },
+});
 
 function openWindow(t, fresh) {
   let w = S.windows.get(t.id);
@@ -698,7 +721,10 @@ function onTask(t, fresh = false) {
   else if (!t.closed && (fresh || !prev)) openWindow(t, fresh || !prev);
   renderTaskbar();
   renderHistory();
+  if (t.action && (!prev || prev.status !== t.status || prev.title !== t.title)) actionRunsChanged(); // its line in the project's Actions tab
 }
+
+const actionRunsChanged = debounce(() => projectActionsChanged(), 400);
 
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
@@ -724,7 +750,7 @@ function showDisplay(ev) {
   const e = setDoc(ev.task_id, d);
   if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
   const first = (d.rev || 1) === 1 || e.movedFrom;
-  const color = S.tasks.get(ev.task_id)?.color;
+  const color = taskTint(S.tasks.get(ev.task_id));
   const w = S.windows.get(ev.task_id);
   const looking = w && wm.has(ev.task_id) && !wm.isMinimized(ev.task_id);
   if (d.ou === "fenetre" || (d.ou === "modale" && !looking)) {
@@ -742,7 +768,7 @@ function showDisplay(ev) {
     Live events only, never when replaying a conversation. Other sites wait for a click in the task. */
 function showFiles(ev) {
   if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
-  const color = S.tasks.get(ev.task_id)?.color;
+  const color = taskTint(S.tasks.get(ev.task_id));
   for (const path of ev.data?.files || []) openPreview({ taskId: ev.task_id, path, color });
   for (const url of ev.data?.urls || []) {
     let image = false;
@@ -788,7 +814,7 @@ function taskPill(id) {
   const name = t ? t.title : m.title;
   const close = () => (t ? S.windows.get(id)?.close() : m.onClose?.());
   const pill = h("div", {
-    class: "tpill", role: "button", tabindex: "0", style: { "--pc": (t ? t.color : m.color) || "var(--accent)" },
+    class: "tpill", role: "button", tabindex: "0", style: { "--pc": (t ? taskTint(t).color : m.color) || "var(--accent)" },
     title: `${t ? `${t.profile_name} · ${STATUS[t.status]} · ${t.prompt}` : `Aperçu · ${m.subtitle || name}`}\nClic : rétablir · glisser : déplacer`,
     on: { keydown: (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); wm.restore(id); } else if (e.key === "Delete") close();
@@ -874,7 +900,7 @@ document.addEventListener("click", (e) => {
   if (ref) {
     e.preventDefault();
     const taskId = ref.closest("[data-task]")?.dataset.task || ref.closest(".win")?.dataset.id;
-    if (taskId) openPreview({ taskId, path: ref.dataset.path, color: S.tasks.get(taskId)?.color });
+    if (taskId) openPreview({ taskId, path: ref.dataset.path, color: taskTint(S.tasks.get(taskId)) });
     else toast("Aperçu disponible depuis la fenêtre de la tâche.");
     return;
   }
@@ -938,9 +964,14 @@ function searchAnything() {
     useProject: (p) => { useProject(p); input.focus(); },
     openSession: (pid, sid) => showSession(panelCtx, pid, sid),
     actions: () => [
+      ...projectActions(),
       { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => input.focus() },
       { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
       { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },
+      { label: "Nouvelle note", icon: "note", hint: "Générale", keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: "" }) },
+      ...(projectFor(currentFolder()) ? [{ label: `Nouvelle note du projet ${projectFor(currentFolder()).name}`, icon: "note",
+        keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: projectFor(currentFolder()).folder }) }] : []),
+      { label: "Notes", icon: "note", keywords: "rappels mémos pense-bête", run: () => toggleNotes(notesCtx) },
       { label: "Sessions Claude Code", icon: "list", keywords: "desktop cli reprendre", run: () => toggleSessions(panelCtx) },
       { label: "Routines", icon: "clock", keywords: "tâches planifiées programmer", run: () => toggleRoutines(panelCtx) },
       { label: "Historique", icon: "clock", run: () => $("#btn-history").click() },
@@ -961,8 +992,16 @@ function searchAnything() {
     ],
   });
 }
+/** The buttons of the active project in Ctrl+K: a launch is a normal discussion of the project. */
+function projectActions() {
+  const proj = projectFor(currentFolder());
+  if (!proj) return [];
+  return (proj.actions || []).map((a) => ({ label: a.label, icon: "bolt", keywords: `${a.name} ${a.description || ""} action projet ${proj.name}`,
+    hint: `${proj.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAction(panelCtx, proj.folder, a) }));
+}
+
 function closeDrawers(except) {
-  for (const id of ["history", "sessions", "routines", "project"]) if (id !== except) document.getElementById(id).hidden = true;
+  for (const id of ["history", "sessions", "routines", "project", "notes"]) if (id !== except) document.getElementById(id).hidden = true;
 }
 const panelCtx = {
   profiles, presets: () => S.config.presets, launch, closeDrawers, onTask: (t) => onTask(t, true),
@@ -1013,6 +1052,25 @@ const panelCtx = {
   moveSession: (pid, sid, title, from) => moveSession(pid, sid, title, from),
 };
 $("#btn-project").addEventListener("click", () => toggleProject(panelCtx));
+
+/** What the notes need: accounts, the active folder, the project panel, the sound and system notification. */
+const notesCtx = {
+  profiles, currentProfile: () => S.profile, currentFolder, closeDrawers,
+  openProject: (folder) => {
+    const p = projectFor(folder);
+    if (!p) return;
+    useProject(p);
+    if ($("#project").hidden) toggleProject(panelCtx);
+  },
+  alert: ({ title, body, tag, onClick }) => {
+    if (S.config?.ui?.sounds) beep(660);
+    if (S.config?.general?.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
+      const n = new Notification(title, { body, tag, icon: "/static/img/favicon.svg", requireInteraction: true });
+      n.onclick = () => { window.focus(); onClick?.(); n.close(); };
+    }
+  },
+};
+$("#btn-notes").addEventListener("click", () => toggleNotes(notesCtx));
 $("#btn-history").addEventListener("click", () => {
   closeDrawers("history");
   toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask });

@@ -5,7 +5,8 @@
       "name": "console-demo",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["tests/demo_server.py"],
-      "port": 8790
+      "port": 8790,
+      "autoPort": true
     }
   ]
 }

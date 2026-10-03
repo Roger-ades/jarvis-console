@@ -1,6 +1,7 @@
 // Projects: named working folders with their defaults (account, permissions, model, effort).
 import { api } from "./api.js";
-import { dialog, h, toast } from "./util.js";
+import { dialog, h, paint, toast } from "./util.js";
+import { tintOf } from "./tint.js";
 
 let list = [];
 const key = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
@@ -40,8 +41,15 @@ export async function editProject({ folder, profiles, presets, models, current =
   const buttons = [{ label: "Annuler", value: null }];
   if (existing) buttons.push({ label: "Retirer le projet", value: "delete", cls: "danger" });
   buttons.push({ label: existing ? "Enregistrer" : "Créer le projet", value: "save", cls: "primary" });
+  // the dialog takes the colors of the account and of the project, and follows them while they are chosen
+  const accountColor = () => profiles.find((x) => x.id === (account.value || current.profile))?.color || profiles[0]?.color;
+  let box = null;
+  const repaint = () => box && paint(box, tintOf(accountColor(), color.value));
+  color.addEventListener("input", repaint);
+  account.addEventListener("change", repaint);
   const v = await dialog({ title: existing ? `Projet ${existing.name}` : "Nouveau projet", body, buttons,
-    onOpen: (box) => { box.classList.add("pf-dialog"); name.focus(); name.select(); } });
+    tint: tintOf(accountColor(), p.color),
+    onOpen: (b) => { box = b; b.classList.add("pf-dialog"); name.focus(); name.select(); } });
   if (!v) return null;
   try {
     if (v === "delete") {

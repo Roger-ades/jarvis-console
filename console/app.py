@@ -460,6 +460,14 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def task_display_answer(tid: str, key: str, body: DisplayAnswerIn):
         return engine.display_answer(tid, key, body.bloc, body.choix, body.autre, body.bouton)
 
+    @app.post("/api/tasks/{tid}/displays/{key}/app")
+    def task_display_app(tid: str, key: str, body: dict = Body(...)):
+        return engine.display_app(tid, key, int(body.get("bloc") or 0))
+
+    @app.post("/api/tasks/{tid}/displays/{key}/app-message")
+    def task_display_app_message(tid: str, key: str, body: dict = Body(...)):
+        return engine.display_app_message(tid, key, int(body.get("bloc") or 0), str(body.get("contenu") or ""))
+
     @app.post("/api/tasks/{tid}/cancel")
     def task_cancel(tid: str):
         return engine.cancel(tid)
@@ -502,6 +510,47 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def project_delete(folder: str):
         engine.delete_project(folder)
         return {"ok": True}
+
+    @app.get("/api/notes")
+    def notes(folder: str | None = None):
+        return {"notes": engine.notes(folder)}
+
+    @app.post("/api/notes")
+    def note_create(body: dict = Body(...)):
+        return engine.save_note(body)
+
+    @app.patch("/api/notes/{note_id}")
+    def note_update(note_id: str, body: dict = Body(...)):
+        return engine.save_note(body, note_id)
+
+    @app.delete("/api/notes/{note_id}")
+    def note_delete(note_id: str):
+        engine.delete_note(note_id)
+        return {"ok": True}
+
+    @app.get("/api/projects/actions")
+    def project_actions(folder: str, profile: str | None = None):
+        proj = engine._project(folder)
+        if not proj:
+            return _err(404, "Projet introuvable.")
+        return {"actions": engine.project_actions(proj.folder, content=True, profile=profile),
+                "routines": engine.project_routines(proj.folder)}
+
+    @app.post("/api/projects/actions/settings")
+    def project_action_settings(body: dict = Body(...)):
+        return engine.set_action_prefs(str(body.get("folder") or ""), str(body.get("name") or ""),
+                                       str(body.get("model") or ""), str(body.get("effort") or ""))
+
+    @app.post("/api/projects/actions/approve")
+    def project_action_approve(body: dict = Body(...)):
+        return engine.approve_action(str(body.get("folder") or ""), str(body.get("name") or ""),
+                                     str(body.get("hash") or ""))
+
+    @app.post("/api/projects/actions/run")
+    def project_action_run(body: dict = Body(...)):
+        return engine.run_action(str(body.get("folder") or ""), str(body.get("name") or ""),
+                                 str(body.get("arguments") or ""), confirmed=bool(body.get("confirmed")),
+                                 approve=str(body.get("approve") or ""), profile=body.get("profile") or None)
 
     @app.delete("/api/workspace/rules")
     def workspace_rule_delete(pattern: str, profile: str | None = None, folder: str | None = None):
@@ -817,6 +866,13 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         e = engine.contents.get(cid)
         if not e:
             return PlainTextResponse("Cet aperçu a expiré : rouvre-le depuis la console.", status_code=404)
+        if e.kind != "page":  # an application written by Claude, or its shell: nothing next to them
+            csp = (content.shell_policy(e.target, frame_parents()) if e.kind == "shell"
+                   else content.app_policy(f"http://{content_host} {frame_parents()}"))
+            if rest:
+                return PlainTextResponse("Introuvable.", status_code=404, headers={"Content-Security-Policy": csp})
+            return Response(e.page, media_type="text/html; charset=utf-8",
+                            headers={"Content-Security-Policy": csp, "Referrer-Policy": "no-referrer"})
         csp = content.policy(f"http://{content_host}", frame_parents(), e.remote)
         if not rest:
             return Response(e.page, media_type="text/html; charset=utf-8", headers={"Content-Security-Policy": csp})

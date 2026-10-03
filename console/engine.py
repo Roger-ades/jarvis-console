@@ -25,7 +25,8 @@ from pathlib import Path
 from . import activity as activity_mod
 from . import attachments as att
 from . import display as display_mod
-from . import claude_cli, cloud, content, library, mcp
+from . import claude_cli, cloud, content, library, mcp, presence
+from . import project_tools
 from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
                      expand_path, trusted_url, web_domain)
@@ -89,7 +90,9 @@ RESULT_SPEC = {
 }
 PRESENT_TOOL = f"mcp__{CONSOLE_MCP}__presenter"
 PRESENT_SPEC = display_mod.TOOL_SPEC
-CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL}
+PROPOSE_TOOL = f"mcp__{CONSOLE_MCP}__proposer"
+PROPOSE_SPEC = project_tools.PROPOSE_SPEC
+CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL}
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
 
@@ -143,7 +146,7 @@ def _offer(q: asyncio.Queue, item):
 class Approval:
     id: str
     request_id: str
-    kind: str                 # hook | permission | question | plan
+    kind: str                 # hook | permission | question | plan | proposal
     tool: str
     input: dict
     reason: str
@@ -419,6 +422,18 @@ class Engine:
                 self.tasks[t["id"]] = t
                 self._event(t["id"], "status", {"status": "interrupted", "text": t["error"]})
             self.tasks[t["id"]] = t
+        # discussions launched by a project action before they kept its name
+        scanned: dict[str, set] = {}
+        for t in self.tasks.values():
+            act = "action" not in t and project_tools.action_of(t.get("prompt") or "")
+            proj = act and self._project(t.get("workdir"))
+            if proj:
+                key = norm(proj.folder)
+                if key not in scanned:
+                    scanned[key] = {a["name"] for a in project_tools.scan(proj.folder)} if os.path.isdir(proj.folder) else set()
+                if act[0] in scanned[key]:
+                    t["action"] = act[0]
+                    self.store.save_task(t)
 
     def _purge_old(self):
         days = self.cfg.history.retention_days
@@ -541,7 +556,7 @@ class Engine:
             "queued_messages": [att.message(text, files)], "origin": origin, "routine": routine,
             "attachments_dir": str(adir), "attachments": files,
             "not_before": float(not_before) if not_before and not_before > now else None,
-            "resumed_from": resume, "fork_next": bool(resume and fork),
+            "resumed_from": resume, "fork_next": bool(resume and fork), "action": self._action_link(text, wd),
             "team": bool(team_agents), "team_agents": team_models,
             "spec": {"profile": dump_model(prof), "preset": dump_model(pre),
                      "rules": [dump_model(r) for r in cfg.tool_rules],
@@ -913,7 +928,9 @@ class Engine:
         for p in self.cfg.projects:
             key = norm(p.folder)
             mine = [t for t in tasks if norm(t.get("workdir") or "") == key]
-            out.append({**p.model_dump(), "exists": os.path.isdir(p.folder), "discussions": len(mine),
+            exists = os.path.isdir(p.folder)
+            out.append({**p.model_dump(), "exists": exists, "discussions": len(mine),
+                        "actions": self.project_actions(p.folder) if exists else [],
                         "last": max((t.get("created") or 0 for t in mine), default=None),
                         "rules": len([r for r in self.cfg.project_rules if norm(r.folder) == key])})
         out.sort(key=lambda x: (not x["pinned"], -(x["last"] or x["created"] or 0)))
@@ -946,6 +963,317 @@ class Engine:
         cfg.projects = keep
         self.cfg_store.save(cfg, f"projet retiré : {Path(folder).name}")  # the folder itself is untouched
         self.bus.publish("projects", {"projects": self.projects()})
+
+    def _project(self, folder: str | None):
+        key = norm(folder or "")
+        return next((p for p in self.cfg.projects if key and norm(p.folder) == key), None)
+
+    # -------------------------------------------------------- notes (general or of a project, with a reminder)
+    def notes(self, folder: str | None = None) -> list[dict]:
+        """Every note, newest first; with a folder, only that project's notes ("" = the general ones)."""
+        out = self.store.list_notes()
+        if folder is not None:
+            key = norm(folder)
+            out = [n for n in out if norm(n.get("folder") or "") == key]
+        return out
+
+    def save_note(self, data: dict, note_id: str | None = None) -> dict:
+        """Create a note, or change the fields given of an existing one."""
+        old = self.store.get_note(note_id) if note_id else None
+        if note_id and not old:
+            raise TaskError("Note introuvable.", 404)
+        note = dict(old or {"id": uuid.uuid4().hex[:12], "created": time.time(), "text": "",
+                            "profile": "", "folder": "", "remind_at": None, "reminded": False})
+        if "text" in data:
+            note["text"] = str(data.get("text") or "").strip()
+        if not note["text"]:
+            raise TaskError("La note est vide.")
+        if len(note["text"]) > 20000:
+            raise TaskError("La note est trop longue (20 000 caractères au plus).")
+        if "folder" in data:
+            folder = str(data.get("folder") or "")
+            proj = self._project(folder) if folder else None
+            if folder and not proj:
+                raise TaskError("Projet inconnu.")
+            note["folder"] = proj.folder if proj else ""
+        if "profile" in data:
+            note["profile"] = str(data.get("profile") or "")
+        if not note["profile"]:  # a project note follows its project's account by default
+            proj = self._project(note["folder"])
+            note["profile"] = (proj.profile if proj and proj.profile else "") or                 (self.cfg.profiles[0].id if self.cfg.profiles else "")
+        if note["profile"] and not self.cfg.profile(note["profile"]):
+            raise TaskError("Compte inconnu.")
+        if "remind_at" in data:
+            at = data.get("remind_at")
+            try:
+                note["remind_at"] = float(at) if at not in (None, "", 0) else None
+            except (TypeError, ValueError) as e:
+                raise TaskError("Date de rappel invalide.") from e
+            note["reminded"] = False  # a new date rings again
+        if "reminded" in data:
+            note["reminded"] = bool(data.get("reminded"))
+        note["updated"] = time.time()
+        self.store.save_note(note)
+        self.bus.publish("notes", {"note": note})
+        return note
+
+    def delete_note(self, note_id: str):
+        if not self.store.delete_note(note_id):
+            raise TaskError("Note introuvable.", 404)
+        self.bus.publish("notes", {"deleted": note_id})
+
+    # -------------------------------------------------------- project actions (its commands and skills)
+    def project_actions(self, folder: str, content: bool = False, profile: str | None = None) -> list[dict]:
+        """The actions of a project folder, each one "ok" (validated as it is), "nouvelle" or "modifiee",
+        with the model and effort chosen for it ("" = the project's). With `content`: also its files,
+        the model it inherits and its latest launches."""
+        pins = (self.store.kv_get("action_pins", {}) or {}).get(norm(folder), {})
+        prefs = self._action_prefs(folder)
+        proj = self._project(folder) if content else None
+        inherited = self._inherited_model(proj, profile) if proj else None
+        out = []
+        for a in project_tools.scan(folder) if folder and os.path.isdir(folder) else []:
+            pin = pins.get(a["name"])
+            a["status"] = "ok" if pin == a["hash"] else ("modifiee" if pin else "nouvelle")
+            a.update({"model": "", "effort": "", **prefs.get(a["name"], {})})
+            if content:
+                a["inherited"] = inherited
+                a["runs"] = self.action_runs(folder, a["name"])
+            else:
+                a.pop("content", None)
+                a.pop("files", None)
+            out.append(a)
+        return out
+
+    def _action_link(self, prompt: str, workdir: str) -> str:
+        """The project action a discussion runs ("/nom …" in the folder of a project that has it), or ""."""
+        act = project_tools.action_of(prompt)
+        proj = self._project(workdir) if act else None
+        if not proj or not os.path.isdir(proj.folder):
+            return ""
+        return act[0] if any(a["name"] == act[0] for a in project_tools.scan(proj.folder)) else ""
+
+    def action_runs(self, folder: str, name: str, limit: int = 30) -> list[dict]:
+        """The discussions launched with an action (button, routine, Ctrl+K or typed), newest first."""
+        key = norm(folder)
+        with self._lock:
+            mine = [t for t in self.tasks.values() if t.get("action") == name and norm(t.get("workdir") or "") == key]
+        mine.sort(key=lambda t: t.get("created") or 0, reverse=True)
+        return [{k: t.get(k) for k in ("id", "title", "prompt", "status", "created", "ended", "model", "model_resolved",
+                                       "effort", "origin", "cost_usd", "profile_name", "color")} for t in mine[:limit]]
+
+    def _action_prefs(self, folder: str) -> dict:
+        return (self.store.kv_get("action_prefs", {}) or {}).get(norm(folder), {})
+
+    def _inherited_model(self, proj, profile: str | None = None) -> dict:
+        """The model and effort a launch of the project uses when its action has none of its own, and where they come from."""
+        prof = self.cfg.profile(proj.profile or profile or self.cfg.general.default_profile)
+        if not prof:
+            return {"model": "default", "source": "compte", "resolved": "", "effort": "", "effort_source": "compte"}
+        pre = self.cfg.preset(proj.preset or prof.default_preset)
+        model, source = next(((v, s) for v, s in ((proj.model, "projet"), (pre.model if pre else "", "autorisations"),
+                                                   (prof.default_model, "compte")) if v), ("default", "compte"))
+        resolved = next((m.get("resolved") for m in (self.probes.get(prof.id) or {}).get("models") or []
+                         if m.get("value") == model and m.get("resolved")), "")
+        effort, esrc = (proj.effort, "projet") if proj.effort else (prof.effort, "compte")
+        return {"model": model, "source": source, "resolved": resolved or "", "profile": prof.id,
+                "profile_name": prof.name, "effort": effort, "effort_source": esrc}
+
+    def set_action_prefs(self, folder: str, name: str, model: str = "", effort: str = "") -> dict:
+        """The model and effort of an action's launches (kept by the console: the action's file is untouched)."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        if not any(a["name"] == name for a in self.project_actions(proj.folder)):
+            raise TaskError(f"Action introuvable : /{name}", 404)
+        model, effort = (model or "").strip(), (effort or "").strip()
+        if model and not re.fullmatch(r"[A-Za-z0-9._:\-\[\]]{1,80}", model):
+            raise TaskError("Nom de modèle invalide.")
+        if effort not in ("", "low", "medium", "high", "xhigh", "max"):
+            raise TaskError("Niveau d'effort invalide.")
+        prefs = self.store.kv_get("action_prefs", {}) or {}
+        mine = prefs.setdefault(norm(proj.folder), {})
+        if model or effort:
+            mine[name] = {"model": model, "effort": effort}
+        else:
+            mine.pop(name, None)
+        self.store.kv_set("action_prefs", prefs)
+        self._audit("réglages d'action", {"projet": proj.name, "action": f"/{name}", "modèle": model or "celui du projet",
+                                          "effort": effort or "celui du projet"})
+        self.bus.publish("projects", {"projects": self.projects()})
+        return {"model": model, "effort": effort}
+
+    def _pin_action(self, folder: str, name: str, fp: str):
+        pins = self.store.kv_get("action_pins", {}) or {}
+        pins.setdefault(norm(folder), {})[name] = fp
+        self.store.kv_set("action_pins", pins)
+        self.bus.publish("projects", {"projects": self.projects()})
+
+    def approve_action(self, folder: str, name: str, fp: str) -> dict:
+        """The user validated an action as shown: the fingerprint must still be that of the files."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        a = next((x for x in self.project_actions(proj.folder, content=True) if x["name"] == name), None)
+        if not a:
+            raise TaskError("Action introuvable.", 404)
+        if a["hash"] != fp:
+            raise TaskError("L'action a changé depuis son affichage : relis-la avant de la valider.", 409,
+                            need_approval=True, action=a)
+        self._pin_action(proj.folder, name, fp)
+        self._audit("action de projet validée", {"projet": proj.name, "action": f"/{name}", "fichier": a["path"],
+                                                  "empreinte": fp})
+        return {**a, "status": "ok"}
+
+    def run_action(self, folder: str, name: str, arguments: str = "", confirmed: bool = False,
+                   approve: str = "", profile: str | None = None) -> dict:
+        """A project action launched from its button: a normal discussion of the project ("/nom arguments"),
+        with the project's account and preset, the model and effort chosen for the action (else the
+        project's), under the same policy."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        a = next((x for x in self.project_actions(proj.folder, content=True) if x["name"] == name), None)
+        if not a:
+            raise TaskError(f"Action introuvable : /{name}", 404)
+        if a["status"] != "ok":
+            if approve != a["hash"]:
+                why = "a changé depuis sa validation" if a["status"] == "modifiee" else "n'a pas encore été validée"
+                raise TaskError(f"L'action « /{name} » {why} : relis-la avant de la lancer.", 409,
+                                need_approval=True, action=a)
+            self.approve_action(proj.folder, name, approve)
+        args = " ".join(str(arguments or "").split())[:4000]
+        pref = self._action_prefs(proj.folder).get(name, {})
+        return self.create_task(f"/{name} {args}".strip(), profile=proj.profile or profile or None,
+                                model=pref.get("model") or proj.model or None, preset=proj.preset or None,
+                                workdir=proj.folder, effort=pref.get("effort") or proj.effort or None,
+                                confirmed=confirmed, origin="action")
+
+    def project_routines(self, folder: str) -> list[dict]:
+        key = norm(folder or "")
+        return [r.public() for r in sorted(self.routines.values(), key=lambda r: (r.name, r.id))
+                if r.workdir and norm(r.workdir) == key]
+
+    def _routine_action_problem(self, r: Routine) -> str | None:
+        """A routine that launches a project action runs it only as the user validated it."""
+        act = project_tools.action_of(r.prompt)
+        proj = self._project(r.workdir) if act and r.workdir else None
+        if not proj:
+            return None
+        a = next((x for x in self.project_actions(proj.folder) if x["name"] == act[0]), None)
+        if a and a["status"] != "ok":
+            return (f"L'action « /{a['name']} » {'a changé depuis sa validation' if a['status'] == 'modifiee' else 'n’est pas validée'} : "
+                    "ouvre le projet pour la relire et la valider.")
+        return None
+
+    # -------------------------------------------------------- what Claude proposes to add to a project
+    def _propose(self, tid: str, run: Run, rid: str, msg: dict):
+        """Tool "proposer": checked here, then held on a card until the user decides; nothing is written or
+        enabled before that click."""
+        mid = msg.get("id")
+
+        def reply(text: str, failed: bool = False):
+            self._respond(run, rid, {"mcp_response": {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": text}], "isError": failed}}})
+
+        try:
+            prop = self._proposal(tid, (msg.get("params") or {}).get("arguments") or {})
+        except TaskError as exc:
+            return reply("Rien de proposé : " + exc.message, True)
+        what = "une action" if prop["quoi"] == "action" else "une routine"
+        appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=PROPOSE_TOOL, input=prop,
+                        reason=f"Claude propose d'ajouter {what} au projet « {prop['projet']} ».")
+
+        def answer(a: Approval):
+            if a.decision != "allow":
+                return reply("L'utilisateur n'a pas retenu la proposition" + (f" : {a.message}" if a.message else ".")
+                             + " N'insiste pas et ne l'écris pas toi-même.")
+            try:
+                reply(self._apply_proposal(tid, prop, a.answers or {}))
+            except TaskError as exc:
+                reply("Acceptée, mais pas enregistrée : " + exc.message, True)
+        self._park(tid, run, appr, answer)
+
+    def _proposal(self, tid: str, args: dict) -> dict:
+        t = self._get(tid)
+        proj = self._project(t["workdir"])
+        if not proj:
+            raise TaskError("cette discussion n'est pas dans un projet de la console (le dossier de travail doit "
+                            "être celui d'un projet).")
+        args = args if isinstance(args, dict) else {}
+
+        def text(key: str, limit: int, required: bool = False) -> str:
+            v = args.get(key)
+            v = "" if v is None else str(v).strip()
+            if required and not v:
+                raise TaskError(f"« {key} » est requis.")
+            if len(v) > limit:
+                raise TaskError(f"« {key} » est trop long ({limit} caractères au plus).")
+            return v
+
+        quoi = text("quoi", 20, True).lower()
+        base = {"quoi": quoi, "projet": proj.name, "dossier": proj.folder, "description": text("description", 300, True)}
+        if quoi == "action":
+            name = text("nom", 40, True).lower()
+            if not project_tools.NAME.match(name):
+                raise TaskError("nom d'action invalide : minuscules, chiffres et tirets, 40 caractères au plus.")
+            existing = {a["name"]: a for a in self.project_actions(proj.folder, content=True)}
+            if existing.get(name, {}).get("kind") == "skill":
+                raise TaskError(f"le projet a déjà un skill « {name} » : choisis un autre nom.")
+            path = Path(proj.folder) / ".claude" / "commands" / f"{name}.md"
+            label, hint = text("libelle", 60), text("parametre", 200)
+            body = text("consigne", 20000, True)
+            old = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+            return {**base, "nom": name, "libelle": label, "parametre": hint, "consigne": body, "fichier": str(path),
+                    "remplace": old, "contenu": project_tools.command_file(name, label, base["description"], hint, body)}
+        if quoi != "routine":
+            raise TaskError("« quoi » vaut action ou routine.")
+        from .routines import Schedule
+        action = text("action", 40).lower().lstrip("/")
+        if action:
+            if not any(a["name"] == action for a in self.project_actions(proj.folder)):
+                raise TaskError(f"le projet n'a pas d'action « /{action} » (propose-la d'abord).")
+            prompt = f"/{action} {' '.join(text('arguments', 4000).split())}".strip()
+        else:
+            prompt = text("consigne", 20000, True)
+        try:
+            sched = Schedule.model_validate(project_tools.schedule(args.get("planification")))
+        except ValueError as exc:
+            raise TaskError(f"planification invalide : {exc}") from exc
+        model = t["model"] if t.get("model") and t["model"] != "default" else ""
+        r = {"name": text("nom", 80, True), "prompt": prompt, "profile": t["profile"], "preset": t["preset"],
+             "model": model, "effort": t.get("effort") or "", "workdir": proj.folder, "schedule": sched.model_dump(),
+             "open_window": True}
+        try:
+            self._check_routine(Routine.model_validate(r))
+        except ValueError as exc:
+            raise TaskError(f"routine invalide : {exc}") from exc
+        return {**base, "nom": r["name"], "consigne": prompt, "routine": r, "planification": sched.label(),
+                "compte": t["profile_name"], "preset": t["preset_name"], "modele": model or "par défaut"}
+
+    def _apply_proposal(self, tid: str, prop: dict, answers: dict) -> str:
+        t = self._get(tid)
+        if prop["quoi"] == "action":
+            path = Path(prop["fichier"])
+            now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+            if now != prop["remplace"]:
+                raise TaskError("le fichier de l'action a changé pendant la proposition.")
+            self._write_doc(path, prop["contenu"])
+            a = next((x for x in self.project_actions(prop["dossier"]) if x["name"] == prop["nom"]), None)
+            if not a:
+                raise TaskError("l'action écrite est introuvable.")
+            self._pin_action(prop["dossier"], a["name"], a["hash"])
+            self._audit("action de projet ajoutée", {"projet": prop["projet"], "action": f"/{a['name']}",
+                                                      "fichier": str(path), "remplace": prop["remplace"] is not None}, t)
+            return (f"Action « /{a['name']} » {'remplacée' if prop['remplace'] is not None else 'ajoutée'} au projet "
+                    f"« {prop['projet']} » ({path}) : elle apparaît comme un bouton « {a['label']} » dans la console.")
+        enabled = str(answers.get("activer", "oui")).lower() not in ("non", "false", "0")
+        r = self.save_routine({**prop["routine"], "enabled": enabled})
+        self._audit("routine proposée par Claude", {"projet": prop["projet"], "nom": r["name"], "active": enabled}, t)
+        when = (" Prochaine exécution : " + time.strftime("%d/%m/%Y %H:%M", time.localtime(r["next_run"])) + "."
+                if enabled and r.get("next_run") else "")
+        return (f"Routine « {r['name']} » ({r['schedule_label']}) ajoutée au projet "
+                f"{'et activée' if enabled else 'mais désactivée : l’utilisateur l’activera'}.{when}")
 
     # -------------------------------------------------------- rules remembered for a project
     def project_allow(self, folder: str) -> list[str]:
@@ -1119,7 +1447,11 @@ class Engine:
         for d in [*(t.get("add_dirs") or []), *([t["attachments_dir"]] if t.get("attachments_dir") else [])]:
             args += ["--add-dir", d]
         team = spec.get("team") or {}
-        system = "\n\n".join(x for x in (spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
+        proj = self._project(t["workdir"])
+        where = presence.prompt(t, prof, pre, proj.name if proj else "", ask_user=self.cfg.general.ask_user_questions,
+                                actions=[a for a in self.project_actions(proj.folder) if a["status"] == "ok"] if proj else None,
+                                routines=self.project_routines(proj.folder) if proj else None)
+        system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
                              if x and x.strip())
         if team.get("agents"):
             f = self.runtime / f"{t['id']}-{secrets.token_hex(3)}.agents.json"
@@ -1651,8 +1983,11 @@ class Engine:
             return self._respond(run, rid, {"behavior": "deny", "message": reason})
 
         if sub == "mcp_message":
-            return self._respond(run, rid, {"mcp_response": self._console_mcp(tid, req.get("server_name"),
-                                                                              req.get("message") or {})})
+            message = req.get("message") or {}
+            if (req.get("server_name") == CONSOLE_MCP and message.get("method") == "tools/call"
+                    and (message.get("params") or {}).get("name") == PROPOSE_SPEC["name"]):
+                return self._propose(tid, run, rid, message)
+            return self._respond(run, rid, {"mcp_response": self._console_mcp(tid, req.get("server_name"), message)})
 
         self._respond(run, rid, error=f"Requête non prise en charge par la console : {sub}")
 
@@ -1670,7 +2005,7 @@ class Engine:
             return ok({"protocolVersion": params.get("protocolVersion") or "2024-11-05", "capabilities": {"tools": {}},
                        "serverInfo": {"name": CONSOLE_MCP, "version": "1.0.0"}})
         if method == "tools/list":
-            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC]})
+            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC]})
         if method == "tools/call":
             if silent:
                 return ok({"content": [{"type": "text", "text": "Indisponible pendant un maintien du cache."}], "isError": True})
@@ -1681,6 +2016,8 @@ class Engine:
                 text, failed = self.show_result(tid, args)
             elif params.get("name") == PRESENT_SPEC["name"]:
                 text, failed = self.present(tid, args)
+            elif params.get("name") == PROPOSE_SPEC["name"]:
+                text, failed = "La proposition passe par la fenêtre de la discussion.", True  # (see _propose)
             else:
                 text, failed = f"Outil inconnu : {params.get('name')}", True
             return ok({"content": [{"type": "text", "text": text}], "isError": failed})
@@ -1775,7 +2112,7 @@ class Engine:
         where = {"conversation": "dans la conversation", "fenetre": "dans une fenêtre", "modale": "au premier plan"}[doc["ou"]]
         lines = [f"{'Mis à jour' if prev else 'Affiché'} {where} de la console JARVIS : « {doc['titre']} » "
                  f"({display_mod.summary(doc)}). Identifiant : {key} (à passer en id pour le modifier)."]
-        if any(b["type"] in ("choix", "actions") for b in doc["blocs"]):
+        if any(b["type"] in ("choix", "actions", "application") for b in doc["blocs"]):
             lines.append("Les réponses de l'utilisateur t'arriveront comme un nouveau message, préfixé par "
                          f"« [Affichage « {doc['titre']} »] » : termine ton tour sans les attendre.")
         if waiting:
@@ -1807,6 +2144,41 @@ class Engine:
             self._event(tid, "display_answer", {"key": key, "rev": d["rev"], "bloc": index, "labels": [], "annule": True})
             raise
         self._audit("réponse à un affichage", {"titre": _clip(d["doc"]["titre"], 200), "réponse": labels}, t)
+        return out
+
+    APP_MESSAGES = 40  # messages one application may send to its session
+
+    def _app_block(self, tid: str, key: str, index: int) -> tuple[dict, dict]:
+        d = self._display(tid, key)
+        if not d:
+            raise TaskError("Affichage introuvable.", 404)
+        blocks = d["doc"]["blocs"]
+        if not 0 <= index < len(blocks) or blocks[index]["type"] != "application":
+            raise TaskError("Ce bloc n'est pas une application.", 404)
+        return d, blocks[index]
+
+    def display_app(self, tid: str, key: str, index: int) -> dict:
+        """The address of an application of a display: a shell on the preview origin around the sandboxed page."""
+        d, b = self._app_block(tid, key, index)
+        title = b.get("titre") or d["doc"]["titre"]
+        return {"url": self.content_url(self.contents.put_app(b["html"], title, self.content_url)), "hauteur": b["hauteur"]}
+
+    def display_app_message(self, tid: str, key: str, index: int, text: str) -> dict:
+        """jarvis.envoyer() in an application, after a click of the user: sent to the session as a message."""
+        t = self._get(tid)
+        d, b = self._app_block(tid, key, index)
+        text = str(text or "").strip()
+        if not text:
+            raise TaskError("Message vide.")
+        sent = d.setdefault("app_sent", {})
+        if sent.get(index, 0) >= self.APP_MESSAGES:
+            raise TaskError(f"Cette application a déjà envoyé {self.APP_MESSAGES} messages : rouvre-la depuis Claude.", 429)
+        if len(text) > 8000:
+            text = text[:8000].rstrip() + "…"
+        name = b.get("titre") or d["doc"]["titre"]
+        out = self.followup(tid, f"[Affichage « {d['doc']['titre']} »] Application « {name} » :\n{text}")
+        sent[index] = sent.get(index, 0) + 1
+        self._audit("message d'une application", {"titre": _clip(name, 200), "caractères": len(text)}, t)
         return out
 
     # -------------------------------------------------------- results of tools, shown as they are
@@ -2795,6 +3167,9 @@ class Engine:
                 if self.emergency:
                     raise TaskError("Arrêt d'urgence actif.", 423)
                 self._check_routine(r)
+                why = self._routine_action_problem(r)
+                if why:
+                    raise TaskError(why)
                 blocked = self.limit_block(r.profile)
                 t = self.create_task(r.prompt, profile=r.profile, model=r.model or None, preset=r.preset,
                                      workdir=r.workdir or None, effort=r.effort or None, confirmed=True,
