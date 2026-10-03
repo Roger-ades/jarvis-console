@@ -44,24 +44,86 @@ def profile_servers(profile: Profile) -> tuple[dict, str]:
     return servers, err
 
 
-def web_apps(profile: Profile) -> list[dict]:
-    """The web applications behind the profile's MCP servers, so that Claude can open their pages (afficher):
-    [{name, url, kind}] from an https:// address in an env variable named …URL (ODOO_URL). Only that
-    address is read: never the other env values, never an address that carries credentials."""
-    servers, _ = profile_servers(profile)
+_cli_configs: dict[str, tuple[tuple, dict]] = {}
+
+
+def _cli_servers(profile: Profile, workdir: str = "") -> dict:
+    """The servers the user declared in Claude Code's own configuration: <config dir>/.claude.json (~/.claude.json
+    without one), for every folder and for this one. Only their declarations are kept (the file also holds the
+    CLI's state), read again when it changes. Not a folder's .mcp.json: it comes with the folder's content, and
+    its servers wait for the user's approval in Claude Code."""
+    cd = expand_path(profile.config_dir)
+    path = Path(cd) / ".claude.json" if cd else Path.home() / ".claude.json"
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+        hit = _cli_configs.get(str(path))
+        if hit and hit[0] == stamp:
+            data = hit[1]
+        else:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw = raw if isinstance(raw, dict) else {}
+            projects = raw.get("projects") if isinstance(raw.get("projects"), dict) else {}
+            data = {"mcpServers": raw.get("mcpServers") if isinstance(raw.get("mcpServers"), dict) else {},
+                    "projects": {k: v["mcpServers"] for k, v in projects.items()
+                                 if isinstance(v, dict) and isinstance(v.get("mcpServers"), dict)}}
+            _cli_configs[str(path)] = (stamp, data)
+    except (OSError, ValueError):
+        return {}
+    servers = dict(data["mcpServers"])
+    if workdir:
+        want = os.path.normcase(os.path.normpath(workdir))
+        for folder, local in data["projects"].items():
+            if os.path.normcase(os.path.normpath(folder)) == want:
+                servers.update(local)
+    return {k: v for k, v in servers.items() if isinstance(v, dict)}
+
+
+def _https(value) -> tuple | None:
+    """(netloc, path) of an https:// address without credentials, else None."""
+    try:
+        u = urlsplit(str(value).strip())
+        ok = u.scheme == "https" and u.hostname and not u.username and not u.password
+    except ValueError:
+        return None
+    return (u.netloc, u.path) if ok else None
+
+
+def _app_url(conf: dict, odoo: bool) -> str:
+    """The address of the web application a server works on: an env variable named …URL (ODOO_URL), else an
+    argument named so (--url https://…, --odoo-url=https://…, ODOO_URL=https://…), else, for an Odoo server, an
+    https:// argument or the address it is reached at. Only those values are read, never the other env values;
+    an argument or a server address keeps only its site (its path or query may carry a key)."""
+    env = conf.get("env") if isinstance(conf.get("env"), dict) else {}
+    for key, value in env.items():
+        u = _https(value) if _URL_VAR.search(str(key)) else None
+        if u:
+            return f"https://{u[0]}{u[1]}".rstrip("/")
+    args = [str(a) for a in conf.get("args")] if isinstance(conf.get("args"), list) else []
+    for i, arg in enumerate(args):
+        named = re.match(r"^(--?[\w-]*url|\w*URL)=(.*)$", arg, re.I)
+        after = i > 0 and re.fullmatch(r"--?[\w-]*url", args[i - 1], re.I)
+        u = _https(named.group(2) if named else arg) if named or after or odoo else None
+        if u:
+            return f"https://{u[0]}"
+    u = _https(conf.get("url")) if odoo else None
+    return f"https://{u[0]}" if u else ""
+
+
+def web_apps(profile: Profile, workdir: str = "") -> list[dict]:
+    """The web applications behind the MCP servers of a task, so that Claude can open their pages (afficher) and
+    the console opens them without asking (the user gave that address to the server): [{name, url, kind}].
+    Servers of the profile (Claude Desktop, Intégrations) and of Claude Code's own configuration. Never an
+    address that carries credentials."""
+    cli = {} if profile.mcp.strict else _cli_servers(profile, workdir)  # --strict-mcp-config: not loaded
+    servers = {**cli, **profile_servers(profile)[0]}
     apps = []
     for name, conf in servers.items():
         env = conf.get("env") if isinstance(conf.get("env"), dict) else {}
-        for key, value in env.items():
-            try:
-                u = urlsplit(str(value).strip())
-                ok = u.scheme == "https" and u.hostname and not u.username and not u.password
-            except ValueError:
-                ok = False
-            if _URL_VAR.search(str(key)) and ok:
-                odoo = "odoo" in f"{name} {key} {conf.get('command', '')} {conf.get('args', '')}".lower()
-                apps.append({"name": name, "url": f"https://{u.netloc}{u.path}".rstrip("/"), "kind": "odoo" if odoo else ""})
-                break
+        odoo = "odoo" in " ".join(map(str, [name, conf.get("command", ""), conf.get("args", ""), conf.get("url", ""), *env])).lower()
+        url = _app_url(conf, odoo)
+        if url and all(a["url"] != url for a in apps):
+            apps.append({"name": name, "url": url, "kind": "odoo" if odoo else ""})
     return apps
 
 

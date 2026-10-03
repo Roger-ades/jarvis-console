@@ -61,3 +61,16 @@ def test_server_protocol(engine):
     wrong = eng._console_mcp("x", CONSOLE_MCP, {"id": 6, "method": "tools/call",
                                                "params": {"name": "afficher", "arguments": {"content": "# Devis"}}})
     assert wrong["result"]["isError"] and "passe « fichiers »" in wrong["result"]["content"][0]["text"]
+
+
+def test_the_pages_of_the_mcp_servers_applications_open_without_asking(engine, tmp_path):
+    cfg = engine.cfg.model_copy(deep=True)
+    cfg.profile("work").mcp.extra_servers = {
+        "odoo": {"command": "uvx", "args": ["mcp-server-odoo"], "env": {"ODOO_URL": "https://erp.example.com", "ODOO_API_KEY": "k"}}}
+    engine.cfg_store.save(cfg, "tests")
+    wd = tmp_path / "projet"
+    wd.mkdir()
+    task, events = run(engine, "SHOW https://erp.example.com/odoo/sale.order/42 | https://autre.example.net/x", wd)
+    shown = [e["data"] for e in events if e["kind"] == "show"]
+    assert shown == [{"files": [], "urls": ["https://erp.example.com/odoo/sale.order/42"], "ask": ["https://autre.example.net/x"]}]
+    assert "Affiché dans la console JARVIS : https://erp.example.com/odoo/sale.order/42" in task["result"]
