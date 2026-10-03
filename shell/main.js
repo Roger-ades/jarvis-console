@@ -8,9 +8,10 @@
 // live stream, one renderer process. The page asks for every window operation through the preload
 // (window.jarvis) and the main process checks that the request comes from the console's own page.
 "use strict";
-const { app, BrowserWindow, Menu, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, screen, session,
-  shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme,
+  screen, session, shell } = require("electron");
 const { spawn } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
 const os = require("os");
@@ -422,6 +423,89 @@ ipcMain.on("site:nav", (e, { op, url } = {}) => {
   }
 });
 
+// ------------------------------------------------------------------ notifications
+// An approval waiting (a tool call to allow or refuse) gets a notification of the OS with Approuver and
+// Refuser: on Windows through a notification XML whose buttons open jarvis://valider?… (this app is the
+// handler of jarvis:), on Mac through the notification's actions. Each notification carries a secret of
+// its own: a link forged elsewhere (a web page, another program) decides nothing. A click elsewhere on
+// it brings the discussion forward. Not shown while the user looks at that discussion.
+const notes = new Map();                 // approval id (or task:kind) -> {n, nonce, tid, aid}
+if (process.env.JARVIS_TEST) global.jarvisTest = { notes };   // (the tests read the secrets)
+
+const clipText = (s, n) => { const t = String(s || ""); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+const xml = (s) => String(s).replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]));
+
+function lookingAt(tid, pageSays) {
+  const f = BrowserWindow.getFocusedWindow();
+  if (!f || f.isMinimized() || !f.isVisible()) return false;
+  return mode === "integre" ? children.get(tid) === f : f === hub && !!pageSays;
+}
+
+function toastXml(p, title, body, nonce) {
+  const link = (action, extra = "") => xml(`jarvis://${action}?t=${encodeURIComponent(p.tid)}${p.aid ? `&a=${encodeURIComponent(p.aid)}` : ""}&k=${nonce}${extra}`);
+  return `<toast launch="${link("ouvrir")}" activationType="protocol"><visual><binding template="ToastGeneric">`
+    + `<text>${xml(title)}</text><text>${xml(body)}</text></binding></visual>`
+    + (p.buttons ? `<actions><action content="Approuver" activationType="protocol" arguments="${link("valider", "&amp;d=allow")}"/>`
+      + `<action content="Refuser" activationType="protocol" arguments="${link("valider", "&amp;d=deny")}"/></actions>` : "")
+    + "</toast>";
+}
+
+function notify(p) {
+  if (!p?.tid || lookingAt(p.tid, p.looking)) return false;
+  const key = p.aid || `${p.tid}:${p.kind}`;
+  notes.get(key)?.n.close();
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const title = clipText(p.title, 120), body = clipText(p.body, 300);
+  let n = null;
+  if (Notification.isSupported()) {
+    n = IS_WIN ? new Notification({ title, body, icon: ICON, toastXml: toastXml(p, title, body, nonce) })
+      : new Notification({ title, body, icon: ICON,
+        ...(IS_MAC && p.buttons ? { actions: [{ type: "button", text: "Approuver" }, { type: "button", text: "Refuser" }] } : {}) });
+    n.on("action", (_e, i) => decideFromOS(p.tid, p.aid, i === 0 ? "allow" : "deny", nonce));
+    n.on("click", () => openFromOS(p.tid));
+    n.show();
+  }
+  notes.set(key, { n, nonce, tid: p.tid, aid: p.aid || "" });
+  while (notes.size > 50) notes.delete(notes.keys().next().value);
+  return !!n;
+}
+
+/** The approval was decided (in its window, or from here): its notification goes. */
+function notifyDone(aid) {
+  const note = notes.get(aid);
+  if (!note) return;
+  notes.delete(aid);
+  try { note.n?.close(); } catch { /* already gone */ }
+}
+
+async function decideFromOS(tid, aid, decision, nonce) {
+  const note = notes.get(aid);
+  if (!note || note.nonce !== nonce || note.tid !== tid || !["allow", "deny"].includes(decision)) return;
+  notifyDone(aid);
+  try {
+    await call(port, `/api/tasks/${encodeURIComponent(tid)}/approvals/${encodeURIComponent(aid)}`, { method: "POST", token, body: { decision } });
+  } catch { openFromOS(tid); }   // (already decided, or the console is gone: the window tells)
+}
+
+function openFromOS(tid) {
+  wake();
+  if (mode === "fenetre") showHub();
+  if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "ouvrir", tid });
+}
+
+/** jarvis://ouvrir|valider?t=…&a=…&k=…&d=… — from a notification (Windows starts this app with it). */
+function handleLink(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return; }
+  if (u.protocol !== "jarvis:") return;
+  const action = u.hostname || u.pathname.replace(/^\/+/, "");
+  const q = (k) => u.searchParams.get(k) || "";
+  const note = [...notes.values()].find((x) => x.nonce === q("k") && x.tid === q("t"));
+  if (!note) { showHub(); return; }       // an old notification: nothing to decide
+  if (action === "valider" && note.aid && note.aid === q("a")) decideFromOS(note.tid, note.aid, q("d"), q("k"));
+  else openFromOS(note.tid);
+}
+
 // ------------------------------------------------------------------ the OS: launcher, how to start this app
 /** data/app.json: how the console opens this app (start.bat, launcher, session start: console/winsys.py). */
 function registerApp(data) {
@@ -548,6 +632,13 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
 
 ipcMain.on("jarvis:status", (e, s) => { if (fromConsole(e)) updateTray(s); });
 
+ipcMain.on("jarvis:notify", (e, p) => {
+  if (!fromConsole(e) || !p || typeof p !== "object") return;
+  notify({ tid: String(p.tid || ""), aid: String(p.aid || ""), kind: String(p.kind || ""), title: String(p.title || ""),
+    body: String(p.body || ""), buttons: !!p.buttons && !!p.aid, looking: !!p.looking });
+});
+ipcMain.on("jarvis:notify-done", (e, aid) => { if (fromConsole(e)) notifyDone(String(aid || "")); });
+
 ipcMain.handle("jarvis:site", (e, url) => (fromConsole(e) ? openSite(String(url || "")) : false));
 ipcMain.handle("jarvis:site-logout", (e) => (fromConsole(e) ? logoutSites() : false));
 
@@ -567,6 +658,9 @@ ipcMain.handle("jarvis:switch-mode", (e, m) => {
 // ------------------------------------------------------------------ start
 async function main() {
   if (IS_WIN) app.setAppUserModelId(AUMID);
+  // the handler of jarvis: links (the buttons of a notification); in development, with the app's folder
+  if (IS_MAC || app.isPackaged) app.setAsDefaultProtocolClient("jarvis");
+  else app.setAsDefaultProtocolClient("jarvis", process.execPath, APP_ARGS.map((a) => path.resolve(a)));
   const conf = settings();
   const data = conf.data;
   port = conf.port;
@@ -601,6 +695,8 @@ async function main() {
     hub.loadURL(`${origin}/#code=${code}`);
   }
   globalShortcut.register(SHORTCUT, () => showHub(true));
+  const link = process.argv.find((a) => a.startsWith("jarvis://"));   // started by a notification
+  if (link) handleLink(link);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -608,7 +704,12 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   // started again (launcher, start.bat with "Application de bureau"): JARVIS comes forward; a second
   // session start (--demarrage) changes nothing
-  app.on("second-instance", (_e, argv) => { if (!argv.includes("--demarrage")) showHub(); });
+  app.on("second-instance", (_e, argv) => {
+    const link = argv.find((a) => a.startsWith("jarvis://"));
+    if (link) handleLink(link);
+    else if (!argv.includes("--demarrage")) showHub();
+  });
+  app.on("open-url", (e, url) => { e.preventDefault(); handleLink(url); });   // (Mac)
   app.on("before-quit", () => { quitting = true; });
   app.on("will-quit", () => globalShortcut.unregisterAll());
   app.on("window-all-closed", () => { if (!tray) quit(); });

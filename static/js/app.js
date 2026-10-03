@@ -19,7 +19,7 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
+import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
 import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
@@ -508,7 +508,10 @@ const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
 // desktop app: its global shortcut (or its notification area) asks for a new request
-window.jarvis?.onCommand(({ cmd } = {}) => { if (cmd === "nouvelle-demande") { input.focus(); input.select(); } });
+window.jarvis?.onCommand(({ cmd, tid } = {}) => {
+  if (cmd === "nouvelle-demande") { input.focus(); input.select(); }
+  else if (cmd === "ouvrir" && S.tasks.has(tid)) openTask(tid);   // a click on a notification
+});
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
 
 /** From a window: this discussion becomes context of the next request. */
@@ -776,6 +779,7 @@ const actionRunsChanged = debounce(() => projectActionsChanged(), 400);
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
   if (w) w.addEvent(ev);
+  if (window.jarvis && (ev.kind === "approval" || ev.kind === "approval_done")) nativeNotify(ev);
   if (ev.kind === "show") showFiles(ev);
   if (ev.kind === "display") showDisplay(ev);
   if (ev.kind === "tool_result") followFiles();
@@ -922,6 +926,19 @@ function beep(freq) {
   } catch { /* no audio */ }
 }
 
+/** Desktop app: an approval waiting gets a notification of the OS, with Approuver and Refuser for a tool
+ * call (a question, a plan or a proposal is read in its window: a click opens it). */
+function nativeNotify(ev) {
+  const d = ev.data || {};
+  if (ev.kind === "approval_done") { window.jarvis.notifyDone(d.id); return; }
+  if (!S.config?.general?.notifications || (ev.ts && Date.now() / 1000 - ev.ts > 120)) return;
+  const t = S.tasks.get(ev.task_id);
+  const what = { question: "Question de Claude", plan: "Plan à approuver", proposal: "Proposition de Claude" }[d.kind] || toolLabel(d.tool);
+  window.jarvis.notify({ tid: ev.task_id, aid: d.id, kind: d.kind, title: `À valider · ${t?.title || "discussion"}`,
+    body: `${[what, d.target].filter(Boolean).join(" — ")}${t?.profile_name ? ` · ${t.profile_name}` : ""}`,
+    buttons: d.kind === "hook" || d.kind === "permission", looking: wm.focused() === ev.task_id && !wm.isMinimized(ev.task_id) });
+}
+
 function attention(id, kind) {
   const t = S.tasks.get(id);
   if (!t) return;
@@ -931,6 +948,13 @@ function attention(id, kind) {
   renderTaskbar();
   const title = kind === "awaiting" ? `À valider · ${t.profile_name}` : kind === "error" ? `En erreur · ${t.profile_name}` : `Terminée · ${t.profile_name}`;
   if (S.config.ui.sounds) beep(kind === "awaiting" ? 880 : kind === "error" ? 220 : 560);
+  if (window.jarvis) {
+    // desktop app: the OS's notifications (an approval has its own, with its buttons: nativeNotify)
+    if (kind !== "awaiting" && S.config.general.notifications) {
+      window.jarvis.notify({ tid: id, kind, title, body: t.title, looking: wm.focused() === id && !wm.isMinimized(id) });
+    }
+    return;
+  }
   if (S.config.general.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
     const n = new Notification(title, { body: t.title, tag: `${id}-${kind}`, icon: "/static/img/favicon.svg" });
     n.onclick = () => { window.focus(); openTask(id); n.close(); };
