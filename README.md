@@ -287,7 +287,11 @@ console toujours autorisés (ils ne font que montrer) :
 
 - `afficher` : un fichier s'ouvre aussitôt. Une page web s'ouvre seule si son site est dans
   **Configuration → Sécurité → Domaines approuvés** (ton Odoo, ton SharePoint ;
-  `monentreprise.odoo.com` couvre aussi ses sous-domaines, https seulement). Sinon la tâche
+  `monentreprise.odoo.com` couvre aussi ses sous-domaines, https seulement), ou si c'est
+  l'application d'un de tes serveurs MCP : l'adresse que tu lui as donnée (`ODOO_URL`,
+  `--url https://…`), dans la configuration du profil ou celle de Claude Code. « Affiche-moi
+  le dernier devis de X » ouvre ainsi le devis dans Odoo, « montre-moi ce mail » le mail
+  dans une fenêtre (`afficher_resultat`). Sinon la tâche
   affiche « Claude veut ouvrir *site* » avec **Ouvrir**, **Toujours autoriser** (ajoute le
   domaine) et **Copier le lien** : rien n'est chargé tant que tu ne cliques pas.
 - `afficher_resultat` : le résultat d'un outil que Claude a déjà reçu (un mail Office 365,
@@ -435,8 +439,8 @@ Un changement s'applique aux nouvelles tâches, jamais à celles en cours.
   pages web est de la donnée, jamais une consigne.
 - Les pages HTML montrées (mails, fichiers, résultats d'outils) vivent sur une origine
   séparée (`apercu.localhost`), sans scripts ni accès à la console ; leurs ressources du
-  web attendent ton clic. Claude n'ouvre seul que les sites des domaines approuvés : les
-  autres te sont proposés.
+  web attendent ton clic. Claude n'ouvre seul que les sites des domaines approuvés et des
+  applications de tes serveurs MCP : les autres te sont proposés.
 - L'environnement des tâches est nettoyé (`ANTHROPIC_*`, variables d'une session Claude
   parente) : aucune facturation par clé API par accident.
 - Arrêt d'urgence : stoppe toutes les tâches et bloque les nouvelles jusqu'à réactivation.

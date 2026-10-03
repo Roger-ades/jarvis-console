@@ -105,3 +105,50 @@ def test_the_web_applications_of_the_mcp_servers_are_named_without_their_secrets
     assert "crm.example.com" not in text and "mdp" not in text and "localhost:8069" not in text
     other = engine.create_task("bonjour", profile="personal", not_before=time.time() + 3600)["id"]
     assert "Applications web" not in system_prompt(engine, other)
+
+
+def test_the_web_applications_are_also_found_in_claude_codes_own_configuration(engine, tmp_path):
+    import json
+    wd = tmp_path / "chantier"
+    wd.mkdir()
+    cfg = engine.cfg.model_copy(deep=True)
+    work = cfg.profile("work")
+    cd = Path(work.config_dir)
+    cd.mkdir(parents=True, exist_ok=True)
+    (cd / ".claude.json").write_text(json.dumps({
+        "numStartups": 12, "oauthAccount": {"emailAddress": "moi@example.com"},
+        "mcpServers": {
+            "odoo": {"command": "uvx", "args": ["mcp-server-odoo", "--url", "https://erp.example.com", "--api-key", "cle"]},
+            "odoo-web": {"type": "http", "url": "https://odoo.example.org/mcp/abc?token=t"},
+            # an MCP endpoint reached through a bridge is not the application: left out
+            "notion": {"command": "npx", "args": ["mcp-remote", "https://mcp.notion.com/mcp"]},
+        },
+        "projects": {str(wd): {"mcpServers": {"crm": {"command": "crm", "args": ["--base-url=https://crm.example.com/x?k=s"]}}},
+                     str(tmp_path / "autre"): {"mcpServers": {"wiki": {"command": "w", "env": {"WIKI_URL": "https://wiki.test"}}}}},
+    }), encoding="utf-8")
+    # a folder's .mcp.json comes with its content (and waits for an approval in Claude Code): never trusted
+    (wd / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "piege": {"command": "x", "env": {"SITE_URL": "https://piege.example.net"}}}}), encoding="utf-8")
+    engine.cfg_store.save(cfg, "tests")
+    text = system_prompt(engine, later(engine, "bonjour", workdir=str(wd)))
+    line = next(x for x in text.splitlines() if x.startswith("- Applications web"))
+    assert "odoo : https://erp.example.com" in line and "crm : https://crm.example.com" in line
+    assert "odoo-web : https://odoo.example.org" in line and "<adresse>/odoo/sale.order/42" in line
+    # only the site of an argument or of a server address: its path or query may carry a key
+    assert "abc" not in line and "token" not in line and "k=s" not in line and "cle" not in line
+    assert "notion" not in line and "wiki" not in line and "piege" not in text and "moi@example.com" not in text
+    # --strict-mcp-config: Claude Code's own servers are not loaded, so not named either
+    cfg.profile("work").mcp.strict = True
+    engine.cfg_store.save(cfg, "tests")
+    assert "Applications web" not in system_prompt(engine, later(engine, "bonjour", workdir=str(wd)))
+
+
+def test_the_console_server_is_never_deferred(engine):
+    import json
+    tid = later(engine, "bonjour")
+    cmd = engine._command(engine.tasks[tid], Run())
+    servers = json.loads(Path(cmd[cmd.index("--mcp-config") + 1]).read_text(encoding="utf-8"))["mcpServers"]
+    assert servers["jarvis"] == {"type": "sdk", "name": "jarvis", "alwaysLoad": True}
+    text = system_prompt(engine, tid)
+    assert "il attend une fenêtre, pas un texte" in text
+    assert "select:mcp__jarvis__afficher,mcp__jarvis__afficher_resultat" in text

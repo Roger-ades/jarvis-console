@@ -100,7 +100,8 @@ Les déclencheurs (dossier surveillé, enchaînements) sont côté serveur et pe
 - Les pages HTML montrées (mails, fichiers, résultats d'outils) sont servies depuis une origine séparée
   `http://apercu.localhost:<port>` : styles conservés, pas de scripts, adresses aléatoires qui
   expirent, images du web au clic ([console/content.py](../console/content.py)).
-- Claude n'ouvre seul que les sites des **domaines approuvés** ; les autres sont proposés.
+- Claude n'ouvre seul que les sites des **domaines approuvés** et des applications de ses serveurs MCP
+  (l'adresse `ODOO_URL` du serveur Odoo…) ; les autres sont proposés.
 
 Limites : les fenêtres de la console ne se mêlent pas à celles des autres applications ; les sites
 qui refusent l'intégration (`X-Frame-Options`, `frame-ancestors` : Odoo, SharePoint, Outlook web)
@@ -219,7 +220,8 @@ Ce qu'il faut adapter pour les documents enfants :
   séparés de la console et entre sites : on reste connecté à Odoo et SharePoint sans rien partager
   avec la page de la console. Une deuxième adresse du même site réutilise sa fenêtre.
 - Ce qui ouvre une fenêtre de site : un lien https d'une réponse (quand l'aperçu des liens est
-  activé), une page qu'affiche Claude (`afficher`, domaines approuvés), « Ouvrir » dans un aperçu web.
+  activé), une page qu'affiche Claude (`afficher`, domaines approuvés et applications des serveurs MCP),
+  « Ouvrir » dans un aperçu web.
 - La barre de navigation (précédent, suivant, recharger, adresse, ouvrir dans le navigateur, session)
   est une page de l'application ([shell/site.html](../shell/site.html)) au-dessus de la vue ; elle ne
   reçoit du site que son adresse et son titre, écrits comme du texte. Alt+← / Alt+→ et F5 marchent
@@ -231,8 +233,9 @@ Ce qu'il faut adapter pour les documents enfants :
   ouvert dans un nouvel onglet, part dans le navigateur du système ; une fenêtre surgissante du site
   (connexion, impression) garde sa session. Un téléchargement demande où l'enregistrer.
   « Se déconnecter des sites » ferme leurs fenêtres et vide leurs sessions.
-- **Exemple : un devis Odoo.** Claude lit le devis (MCP Odoo) et appelle `afficher` avec
-  `https://<odoo>/odoo/sales/<id>` ; la console l'ouvre dans la fenêtre Odoo, déjà connectée.
+- **Exemple : un devis Odoo.** « Affiche-moi le dernier devis de X » : Claude trouve le devis (MCP Odoo)
+  et appelle `afficher` avec `https://<odoo>/odoo/sale.order/<id>` (l'adresse du serveur Odoo est dans son
+  prompt) ; la console l'ouvre aussitôt dans la fenêtre Odoo, déjà connectée.
 
 ### Notifications et validations
 

@@ -49,22 +49,25 @@ WARM_PROMPT = "Maintien du cache de la console : réponds seulement « ok », sa
 # The console's own MCP server, hosted in this process (the CLI reaches it over the control protocol).
 CONSOLE_MCP = "jarvis"
 # Its tools stay in Claude's prompt, never deferred behind tool search: a deferred tool shows only its name,
-# and a model that calls it without loading it guesses the parameters (afficher called with « content »).
+# and a model that calls it without loading it guesses the parameters (afficher called with « content »), or
+# answers in text. Both the server (alwaysLoad in --mcp-config) and each of its tools (_meta) say so.
 ALWAYS_LOAD = {"anthropic/alwaysLoad": True}
 SHOW_TOOL = f"mcp__{CONSOLE_MCP}__afficher"
 SHOW_SPEC = {
     "_meta": ALWAYS_LOAD,
     "name": "afficher",
     "description": (
-        "Ouvre des fichiers ou des pages web dans des fenêtres d'aperçu de la console JARVIS, que l'utilisateur "
-        "voit à l'écran (images, PDF, HTML, texte, Markdown, CSV, JSON… ; les autres types proposent de s'ouvrir "
-        "avec leur application). À utiliser dès que l'utilisateur demande d'afficher, de montrer, d'ouvrir ou de "
-        "voir un fichier, et pour lui présenter un fichier que tu viens de créer quand il veut le voir. Chemins "
-        "absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché dans les dossiers de la "
-        "tâche. Une adresse https:// d'un domaine approuvé par l'utilisateur s'ouvre dans un aperçu web ; pour les "
-        "autres, la console lui propose de l'ouvrir et il décide. Pour montrer le résultat d'un outil déjà reçu "
-        "(un mail, un enregistrement…), utilise plutôt afficher_resultat ; pour composer un affichage (galerie, "
-        "résultats de recherche, tableau, graphique, fiche, choix à cliquer…), presenter."),
+        "Ouvre des fichiers ou des pages web dans des fenêtres de la console JARVIS, que l'utilisateur voit à "
+        "l'écran. À utiliser dès qu'il demande d'afficher, de montrer, d'ouvrir ou de voir un fichier, ou un "
+        "enregistrement d'une application web (un devis, une facture, un client Odoo…), au lieu d'en écrire le "
+        "contenu dans ta réponse ; et pour lui présenter un fichier que tu viens de créer quand il veut le voir. "
+        "Fichiers (images, PDF, HTML, texte, Markdown, CSV, JSON… ; les autres types proposent de s'ouvrir avec leur "
+        "application) : chemins absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché "
+        "dans les dossiers de la tâche. Pages : adresse https:// ; celles des applications web de tes serveurs MCP "
+        "et des domaines approuvés par l'utilisateur s'ouvrent aussitôt, dans une fenêtre où il est connecté ; pour "
+        "les autres, la console lui propose de l'ouvrir et il décide. Pour montrer le résultat d'un outil déjà reçu "
+        "(un mail, un enregistrement dont tu n'as pas l'adresse…), utilise plutôt afficher_resultat ; pour composer "
+        "un affichage (galerie, résultats de recherche, tableau, graphique, fiche, choix à cliquer…), presenter."),
     "inputSchema": {
         "type": "object",
         "properties": {"fichiers": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 12,
@@ -79,7 +82,9 @@ RESULT_SPEC = {
     "description": (
         "Montre à l'utilisateur, dans une fenêtre de la console JARVIS, le résultat d'un outil que tu as déjà reçu "
         "(un mail lu avec le connecteur Office 365, un enregistrement Odoo, une page renvoyée par un connecteur…), "
-        "tel quel : ne recopie pas son contenu, désigne-le seulement. Un mail s'affiche avec sa mise en forme, son "
+        "tel quel : ne recopie pas son contenu, désigne-le seulement. À utiliser dès qu'il demande d'afficher, de "
+        "montrer, d'ouvrir ou de voir un mail ou ce qu'un outil t'a rendu : lis-le d'abord avec l'outil voulu, puis "
+        "appelle celui-ci au lieu d'en écrire le contenu dans ta réponse. Un mail s'affiche avec sa mise en forme, son "
         "expéditeur, ses destinataires et sa date ; du HTML comme une page ; le reste en JSON ou en texte. Marche aussi "
         "pour un résultat trop long que tu n'as pas pu lire en entier. Sans paramètre : le dernier résultat reçu."),
     "inputSchema": {
@@ -1509,7 +1514,7 @@ class Engine:
         where = presence.prompt(t, prof, pre, proj.name if proj else "", ask_user=self.cfg.general.ask_user_questions,
                                 actions=[a for a in self.project_actions(proj.folder) if a["status"] == "ok"] if proj else None,
                                 routines=self.project_routines(proj.folder) if proj else None,
-                                apps=mcp.web_apps(prof))
+                                apps=mcp.web_apps(prof, t["workdir"]))
         system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
                              if x and x.strip())
         if team.get("agents"):
@@ -1523,7 +1528,7 @@ class Engine:
             run.files.append(str(f))
             args += ["--append-system-prompt-file", str(f)]
         mcp_file = mcp.write_config(prof, self.runtime, f"{t['id']}-{secrets.token_hex(3)}",
-                                    extra={CONSOLE_MCP: {"type": "sdk", "name": CONSOLE_MCP}})
+                                    extra={CONSOLE_MCP: {"type": "sdk", "name": CONSOLE_MCP, "alwaysLoad": True}})
         if mcp_file:
             run.files.append(mcp_file)
             args += ["--mcp-config", mcp_file]
@@ -2215,6 +2220,16 @@ class Engine:
             return {"jsonrpc": "2.0", "result": {}}
         return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Méthode non prise en charge : {method}"}}
 
+    def _app_domains(self, tid: str) -> list[str]:
+        """The sites of the web applications behind the task's MCP servers (its Odoo…): the user gave their address
+        to those servers, so their pages open without asking, like an approved domain."""
+        t = self._get(tid)
+        try:
+            prof = Profile.model_validate(t["spec"]["profile"])
+        except (KeyError, TypeError, ValueError):
+            return []
+        return [d for d in (web_domain(a["url"]) for a in mcp.web_apps(prof, t.get("workdir") or "")) if d]
+
     def show_files(self, tid: str, items) -> tuple[str, bool]:
         """Claude shows files to the user: each one checked like a preview, then opened in the UI."""
         if isinstance(items, str):
@@ -2225,7 +2240,7 @@ class Engine:
                     "(ex. {\"fichiers\": [\"https://…\"]}). Pour un résultat d'outil déjà reçu (un mail…), "
                     "afficher_resultat ; pour composer une fiche ou un tableau, presenter."), True
         files, urls, ask, errors = [], [], [], []
-        trusted = self.cfg.security.trusted_domains
+        trusted = [*self.cfg.security.trusted_domains, *self._app_domains(tid)]
         for item in items:
             if re.match(r"^https?://", item, re.I):
                 if not item.lower().startswith("https://"):
