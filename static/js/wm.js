@@ -5,6 +5,7 @@ import { debounce, h, store } from "./util.js";
 
 const wins = new Map(); // id -> { el, st, onFocus }
 const listeners = new Set();
+const focusListeners = new Set();
 let ui = { windows: {}, prefs: {} };
 let settings = { default_width: 640, default_height: 480 };
 let topZ = 10;
@@ -21,10 +22,13 @@ const persist = debounce(() => {
 
 export function configure(s) { settings = { ...settings, ...s }; }
 export function onChange(fn) { listeners.add(fn); }
+/** fn(id) each time a window is brought forward or clicked. */
+export function onFocus(fn) { focusListeners.add(fn); }
 export function prefs() { return ui.prefs || {}; }
 export function savePrefs(p) { ui.prefs = { ...(ui.prefs || {}), ...p }; persist(); }
 export function has(id) { return wins.has(id); }
-/** What a window shows when minimized, for windows that are not tasks (previews): {title, color, icon, onClose}. */
+/** What a window shows when minimized, for windows that are not tasks (previews): {title, color, icon, onClose};
+    regard: what the window shows, for "Ce que je regarde" (regard.js). */
 export function meta(id) { return wins.get(id)?.meta || null; }
 /** Height the floating command bar keeps at the bottom of the desktop. */
 export function reservedHeight() { return reservedH; }
@@ -125,6 +129,7 @@ export function register(id, el, { handle, onFocus, fresh = false, ephemeral = f
   fit(st);
   const w = { el, st, onFocus, ephemeral, meta };
   wins.set(id, w);
+  el.dataset.wid = id;
   for (const dir of ["n", "s", "e", "w", "ne", "nw", "se", "sw"]) {
     const g = h("div", { class: `rz ${dir}` });
     g.addEventListener("pointerdown", (e) => startResize(e, id, dir));
@@ -157,6 +162,7 @@ export function focus(id) {
   focusedId = id;
   for (const [oid, o] of wins) o.el.classList.toggle("focused", oid === id);
   w.onFocus?.();
+  focusListeners.forEach((fn) => fn(id));
 }
 
 export function minimize(id) {

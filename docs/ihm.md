@@ -29,6 +29,17 @@ directement.
   La popup propose Ouvrir, Plus tard… (10 min, 1 h, 3 h, demain 9:00) et Vu. Elle sonne si les
   sons sont activés et devient une notification système quand la page est en arrière-plan. Toutes
   les pages ouvertes suivent les changements (événement `notes`).
+- **« Ce que je regarde »** ([static/js/regard.js](../static/js/regard.js),
+  [console/regard.py](../console/regard.py)) : l'aperçu ou l'affichage au premier plan et le texte
+  sélectionné (aperçu, affichage, réponse de Claude) partent avec le message, jamais dans le prompt
+  système. Une puce « Regard » dans la barre utilisée le montre, sa croix le retire ; il est consommé
+  à l'envoi. La sélection est citée comme une donnée. Un affichage ou un résultat d'une autre
+  discussion du même compte part avec son contenu.
+- **Différences et annulation des fichiers** ([console/changes.py](../console/changes.py),
+  [static/js/changes.js](../static/js/changes.js)) : copie avant chaque écriture des outils de
+  fichiers (hook `PreToolUse`, reprise à la validation), enregistrée au résultat si le fichier a
+  changé. Bouton « +n −m » sur l'action, menu ⋯ → Fichiers modifiés, Annuler / Rétablir avec contrôle
+  que le fichier n'a pas changé depuis ; Claude l'apprend au message suivant.
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du
@@ -88,7 +99,6 @@ validation ; rien ne dépasse le preset de la discussion.
 
 | Piste | Ce que ça apporte | Points d'attention |
 |---|---|---|
-| **« Ce que je regarde »** : l'aperçu ouvert, le texte sélectionné et l'affichage actif partent avec le message | « Corrige ce paragraphe », « explique ce tableau » sans copier-coller. C'est le gain le plus net au quotidien. | Le joindre au message, pas au prompt système, pour ne pas casser le cache. Montrer dans la barre de saisie ce qui sera envoyé et permettre de le retirer. |
 | **Bloc `formulaire` dans `presenter`** : champs typés et réponse structurée | Claude prépare un devis Odoo ou un mail pré-rempli ; on corrige puis on valide. Plus efficace qu'une suite de questions. | La réponse revient comme un message de l'utilisateur. Une action irréversible reste soumise à la validation habituelle. |
 | **`demander_validation`** : aperçu ou différences, relié aux validations existantes | Une décision claire avant une action sensible, au lieu d'un refus brut. | Ne doit jamais permettre de valider à la place de l'utilisateur. |
 | **Vue « Consommation »** : par compte, projet et discussion, cache lu et écrit, compactions, part des sous-agents | Voir où partent les tokens. L'analyse du 2 octobre l'a montré : c'est le mode équipe qui coûte, pas la console. | Les données viennent des transcriptions (`<config>/projects/…`) : pas de nouvel appel. |
@@ -191,7 +201,10 @@ proposées, une nouvelle discussion demande sa validation.
 
 ## Ordre proposé
 
-1. « Ce que je regarde ».
+1. ~~« Ce que je regarde »~~ (fait, avec les différences et l'annulation des fichiers).
 2. Bloc `formulaire`.
 3. Vue « Consommation » et signalement des pertes de cache.
 4. `demander_validation`, puis la coordination entre discussions.
+
+La feuille de route d'ensemble (déclencheurs, boîte de réception, validations depuis le téléphone,
+Electron…) est dans [feuille-de-route.md](feuille-de-route.md).
