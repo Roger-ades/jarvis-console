@@ -44,6 +44,7 @@ let bar = null;
 let barPinned = false;                   // stays when the user clicks elsewhere
 let barHold = false;                     // a file picker of the bar is open: it does not hide meanwhile
 let barH = 190;
+let firstBar = true;                     // the first bar of this start (not one after a reload)
 const BAR_W = 820;
 // started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
 // shortcut, launcher); the windows the page opens meanwhile wait hidden
@@ -296,15 +297,28 @@ function createHub() {
   const remember = () => {
     if (!hub || hub.isDestroyed() || hub.isMinimized()) return;
     const all = loadState().hub || {};
-    saveState({ hub: { ...all, [mode]: { ...hub.getNormalBounds(), maximized: hub.isMaximized() } } });
+    saveState({ hub: { ...all, [mode]: { ...(all[mode] || {}), ...hub.getNormalBounds(), maximized: hub.isMaximized() } } });
   };
   hub.on("close", (e) => {
     remember();
-    if (!quitting && tray) { e.preventDefault(); hub.hide(); }   // the app stays in the notification area
+    if (!quitting && tray) {   // the app stays in the notification area
+      e.preventDefault();
+      hub.hide();
+      if (mode === "integre") hubClosed(true);
+    }
   });
   hub.on("closed", () => { hub = null; if (!quitting) quit(); });
   hub.once("ready-to-show", () => { if (!discreet) hub.show(); });
   hub.loadURL(splash("Démarrage de la console…"));
+}
+
+/** "Intégré au bureau": the JARVIS window the user closed stays closed at the next start (the bar and
+ * the windows are enough); opened again, it opens with the app again. */
+function hubClosed(value) {
+  const all = loadState().hub || {};
+  if (value === undefined) return !!all[mode]?.closed;
+  if (!!all[mode]?.closed !== value) saveState({ hub: { ...all, [mode]: { ...(all[mode] || {}), closed: value } } });
+  return value;
 }
 
 /** The user opens JARVIS: what waited hidden since the session start shows up. */
@@ -321,6 +335,7 @@ function showHub(newRequest = false) {
   if (hub.isMinimized()) hub.restore();
   hub.show();
   hub.focus();
+  if (mode === "integre") hubClosed(false);
   if (newRequest) hub.webContents.send("jarvis:command", { cmd: "nouvelle-demande" });
 }
 
@@ -538,6 +553,7 @@ async function decideFromOS(tid, aid, decision, nonce) {
 }
 
 function openFromOS(tid) {
+  if (tid === "rappel") { showHub(); return; }   // a reminder of the notes: in the JARVIS window
   wake();
   if (mode === "fenetre") showHub();
   if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "ouvrir", tid });
@@ -632,7 +648,11 @@ function makeTray() {
 
 function updateTray(s = {}) {
   const awaiting = Number(s.awaiting) || 0, running = Number(s.running) || 0, queued = Number(s.queued) || 0;
-  if (hub && !hub.isDestroyed() && IS_WIN) hub.setOverlayIcon(awaiting ? badge([240, 180, 92]) : null, awaiting ? `${awaiting} à valider` : "");
+  // the badge of the taskbar: on every window of JARVIS (with "Intégré au bureau", the JARVIS window is often hidden)
+  if (IS_WIN) {
+    const icon = awaiting ? badge([240, 180, 92]) : null, label = awaiting ? `${awaiting} à valider` : "";
+    for (const w of [hub, ...children.values()]) if (w && !w.isDestroyed()) w.setOverlayIcon(icon, label);
+  }
   if (!tray) return;
   tray.setToolTip(`JARVIS · ${running} en cours · ${awaiting} à valider${queued ? ` · ${queued} en file` : ""}`);
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -662,10 +682,20 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
   }
   if (op === "arrange") return arrange(data);
   if (op === "hub") { showHub(); return true; }
+  if (op === "hub-reveal") {   // a reminder: the JARVIS window comes forward without taking the keyboard
+    if (hub && !hub.isDestroyed() && !discreet) { if (hub.isMinimized()) hub.restore(); hub.showInactive(); }
+    return true;
+  }
   if (op.startsWith("bar-")) {
     if (op === "bar-show") showBar();
     if (!bar || bar.isDestroyed()) return false;
-    if (op === "bar-ready" && !discreet) { bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH }); bar.showInactive(); }
+    if (op === "bar-ready" && !discreet) {
+      bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
+      bar.showInactive();
+      // the JARVIS window was closed last time: once the console is there, the bar alone (the splash said "starting")
+      if (firstBar && hubClosed() && hub && !hub.isDestroyed()) hub.hide();
+    }
+    if (op === "bar-ready") firstBar = false;
     else if (op === "bar-hide") bar.hide();
     else if (op === "bar-sent" && !barPinned) bar.hide();
     else if (op === "bar-pin") barPinned = !!data;

@@ -1145,6 +1145,13 @@ const notesCtx = {
   },
   alert: ({ title, body, tag, onClick }) => {
     if (S.config?.ui?.sounds) beep(660);
+    if (window.jarvis) {
+      // desktop app: the reminder is in the JARVIS window (often hidden), which comes forward without taking
+      // the keyboard; and a notification of the OS (a click opens the JARVIS window)
+      window.jarvis.win("hub-reveal");
+      if (S.config?.general?.notifications) window.jarvis.notify({ tid: "rappel", kind: tag, title, body });
+      return;
+    }
     if (S.config?.general?.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
       const n = new Notification(title, { body, tag, icon: "/static/img/favicon.svg", requireInteraction: true });
       n.onclick = () => { window.focus(); onClick?.(); n.close(); };
