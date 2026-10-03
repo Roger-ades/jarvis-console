@@ -177,6 +177,9 @@ Ce qu'il faut adapter pour les documents enfants :
   [static/js/taskwin.js](../static/js/taskwin.js)), boîtes de dialogue (`dialog`), toasts. Ils
   s'ajoutent au document de la fenêtre concernée (`anchor.ownerDocument`) et se placent dans ses
   limites (`innerWidth` de cette fenêtre).
+- **Ce qui suit l'affichage** (`requestAnimationFrame`, `ResizeObserver`) se crée avec la fenêtre où se
+  trouve l'élément (`doc.defaultView`) : il ne réagit qu'au rythme de l'affichage de la fenêtre qui l'a créé,
+  et la page moteur, cachée, ne s'affiche presque jamais (logo de la barre, hauteur de la barre).
 - **Le CSS de `.win`** (position absolue, ombre, halo, animation) est neutralisé dans une fenêtre
   native : la fenêtre de l'OS fait ce travail (voir « Style visuel »).
 
