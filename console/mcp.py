@@ -127,6 +127,19 @@ def web_apps(profile: Profile, workdir: str = "") -> list[dict]:
     return apps
 
 
+# Odoo's web client (17.2 and later) reads each part of /odoo/… as an action's path, or as a model when it holds a
+# dot (m-<model> otherwise): /odoo/sale/42 is an action that does not exist. Actions whose path is known (checked
+# in Odoo 18 and 19) open the record in their app; any other record opens in its model's form.
+ODOO_PATHS = {"sale.order": "sales"}
+ODOO_MODEL = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*$")
+
+
+def odoo_record_url(app: str, model: str, rid: int) -> str:
+    """The page of a record in the Odoo at the address app (https://…)."""
+    part = ODOO_PATHS.get(model) or (model if "." in model else f"m-{model}")
+    return f"{app.rstrip('/')}/odoo/{part}/{rid}"
+
+
 def summary(profile: Profile) -> dict:
     """What the UI may show: names and kinds, never env values or headers."""
     imported, err = desktop_servers(profile.mcp.desktop_config) if profile.mcp.import_desktop else ({}, "")

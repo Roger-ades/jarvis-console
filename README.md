@@ -291,7 +291,9 @@ console toujours autorisés (ils ne font que montrer) :
   l'application d'un de tes serveurs MCP : l'adresse que tu lui as donnée (`ODOO_URL`,
   `--url https://…`), dans la configuration du profil ou celle de Claude Code. « Affiche-moi
   le dernier devis de X » ouvre ainsi le devis dans Odoo, « montre-moi ce mail » le mail
-  dans une fenêtre (`afficher_resultat`). Sinon la tâche
+  dans une fenêtre (`afficher_resultat`). Pour Odoo, Claude désigne l'enregistrement (modèle
+  et identifiant) et la console écrit son adresse : `/odoo/sales/<id>` pour un devis,
+  `/odoo/<modèle>/<id>` sinon (Odoo 17.2 ou plus récent). Sinon la tâche
   affiche « Claude veut ouvrir *site* » avec **Ouvrir**, **Toujours autoriser** (ajoute le
   domaine) et **Copier le lien** : rien n'est chargé tant que tu ne cliques pas.
 - `afficher_resultat` : le résultat d'un outil que Claude a déjà reçu (un mail Office 365,

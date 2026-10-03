@@ -100,7 +100,7 @@ def test_the_web_applications_of_the_mcp_servers_are_named_without_their_secrets
     engine.cfg_store.save(cfg, "tests")
     text = system_prompt(engine, later(engine, "bonjour"))
     assert "- Applications web de tes serveurs MCP" in text and "odoo : https://erp.example.com." in text
-    assert "<adresse>/odoo/sale.order/42" in text
+    assert '{"modele": "sale.order", "id": 42}' in text
     assert "cle-secrete" not in text and "base" not in text.split("Applications web")[1].split("\n")[0]
     assert "crm.example.com" not in text and "mdp" not in text and "localhost:8069" not in text
     other = engine.create_task("bonjour", profile="personal", not_before=time.time() + 3600)["id"]
@@ -133,7 +133,7 @@ def test_the_web_applications_are_also_found_in_claude_codes_own_configuration(e
     text = system_prompt(engine, later(engine, "bonjour", workdir=str(wd)))
     line = next(x for x in text.splitlines() if x.startswith("- Applications web"))
     assert "odoo : https://erp.example.com" in line and "crm : https://crm.example.com" in line
-    assert "odoo-web : https://odoo.example.org" in line and "<adresse>/odoo/sale.order/42" in line
+    assert "odoo-web : https://odoo.example.org" in line and "ne la construis pas toi-même" in line
     # only the site of an argument or of a server address: its path or query may carry a key
     assert "abc" not in line and "token" not in line and "k=s" not in line and "cle" not in line
     assert "notion" not in line and "wiki" not in line and "piege" not in text and "moi@example.com" not in text
