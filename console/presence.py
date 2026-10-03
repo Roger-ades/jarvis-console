@@ -17,11 +17,17 @@ Tu tournes dans JARVIS, une console locale qui pilote des sessions Claude Code. 
 - Il voit en direct tes réponses, tes actions et celles de tes sous-agents. Le Markdown est mis en forme (titres, listes, tableaux, code, liens) et un chemin de fichier cité s'ouvre d'un clic.
 - Ne lui demande pas de taper une commande : fais-le toi-même si tes autorisations le permettent, sinon dis-lui ce qu'il faut faire. Les actions d'un projet (ses commandes « / ») lui apparaissent comme des boutons.
 - Chaque action passe par la politique de la console : certaines sont permises d'office, d'autres attendent sa validation dans la fenêtre (elle peut prendre du temps), d'autres sont refusées. Après un refus, ne tente ni variante ni contournement : explique ce qui manque, il peut ajuster les autorisations.
-- Pour montrer quelque chose, préfère les outils de la console (serveur « jarvis ») à un long texte : afficher (fichiers, pages web), afficher_resultat (le résultat d'un outil déjà reçu, sans le recopier), presenter (galerie, tableau, graphique, fiche, chronologie, choix ou boutons à cliquer, petite application).
+- Pour montrer quelque chose, utilise les outils de la console (serveur « jarvis ») plutôt que de recopier le contenu dans ta réponse : afficher (fichiers, pages web), afficher_resultat (le résultat d'un outil déjà reçu, sans le recopier), presenter (galerie, tableau, graphique, fiche, chronologie, choix ou boutons à cliquer, petite application).
+- Quand il demande d'afficher, de montrer ou d'ouvrir un enregistrement d'une application web (un devis, un client…), ouvre sa page avec afficher dès que tu connais son adresse ; un mail ou un autre résultat d'outil, avec afficher_resultat. Ta réponse dit alors en une phrase ce qui est affiché.
 - D'autres discussions peuvent tourner en parallèle dans leurs propres fenêtres ; tu ne vois que la tienne."""
 
 ASK = "- Pour une question qui bloque la suite, AskUserQuestion s'affiche dans la fenêtre et il répond d'un clic."
 
+
+APPS = ("- Applications web de tes serveurs MCP (afficher ouvre leurs pages dans une fenêtre où l'utilisateur est "
+        "connecté) : {apps}.")
+ODOO = (" Un enregistrement Odoo s'ouvre à <adresse>/odoo/<modèle>/<id> (ex. <adresse>/odoo/sale.order/42 pour un devis, "
+        "/odoo/res.partner/7 pour un contact).")
 
 PROJECT = ("- Tu peux enrichir ce projet, toujours avec son accord : l'outil proposer lui soumet une nouvelle action "
            "(une tâche du projet qu'il relancera d'un clic) ou une routine (une demande, ou une action, lancée à heure "
@@ -55,9 +61,11 @@ def code_index(folder: str) -> str:
 
 
 def prompt(t: dict, prof: Profile, pre: Preset, project: str = "", ask_user: bool = True,
-           actions: list[dict] | None = None, routines: list[dict] | None = None) -> str:
+           actions: list[dict] | None = None, routines: list[dict] | None = None,
+           apps: list[dict] | None = None) -> str:
     """The block for one discussion: the console (the same for every discussion), then this one.
 
+    apps: the web applications behind the MCP servers (mcp.web_apps), whose pages afficher opens.
     In a project, its validated actions and its routines follow: they only change when the user
     changes them (no state such as the next run), so the prompt cache holds between turns."""
     lines = [CONSOLE, *([ASK] if ask_user else []), "", "## Cette discussion", f"- Compte : {prof.name}"]
@@ -72,6 +80,9 @@ def prompt(t: dict, prof: Profile, pre: Preset, project: str = "", ask_user: boo
     root = code_index(wd)
     if root:
         lines.append(CODE_INDEX.format(root=root))
+    if apps:
+        lines.append(APPS.format(apps=" ; ".join(f"{a['name']} : {a['url']}" for a in apps))
+                     + (ODOO if any(a.get("kind") == "odoo" for a in apps) else ""))
     # (the preset's description is written for the user: quoted as such)
     desc = pre.description.strip()
     lines.append(f"- Autorisations : preset « {pre.name} »" + (f", décrit ainsi à l'utilisateur : « {desc} »" if desc else ""))

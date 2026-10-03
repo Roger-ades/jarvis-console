@@ -48,8 +48,12 @@ WARM_MAX_HOURS = 12
 WARM_PROMPT = "Maintien du cache de la console : réponds seulement « ok », sans utiliser d'outil."
 # The console's own MCP server, hosted in this process (the CLI reaches it over the control protocol).
 CONSOLE_MCP = "jarvis"
+# Its tools stay in Claude's prompt, never deferred behind tool search: a deferred tool shows only its name,
+# and a model that calls it without loading it guesses the parameters (afficher called with « content »).
+ALWAYS_LOAD = {"anthropic/alwaysLoad": True}
 SHOW_TOOL = f"mcp__{CONSOLE_MCP}__afficher"
 SHOW_SPEC = {
+    "_meta": ALWAYS_LOAD,
     "name": "afficher",
     "description": (
         "Ouvre des fichiers ou des pages web dans des fenêtres d'aperçu de la console JARVIS, que l'utilisateur "
@@ -70,6 +74,7 @@ SHOW_SPEC = {
 }
 RESULT_TOOL = f"mcp__{CONSOLE_MCP}__afficher_resultat"
 RESULT_SPEC = {
+    "_meta": ALWAYS_LOAD,
     "name": "afficher_resultat",
     "description": (
         "Montre à l'utilisateur, dans une fenêtre de la console JARVIS, le résultat d'un outil que tu as déjà reçu "
@@ -91,9 +96,9 @@ RESULT_SPEC = {
     },
 }
 PRESENT_TOOL = f"mcp__{CONSOLE_MCP}__presenter"
-PRESENT_SPEC = display_mod.TOOL_SPEC
+PRESENT_SPEC = {"_meta": ALWAYS_LOAD, **display_mod.TOOL_SPEC}
 PROPOSE_TOOL = f"mcp__{CONSOLE_MCP}__proposer"
-PROPOSE_SPEC = project_tools.PROPOSE_SPEC
+PROPOSE_SPEC = {"_meta": ALWAYS_LOAD, **project_tools.PROPOSE_SPEC}
 CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL}
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
@@ -1503,7 +1508,8 @@ class Engine:
         proj = self._project(t["workdir"])
         where = presence.prompt(t, prof, pre, proj.name if proj else "", ask_user=self.cfg.general.ask_user_questions,
                                 actions=[a for a in self.project_actions(proj.folder) if a["status"] == "ok"] if proj else None,
-                                routines=self.project_routines(proj.folder) if proj else None)
+                                routines=self.project_routines(proj.folder) if proj else None,
+                                apps=mcp.web_apps(prof))
         system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
                              if x and x.strip())
         if team.get("agents"):
@@ -2215,7 +2221,9 @@ class Engine:
             items = [items]
         items = [str(x).strip().strip('"') for x in (items or []) if str(x).strip()][:12]
         if not items:
-            return "Aucun fichier indiqué.", True
+            return ("Aucun fichier indiqué : passe « fichiers », une liste de chemins ou d'adresses https:// "
+                    "(ex. {\"fichiers\": [\"https://…\"]}). Pour un résultat d'outil déjà reçu (un mail…), "
+                    "afficher_resultat ; pour composer une fiche ou un tableau, presenter."), True
         files, urls, ask, errors = [], [], [], []
         trusted = self.cfg.security.trusted_domains
         for item in items:

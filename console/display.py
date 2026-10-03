@@ -404,7 +404,9 @@ def check(args: dict, file: Callable[[str], str], trusted: list[str], previous: 
     if isinstance(raw, list) and len(raw) > MAX_BLOCKS:
         c.problems.append(f"{len(raw) - MAX_BLOCKS} bloc(s) au-delà de {MAX_BLOCKS} ignoré(s)")
     if not blocks:
-        return None, list(c.problems) or ["aucun bloc"], 0
+        return None, list(c.problems) or [
+            "aucun bloc : passe « blocs », une liste d'objets avec un « type » (" + ", ".join(KINDS) + ") et ses "
+            "champs, ex. [{\"type\": \"fiche\", \"champs\": [{\"libelle\": \"Client\", \"valeur\": \"…\"}]}]"], 0
     where = _s(args.get("ou"), 20).lower().replace("ê", "e")
     if where not in WHERE:
         where = (previous or {}).get("ou") or "conversation"
