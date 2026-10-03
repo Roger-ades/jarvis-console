@@ -23,7 +23,8 @@ Sous Windows, il faut Node.js 22.12 ou plus récent (https://nodejs.org) en plus
 la console.
 
 1. Double-clic sur **`start-app.bat`**. La première fois, il installe Electron dans `shell\node_modules`
-   (environ 100 Mo).
+   puis télécharge son exécutable depuis GitHub (environ 100 Mo) : depuis la version 44, Electron ne le
+   télécharge plus pendant `npm install` seul, d'où le script `postinstall` de `shell/package.json`.
 2. L'application démarre le serveur de la console s'il ne tourne pas (`start.bat --no-browser`), ou
    reprend celui qui tourne, et ouvre la fenêtre JARVIS.
 3. En mode *Intégré au bureau* (par défaut), chaque discussion, aperçu, affichage ou fenêtre de
