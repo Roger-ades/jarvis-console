@@ -1,12 +1,14 @@
 // JARVIS desktop app (see docs/electron.md). It starts the console's Python server, or
 // reuses the one already running, then shows the interface in one of two ways (Configuration →
 // Interface → Affichage):
-//   "integre"  the JARVIS window (top bar, home, command bar, panels) plus one native window of the
-//              OS per discussion, preview or display, mixed with the other applications;
+//   "integre"  no JARVIS window: a floating bar (the command bar, with the JARVIS menu) and windows of the
+//              OS for each discussion, preview, display, panel (Historique, Notes…) or modal
+//              (configuration, Ctrl+K…), mixed with the other applications;
 //   "fenetre"  the whole console in one window, as in the browser.
-// Native windows are children of the JARVIS window's page (window.open): one JavaScript context, one
-// live stream, one renderer process. The page asks for every window operation through the preload
-// (window.jarvis) and the main process checks that the request comes from the console's own page.
+// The console's page runs in the JARVIS window (hidden with "integre", once the bar is there); the other
+// windows are its children (window.open): one JavaScript context, one live stream, one renderer process.
+// The page asks for every window operation through the preload (window.jarvis) and the main process
+// checks that the request comes from the console's own page.
 // Started by `electron .` (start-app.bat), or by the installed application (loader.js), which runs
 // this file from the JARVIS folder.
 "use strict";
@@ -38,6 +40,7 @@ let origin = "";
 let port = 0;
 let token = "";                          // the console's access token (data/token), for the app's own calls
 let quitting = false;
+let hubAway = false;                     // "Intégré au bureau": the console's page is loading, the JARVIS window stays hidden
 const children = new Map();              // id -> native BrowserWindow
 const closing = new Set();               // ids the page closes itself (no close request back)
 let overlay = { color: "#161b22", symbolColor: "#c9d1d9" };
@@ -47,7 +50,6 @@ let bar = null;
 let barPinned = false;                   // stays when the user clicks elsewhere
 let barHold = false;                     // a file picker of the bar is open: it does not hide meanwhile
 let barH = 190;
-let firstBar = true;                     // the first bar of this start (not one after a reload)
 const BAR_W = 820;
 // started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
 // shortcut, launcher); the windows the page opens meanwhile wait hidden
@@ -168,6 +170,23 @@ function nativeOptions(f) {
   };
 }
 
+/** A framed window ("Intégré au bureau"): a panel (Historique, Notes…) or a modal (configuration, Ctrl+K, a
+ * question) of the console, with a title strip drawn by the page and the native buttons. A modal's window
+ * opens hidden and shows once the page has sized it (frame-show). */
+function frameOptions(f, hidden) {
+  const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const width = Math.min(f.width || 640, a.width), height = Math.min(f.height || 640, a.height);
+  const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width })
+    ? { x: f.left, y: f.top } : { x: Math.round(a.x + (a.width - width) / 2), y: Math.round(a.y + (a.height - height) / 2) };
+  return {
+    ...pos, width, height, minWidth: 320, minHeight: 160, show: !hidden && !discreet, title: "JARVIS", icon: ICON,
+    backgroundColor: overlay.color, autoHideMenuBar: true,
+    ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
+      : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+  };
+}
+
 /** Bottom center of the screen where the mouse is: where the bar shows. */
 function barPlace(height) {
   const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
@@ -190,14 +209,16 @@ function adoptBar(win) {
   win.on("closed", () => { if (bar === win) bar = null; });
 }
 
-/** Ctrl+Alt+J, the notification area, "Nouvelle demande": the bar where the mouse is, ready to type. */
-function showBar() {
-  if (!bar || bar.isDestroyed() || mode !== "integre") { showHub(true); return; }
+/** Ctrl+Alt+J, "Nouvelle demande": the bar where the mouse is, ready to type (select: false keeps what
+ * is in it); menu: with the JARVIS menu open ("Ouvrir JARVIS"). */
+function showBar({ select = true, menu = false } = {}) {
+  if (!bar || bar.isDestroyed() || mode !== "integre") { revealHub(true); return; }
   wake();
-  bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
+  if (!bar.isVisible()) bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
   bar.show();
   bar.focus();
-  if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "nouvelle-demande" });
+  const cmd = menu ? "menu" : select ? "nouvelle-demande" : "";
+  if (cmd && hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd });
 }
 
 function toggleBar() {
@@ -209,6 +230,9 @@ function toggleBar() {
 function openHandler({ url, frameName, features }) {
   if (url === "about:blank" && frameName === `${WIN_PREFIX}barre` && mode === "integre") {
     return { action: "allow", overrideBrowserWindowOptions: barOptions() };
+  }
+  if (url === "about:blank" && String(frameName).startsWith(`${WIN_PREFIX}cadre-`) && mode === "integre") {
+    return { action: "allow", overrideBrowserWindowOptions: frameOptions(parseFeatures(features), /(^|,)\s*hidden=1\b/.test(String(features || ""))) };
   }
   if (url === "about:blank" && String(frameName).startsWith(WIN_PREFIX) && mode === "integre") {
     return { action: "allow", overrideBrowserWindowOptions: nativeOptions(parseFeatures(features)) };
@@ -257,7 +281,7 @@ function closeChildren() {
 function arrange({ mode: how, ids } = {}) {
   const list = (ids || []).map((id) => children.get(String(id))).filter((w) => w && !w.isDestroyed() && !w.isMinimized());
   if (!list.length) return false;
-  const ref = hub && !hub.isDestroyed() ? hub.getBounds() : list[0].getBounds();
+  const ref = hub && !hub.isDestroyed() && hub.isVisible() ? hub.getBounds() : list[0].getBounds();
   const a = screen.getDisplayMatching(ref).workArea;
   if (how === "mosaique") {
     const n = list.length, cols = Math.max(1, Math.ceil(Math.sqrt(n * (a.width / a.height) / 1.4))), c = Math.min(cols, n);
@@ -304,24 +328,11 @@ function createHub() {
   };
   hub.on("close", (e) => {
     remember();
-    if (!quitting && tray) {   // the app stays in the notification area
-      e.preventDefault();
-      hub.hide();
-      if (mode === "integre") hubClosed(true);
-    }
+    if (!quitting && tray) { e.preventDefault(); hub.hide(); }   // the app stays in the notification area
   });
   hub.on("closed", () => { hub = null; if (!quitting) quit(); });
-  hub.once("ready-to-show", () => { if (!discreet) hub.show(); });
+  hub.once("ready-to-show", () => { if (!discreet && !hubAway) hub.show(); });
   hub.loadURL(splash("Démarrage de la console…"));
-}
-
-/** "Intégré au bureau": the JARVIS window the user closed stays closed at the next start (the bar and
- * the windows are enough); opened again, it opens with the app again. */
-function hubClosed(value) {
-  const all = loadState().hub || {};
-  if (value === undefined) return !!all[mode]?.closed;
-  if (!!all[mode]?.closed !== value) saveState({ hub: { ...all, [mode]: { ...(all[mode] || {}), closed: value } } });
-  return value;
 }
 
 /** The user opens JARVIS: what waited hidden since the session start shows up. */
@@ -332,13 +343,21 @@ function wake() {
   if (bar && !bar.isDestroyed() && !bar.isVisible()) bar.showInactive();
 }
 
+/** "Ouvrir JARVIS" (notification area, launcher): with "Intégré au bureau", the bar and its menu (there
+ * is no JARVIS window to show); with "Une fenêtre JARVIS", the window. */
 function showHub(newRequest = false) {
+  if (mode === "integre" && bar && !bar.isDestroyed()) showBar({ menu: !newRequest });
+  else revealHub(newRequest);
+}
+
+/** The JARVIS window: the console's page ("Une fenêtre JARVIS"; with "Intégré au bureau", only while it
+ * starts, or when the bar could not open). */
+function revealHub(newRequest = false) {
   if (!hub || hub.isDestroyed()) return;
   wake();
   if (hub.isMinimized()) hub.restore();
   hub.show();
   hub.focus();
-  if (mode === "integre") hubClosed(false);
   if (newRequest) hub.webContents.send("jarvis:command", { cmd: "nouvelle-demande" });
 }
 
@@ -556,7 +575,7 @@ async function decideFromOS(tid, aid, decision, nonce) {
 }
 
 function openFromOS(tid) {
-  if (tid === "rappel") { showHub(); return; }   // a reminder of the notes: in the JARVIS window
+  if (tid === "rappel") { showBar({ select: false }); return; }   // a reminder of the notes: above the bar (or in the JARVIS window)
   wake();
   if (mode === "fenetre") showHub();
   if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "ouvrir", tid });
@@ -691,28 +710,46 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
   if (!fromConsole(e)) return false;
   if (op === "overlay") {
     // colors of the native buttons: the theme for new windows, or one window (its account's tint)
-    const c = { color: String(data?.color || overlay.color), symbolColor: String(data?.symbolColor || overlay.symbolColor), height: HEAD_H };
-    const targets = id ? [children.get(String(id))] : [...children.values()];
+    const height = Math.max(28, Math.min(64, Number(data?.height) || HEAD_H));
+    const c = { color: String(data?.color || overlay.color), symbolColor: String(data?.symbolColor || overlay.symbolColor), height };
+    // (the framed windows keep their own colors)
+    const targets = id ? [children.get(String(id))] : [...children].filter(([k]) => !k.startsWith("cadre-")).map(([, w]) => w);
     if (!id) overlay = { color: c.color, symbolColor: c.symbolColor };
     for (const w of targets) if (w && !w.isDestroyed() && !IS_MAC) { try { w.setTitleBarOverlay(c); w.setBackgroundColor(c.color); } catch { /* old platform */ } }
     return true;
   }
   if (op === "arrange") return arrange(data);
+  if (op === "theme") {   // the JARVIS theme for what the OS draws (title bars, menus, dialogs)
+    nativeTheme.themeSource = data === "clair" ? "light" : data === "sombre" ? "dark" : "system";
+    return true;
+  }
+  if (op === "frame-show") {   // a modal's window, sized by the page: centered on the screen of the mouse
+    const w = children.get(String(id));
+    if (!w || w.isDestroyed() || !Number.isFinite(data?.width) || !Number.isFinite(data?.height)) return false;
+    const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    const width = Math.max(320, Math.min(Math.round(data.width) + 2, a.width - 40));
+    const height = Math.max(160, Math.min(Math.round(data.height) + 4, Math.round(a.height * 0.9)));
+    w.setContentBounds({ x: Math.round(a.x + (a.width - width) / 2), y: Math.round(a.y + (a.height - height) / 2.4), width, height });
+    if (!discreet) { w.show(); w.focus(); }
+    return true;
+  }
   if (op === "hub") { showHub(); return true; }
-  if (op === "hub-reveal") {   // a reminder: the JARVIS window comes forward without taking the keyboard
+  if (op === "hub-reveal") {   // a reminder ("Une fenêtre JARVIS"): the window comes forward without taking the keyboard
     if (hub && !hub.isDestroyed() && !discreet) { if (hub.isMinimized()) hub.restore(); hub.showInactive(); }
     return true;
   }
   if (op.startsWith("bar-")) {
-    if (op === "bar-show") showBar();
+    if (op === "bar-show") showBar({ select: data?.select !== false });
     if (!bar || bar.isDestroyed()) return false;
-    if (op === "bar-ready" && !discreet) {
+    if (op === "bar-ready") {
+      // the bar is there: no JARVIS window any more (it showed the start of the console)
+      if (hub && !hub.isDestroyed()) hub.hide();
+      if (!discreet) { bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH }); bar.showInactive(); }
+    }
+    else if (op === "bar-reveal" && !discreet && !bar.isVisible()) {   // a reminder above it: without the keyboard
       bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
       bar.showInactive();
-      // the JARVIS window was closed last time: once the console is there, the bar alone (the splash said "starting")
-      if (firstBar && hubClosed() && hub && !hub.isDestroyed()) hub.hide();
     }
-    if (op === "bar-ready") firstBar = false;
     else if (op === "bar-hide") bar.hide();
     else if (op === "bar-sent" && !barPinned) bar.hide();
     else if (op === "bar-pin") barPinned = !!data;
@@ -805,6 +842,12 @@ async function main() {
   const { code } = await call(port, "/api/auth/code", { method: "POST", token, body: {} });
   if (hub && !hub.isDestroyed()) {
     hub.setTitle(mode === "integre" ? "JARVIS" : "JARVIS · Console d'agents");
+    // "Intégré au bureau": the splash goes, the bar comes (or, if it cannot open, the JARVIS window)
+    if (mode === "integre") {
+      hubAway = true;
+      hub.hide();
+      setTimeout(() => { if ((!bar || bar.isDestroyed()) && !discreet) revealHub(); }, 20000);
+    }
     hub.loadURL(`${origin}/#code=${code}`);
   }
   globalShortcut.register(SHORTCUT, () => (mode === "integre" ? toggleBar() : showHub(true)));

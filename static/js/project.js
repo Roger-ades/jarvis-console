@@ -8,7 +8,7 @@ import { pickFolder } from "./folderpicker.js";
 import { mdElement } from "./md.js";
 import { allNotes, renderProjectNotes } from "./notes.js";
 import { projectTint } from "./tint.js";
-import { STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
+import { $, STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
 
 const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
@@ -17,7 +17,7 @@ const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).po
 const join = (a, b) => (a ? `${a}/${b}` : b);
 
 let ctx = null, ws = null, tab = "instructions", sub = "", note = null, loading = false;
-const el = () => document.getElementById("project");
+const el = () => $("#project");
 
 export function toggleProject(context) {
   ctx = context;

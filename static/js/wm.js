@@ -5,7 +5,7 @@
 // a child of this page (window.open) into which the window's element moves: one JavaScript context,
 // one live stream; the app does the moving, sizing and stacking.
 import { api } from "./api.js";
-import { addLookupDocument, debounce, h, setHostDocument, store } from "./util.js";
+import { addLookupDocument, debounce, h, removeLookupDocument, setHostDocument, setRevealDocument, store } from "./util.js";
 
 const wins = new Map(); // id -> { el, st, onFocus }
 const listeners = new Set();
@@ -31,37 +31,42 @@ export function onDocument(fn) {
   docInits.add(fn);
   fn(document);
   for (const w of wins.values()) if (w.doc) fn(w.doc);
+  for (const f of frames.values()) fn(f.doc);
   if (barDoc) fn(barDoc);
 }
 /** The document a window lives in (a native window's, or this page's). */
 export function docOf(id) { return wins.get(id)?.doc || document; }
-/** Where dialogs and toasts go: the window of the user's last click or key (this page, or a native
- * window still open), else this page. From the floating bar, a dialog goes to the JARVIS window (the
- * bar is too small), a toast stays in the bar. */
+/** Where dialogs and toasts go (kind: toast | dialog | config | palette | setup). In the browser, this
+ * page. In the desktop app ("Intégré au bureau"), where the user's last click or key was: a dialog asked
+ * in a discussion's window (or in a dialog's) shows in it; the configuration has a window of its own; a
+ * dialog asked from the bar, a panel or nowhere gets a window of its own. A toast stays in the window of
+ * the last action, else goes to the bar. */
 let lastDoc = document;
 let barDoc = null;
+const frames = new Map();   // framed windows: id -> {id, win, doc, dialog, remember, onClose, onGone}
 export function activeDocument(kind = "dialog") {
-  if (!NATIVE || lastDoc === document) return document;
-  if (lastDoc === barDoc) return kind === "toast" ? barDoc : document;
-  const w = [...wins.values()].find((x) => x.doc === lastDoc);
-  return w && !w.win.closed && !w.st.min ? lastDoc : document;
+  if (!NATIVE) return document;
+  const w = [...wins.values()].find((x) => x.doc === lastDoc && !x.win.closed && !x.st.min);
+  const f = [...frames.values()].find((x) => x.doc === lastDoc);
+  if (kind === "toast") return w || f || lastDoc === barDoc ? lastDoc : (barDoc || document);
+  if (kind === "config") return dialogFrame("config");
+  if (w || f?.dialog) return lastDoc;
+  return dialogFrame(kind);
 }
 setHostDocument(activeDocument);
+setRevealDocument((doc) => {
+  if (!NATIVE) return;
+  const w = [...wins.entries()].find(([, x]) => x.doc === doc);
+  const f = [...frames.values()].find((x) => x.doc === doc);
+  if (w) bridge.win("focus", w[0]);
+  else if (f) bridge.win("focus", FRAME + f.id);
+});
 if (NATIVE) {
   onDocument((doc) => {
     const used = () => { lastDoc = doc; };
     doc.addEventListener("pointerdown", used, true);
     doc.addEventListener("keydown", used, true);
   });
-  // a dialog or a panel opens in the JARVIS window: it comes forward (it may be hidden); one asked from the
-  // floating bar gives the bar back once it is closed
-  const root = document.getElementById("modal-root");
-  let open = false, fromBar = false;
-  new MutationObserver(() => {
-    const now = root.childElementCount > 0;
-    if (now && !open) { open = true; fromBar = !!barDoc && lastDoc === barDoc; bridge.win("hub"); }
-    else if (!now && open) { open = false; if (fromBar) { fromBar = false; bridge.win("bar-show"); } }
-  }).observe(root, { childList: true });
 }
 
 const persist = debounce(() => {
@@ -437,6 +442,154 @@ export function detachBar(el) {
   return doc;
 }
 
+// ------------------------------------------------------------ framed windows ("Intégré au bureau")
+// Without the JARVIS window, what it held opens in windows of the OS of their own, with a title strip and
+// the native buttons: its panels (Historique, Sessions, Routines, Projet, Notes: the drawer's element
+// moves into the window) and its modals (configuration, Ctrl+K, the assistant, the questions asked from
+// the bar or a panel: built straight into the window's #modal-root, see util.modalHost).
+const FRAME = "cadre-";     // window.open name: jarvis-win:cadre-<id>
+const FRAME_HEAD = 38;      // the title strip of a dialog's window (.frame-head)
+const PANEL_HEAD = 48;      // a panel's own head is its title strip
+let frameSeq = 0;
+
+function openFrame(id, { width, height, place = null, hidden = false, classes = [], title = "JARVIS", head = FRAME_HEAD }) {
+  const at = place && Number.isFinite(place.x) ? [`left=${place.x}`, `top=${place.y}`] : [];
+  const features = [`width=${Math.round(width)}`, `height=${Math.round(height)}`, ...at, ...(hidden ? ["hidden=1"] : [])].join(",");
+  const win = window.open("about:blank", `jarvis-win:${FRAME}${id}`, features);
+  if (!win) return null;
+  let ready;
+  const f = { id, win, doc: null, head, ready: new Promise((r) => { ready = r; }), dialog: false, remember: "", onClose: null, onGone: null };
+  f.doc = nativeDocument(win, ["frame-doc", ...classes], () => { frameColors(f); ready(); });
+  f.doc.title = title;
+  frames.set(id, f);
+  addLookupDocument(f.doc);
+  docInits.forEach((fn) => fn(f.doc));
+  return f;
+}
+
+/** The native buttons take the colors of the window's title strip. */
+function frameColors(f) {
+  const cs = f.win.getComputedStyle(f.doc.body);
+  bridge.win("overlay", FRAME + f.id, { color: hexColor(cs.backgroundColor), symbolColor: hexColor(cs.color), height: f.head });
+}
+
+function forgetFrame(f) {
+  frames.delete(f.id);
+  removeLookupDocument(f.doc);
+  if (lastDoc === f.doc) lastDoc = barDoc || document;
+}
+
+function closeFrame(id) {
+  const f = frames.get(id);
+  if (!f) return;
+  forgetFrame(f);
+  bridge.win("close", FRAME + id);
+}
+
+function frameEvent(id, type, b) {
+  const f = frames.get(id);
+  if (!f) return;
+  if (type === "focus") lastDoc = f.doc;
+  else if (type === "bounds" && b && f.remember) savePrefs({ frames: { ...(prefs().frames || {}), [f.remember]: { x: b.x, y: b.y, w: b.width, h: b.height } } });
+  else if (type === "close-request") { lastDoc = f.doc; (f.onClose || (() => closeFrame(id)))(); }
+  else if (type === "closed") { forgetFrame(f); f.onGone?.(); }   // (gone without the page asking)
+}
+
+/** A window for a modal: the configuration (its own place, kept), or a dialog sized to what it shows. It
+ * closes once its last modal is gone; its close button is Échap. Returns its document. */
+function dialogFrame(kind) {
+  const id = `dialogue-${++frameSeq}`;
+  const big = kind === "config";
+  const place = big ? prefs().frames?.config : null;
+  const sw = window.screen.availWidth || 1280, sh = window.screen.availHeight || 800;
+  const f = openFrame(id, big
+    ? { width: place?.w || Math.min(1180, sw - 80), height: place?.h || Math.min(880, sh - 60), place, classes: ["dialog-doc", "fitted"], title: "Configuration — JARVIS" }
+    : { width: Math.min(1200, sw - 60), height: Math.min(940, sh - 40), hidden: true, classes: ["dialog-doc"] });
+  if (!f) return document;
+  f.dialog = true;
+  if (big) f.remember = "config";
+  const title = h("span", { class: "frame-title" }, big ? "Configuration" : "JARVIS");
+  f.doc.body.append(h("div", { class: "frame-head" }, h("span", { class: "frame-mark", "aria-hidden": "true" }), title),
+    h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
+  const root = f.doc.getElementById("modal-root");
+  let shown = big;
+  new MutationObserver(() => {
+    if (!root.childElementCount) { closeFrame(id); return; }
+    const box = root.firstElementChild.firstElementChild;
+    const text = (box?.getAttribute("aria-label") || box?.querySelector("h2, h3")?.textContent || "JARVIS").trim();
+    if (title.textContent !== text) { title.textContent = text; f.doc.title = `${text} — JARVIS`; bridge.win("title", FRAME + id, f.doc.title); }
+    if (!shown) { shown = true; f.ready.then(() => setTimeout(() => fitFrame(f), 30)); }
+  }).observe(root, { childList: true });
+  // its close button: Échap to the modal on top (a question may come first), else it goes
+  f.onClose = () => {
+    const top = root.lastElementChild;
+    f.doc.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    setTimeout(() => { if (top?.isConnected && root.lastElementChild === top) top.remove(); }, 80);
+  };
+  return f.doc;
+}
+
+/** The dialog's natural size (its scrolling parts unrolled), measured in the large hidden window; then the
+ * window takes that size and shows, and the dialog fills it. */
+function fitFrame(f) {
+  if (!frames.has(f.id)) return;
+  const box = f.doc.querySelector("#modal-root > .overlay > *");
+  if (!box) return;
+  let extra = 0;
+  const counted = [];
+  for (const x of box.querySelectorAll("*")) {
+    if (counted.some((c) => c.contains(x))) continue;
+    if (x.scrollHeight > x.clientHeight + 1 && /auto|scroll/.test(f.win.getComputedStyle(x).overflowY)) {
+      counted.push(x);
+      extra += x.scrollHeight - x.clientHeight;
+    }
+  }
+  const r = box.getBoundingClientRect();
+  f.doc.documentElement.classList.add("fitted");
+  bridge.win("frame-show", FRAME + f.id, { width: Math.ceil(r.width), height: Math.ceil(r.height + extra) + FRAME_HEAD });
+}
+
+/** The panels (drawers) of the JARVIS window: each one in a window of its own while it is shown. */
+export function nativePanels(els) {
+  if (!NATIVE) return;
+  for (const el of els) {
+    const id = `panneau-${el.id}`;
+    new MutationObserver(() => {
+      const f = frames.get(id);
+      if (!el.hidden && !f) openPanel(el, id);
+      else if (el.hidden && f) { document.body.append(el); closeFrame(id); }
+    }).observe(el, { attributes: true, attributeFilter: ["hidden"] });
+  }
+}
+
+function openPanel(el, id) {
+  const place = prefs().frames?.[id];
+  const f = openFrame(id, { width: place?.w || (el.classList.contains("wide") ? 640 : 500), height: place?.h || 800, place,
+    classes: ["panel-doc"], title: `${el.getAttribute("aria-label") || "JARVIS"} — JARVIS`, head: PANEL_HEAD });
+  if (!f) return;
+  f.remember = id;
+  f.doc.body.append(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
+  f.onClose = () => { el.hidden = true; };
+  f.onGone = () => { document.body.append(el); el.hidden = true; };
+}
+
+/** A panel already in its window comes forward (rather than closing, as its button does in the page). */
+export function focusPanel(el) {
+  if (!NATIVE || !frames.has(`panneau-${el.id}`)) return false;
+  bridge.win("focus", `${FRAME}panneau-${el.id}`);
+  return true;
+}
+
+/** Tout fermer: the panels and the dialogs' windows too. */
+export function closeFrames() {
+  for (const f of [...frames.values()]) (f.onClose || (() => closeFrame(f.id)))();
+}
+
+/** A modal is open (in this page, or in a window of its own). */
+export function modalOpen() {
+  return !!document.querySelector("#modal-root .overlay") || [...frames.values()].some((f) => f.dialog);
+}
+
 /** The native window's title (taskbar, Alt+Tab). */
 export function setTitle(id, text) {
   const w = wins.get(id);
@@ -472,7 +625,10 @@ export function colorize(id) {
 /** The theme changed: native windows follow. */
 export function retheme() {
   colorize.done = false;
-  barDoc?.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
+  const theme = document.documentElement.getAttribute("data-theme") || "sombre";
+  barDoc?.documentElement.setAttribute("data-theme", theme);
+  for (const f of frames.values()) { f.doc.documentElement.setAttribute("data-theme", theme); setTimeout(() => frameColors(f), 50); }
+  if (NATIVE) bridge.win("theme", null, theme);
   for (const [id, w] of wins) {
     if (!w.win) continue;
     w.colors = "";
@@ -483,6 +639,7 @@ export function retheme() {
 
 if (NATIVE) {
   bridge.onWin(({ id, type, bounds: b }) => {
+    if (String(id).startsWith(FRAME)) { frameEvent(String(id).slice(FRAME.length), type, b); return; }
     const w = wins.get(id);
     if (!w) return;
     if (type === "focus") markFocus(id);

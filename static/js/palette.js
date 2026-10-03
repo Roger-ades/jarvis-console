@@ -1,7 +1,7 @@
 // Ctrl+K: one place to find anything (actions, projects, discussions, Claude Code sessions)
 // and to act on it, with the keyboard.
 import { api } from "./api.js";
-import { fmtDate, h, statusLabel } from "./util.js";
+import { fmtDate, h, modalHost, reveal, statusLabel } from "./util.js";
 
 let open = null;
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
@@ -18,7 +18,7 @@ function marked(text, q) {
 
 /** ctx: actions(), projects(), tasks(), openTask(id), useProject(p), openSession(pid, sid), projectName(folder). */
 export function openPalette(ctx) {
-  if (open) { open.input.focus(); return; }
+  if (open) { reveal(open.input.ownerDocument); open.input.focus(); return; }
   const input = h("input", { type: "text", class: "pal-input", placeholder: "Rechercher une discussion, une session, un projet ou une action…",
     spellcheck: "false", "aria-label": "Rechercher" });
   const list = h("div", { class: "pal-list", role: "listbox" });
@@ -27,11 +27,12 @@ export function openPalette(ctx) {
     h("div", { class: "pal-foot" }, h("span", {}, h("kbd", {}, "↑"), h("kbd", {}, "↓"), " choisir"), h("span", {}, h("kbd", {}, "Entrée"), " ouvrir"),
       h("span", { class: "grow" }), h("span", { class: "muted" }, "Recherche aussi dans le contenu des discussions")));
   const overlay = h("div", { class: "overlay pal-overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
+  const { root, doc } = modalHost("palette");
   let items = [], index = 0, server = { tasks: [], sessions: [] }, timer = null, seq = 0, loading = false;
 
   function close() {
     overlay.remove();
-    document.removeEventListener("keydown", onKey, true);
+    doc.removeEventListener("keydown", onKey, true);
     open = null;
   }
 
@@ -102,8 +103,8 @@ export function openPalette(ctx) {
       if (my === seq) { loading = false; build(); }
     }, 250);
   });
-  document.addEventListener("keydown", onKey, true);
-  document.getElementById("modal-root").append(overlay);
+  doc.addEventListener("keydown", onKey, true);
+  root.append(overlay);
   open = { input, close };
   build();
   input.focus();

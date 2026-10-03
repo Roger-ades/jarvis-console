@@ -1,12 +1,12 @@
 // Existing Claude Code sessions (Claude Desktop Code tab, CLI, console): browse, read, resume.
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
-import { confirmDialog, fmtDate, h, toast, toolIcon, toolLabel } from "./util.js";
+import { $, confirmDialog, fmtDate, h, modalHost, toast, toolIcon, toolLabel } from "./util.js";
 
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
 let ctx = null, rows = [], q = "", profile = "", origin = "", project = "", showArchived = false, loading = false;
 
-const el = () => document.getElementById("sessions");
+const el = () => $("#sessions");
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
 export function toggleSessions(context) {
@@ -102,7 +102,7 @@ function row(r) {
 async function openViewer(r) {
   let data;
   try { data = await api(`/api/sessions/${r.profile}/${r.id}`); } catch (e) { toast(e.message, "err"); return; }
-  const root = document.getElementById("modal-root");
+  const { root, doc } = modalHost("dialog");
   const s = data.session;
   const body = h("div", { class: "viewer-body" });
   for (const it of data.items) {
@@ -144,15 +144,15 @@ async function openViewer(r) {
     note.hidden = s.resumable;
     note.textContent = `Le dossier d'origine n'existe plus (${s.cwd || "inconnu"}) : déplace la session dans un projet pour la reprendre.`;
   }
-  const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey, true); };
-  const onKey = (e) => { if (e.key === "Escape" && !document.querySelector(".dialog:not(.viewer)")) close(); };
+  const close = () => { overlay.remove(); doc.removeEventListener("keydown", onKey, true); };
+  const onKey = (e) => { if (e.key === "Escape" && !doc.querySelector(".dialog:not(.viewer)")) close(); };
   const resume = async () => {
     const prompt = msg.value.trim();
     if (!prompt) { msg.focus(); toast("Écris d'abord le message qui relance la session.", "warn"); return; }
     const t = await ctx.launch(`/api/sessions/${s.profile}/${s.id}/resume`, { prompt, preset: preset.value, fork: fork.checked });
     if (t) {
       close();
-      document.getElementById("sessions").hidden = true;
+      el().hidden = true;
     }
   };
   msg.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); resume(); } });
@@ -176,7 +176,7 @@ async function openViewer(r) {
   refresh();
   const overlay = h("div", { class: "overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
   root.append(overlay);
-  document.addEventListener("keydown", onKey, true);
+  doc.addEventListener("keydown", onKey, true);
   body.scrollTop = body.scrollHeight;
   msg.focus();
 }

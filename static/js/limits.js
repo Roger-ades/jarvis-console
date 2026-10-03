@@ -177,15 +177,17 @@ export function openLimits(anchor, profile, { onConfig }) {
     ].filter(Boolean));
   };
   render();
-  document.body.append(box);
+  // (in the anchor's document: the page, or the desktop app's bar)
+  const doc = anchor.ownerDocument;
+  doc.body.append(box);
   const r = anchor.getBoundingClientRect();
   box.style.top = `${r.bottom + 8}px`;
-  box.style.left = `${Math.max(8, Math.min(window.innerWidth - box.offsetWidth - 8, r.left + r.width / 2 - box.offsetWidth / 2))}px`;
+  box.style.left = `${Math.max(8, Math.min(doc.documentElement.clientWidth - box.offsetWidth - 8, r.left + r.width / 2 - box.offsetWidth / 2))}px`;
   const away = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeLimits(); };
   const esc = (e) => { if (e.key === "Escape") closeLimits(); };
-  setTimeout(() => document.addEventListener("pointerdown", away), 0);
-  document.addEventListener("keydown", esc);
-  open = { pid: profile.id, render, close: () => { box.remove(); document.removeEventListener("pointerdown", away); document.removeEventListener("keydown", esc); } };
+  setTimeout(() => doc.addEventListener("pointerdown", away), 0);
+  doc.addEventListener("keydown", esc);
+  open = { pid: profile.id, render, close: () => { box.remove(); doc.removeEventListener("pointerdown", away); doc.removeEventListener("keydown", esc); } };
 }
 
 export function closeLimits() { open?.close(); open = null; }
