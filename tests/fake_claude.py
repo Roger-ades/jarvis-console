@@ -2,6 +2,9 @@
 
 The user message drives the scenario, one directive per line:
   TOOL <name> <json input>   call a tool (PreToolUse hook, then permission check)
+  DO <name> <json input>     same with the call's id (as the real CLI), and Write / Edit / MultiEdit really write
+  PAR <json [[name, input]…]> several DO calls in one message, their results together (parallel calls)
+  DO_SANS_ID <name> <json>   DO without giving the call's id to the hook (older CLI)
   ASK                        AskUserQuestion round-trip
   ASK2                       AskUserQuestion with two questions, long option descriptions
   SLEEP <seconds>
@@ -107,10 +110,11 @@ def request(sub: dict) -> dict:
         _pending.append(m)
 
 
-def use_tool(name: str, inp: dict) -> tuple[bool, str]:
-    hook = request({"subtype": "hook_callback", "callback_id": "console_pretool",
+def use_tool(name: str, inp: dict, tool_use_id: str | None = None) -> tuple[bool, str]:
+    ids = {"tool_use_id": tool_use_id} if tool_use_id else {}
+    hook = request({"subtype": "hook_callback", "callback_id": "console_pretool", **ids,
                     "input": {"hook_event_name": "PreToolUse", "tool_name": name, "tool_input": inp,
-                              "session_id": SESSION}})
+                              "session_id": SESSION, **ids}})
     if hook.get("_eof"):  # what the real CLI tells the model when its host stopped answering
         return False, "The user doesn't want to take this action right now. STOP what you are doing and wait for the user to tell you how to proceed."
     decision = (hook.get("hookSpecificOutput") or {}).get("permissionDecision")
@@ -119,10 +123,50 @@ def use_tool(name: str, inp: dict) -> tuple[bool, str]:
     if decision != "allow" and MODE != "bypassPermissions" and name not in ALLOWED:
         if MODE == "dontAsk":
             return False, "dontAsk"
-        perm = request({"subtype": "can_use_tool", "tool_name": name, "input": inp})
+        perm = request({"subtype": "can_use_tool", "tool_name": name, "input": inp, **ids})
         if perm.get("behavior") != "allow":
             return False, perm.get("message", "deny")
     return True, "ok"
+
+
+def apply_tool(name: str, inp: dict) -> tuple[bool, str]:
+    """What the real file tools do once allowed."""
+    path = inp.get("file_path") or ""
+    try:
+        if name == "Write":
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(inp.get("content", ""))
+            return True, f"File created successfully at: {path}"
+        if name in ("Edit", "MultiEdit"):
+            with open(path, encoding="utf-8", newline="") as f:
+                text = f.read()
+            for e in inp.get("edits") or [inp]:
+                if e["old_string"] not in text:
+                    return False, "String to replace not found in file."
+                text = text.replace(e["old_string"], e["new_string"], 1)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            return True, f"The file {path} has been updated."
+    except OSError as exc:
+        return False, str(exc)
+    return True, "ok"
+
+
+def do_tools(calls: list, give_ids: bool = True) -> list[str]:
+    """Tool calls of one assistant message, each checked then run, their results in one message."""
+    ids = [f"toolu_{uuid.uuid4().hex[:8]}" for _ in calls]
+    out({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+        {"type": "tool_use", "id": i, "name": n, "input": inp} for i, (n, inp) in zip(ids, calls)]}})
+    results, lines = [], []
+    for i, (name, inp) in zip(ids, calls):
+        ok, why = use_tool(name, inp, i if give_ids else None)
+        if ok:
+            ok, why = apply_tool(name, inp)
+        results.append({"type": "tool_result", "tool_use_id": i, "is_error": not ok, "content": why})
+        lines.append(f"{name}:{'ok' if ok else 'refus'}")
+    out({"type": "user", "parent_tool_use_id": None, "message": {"content": results}})
+    return lines
 
 
 DEMO_TEXT = """## Synthèse
@@ -479,6 +523,10 @@ def turn(text: str):
             out({"type": "user", "parent_tool_use_id": None, "message": {"content": [
                 {"type": "tool_result", "tool_use_id": tid, "is_error": not ok, "content": why}]}})
             lines.append(f"{name}:{'ok' if ok else 'refus'}")
+        elif cmd in ("DO", "DO_SANS_ID"):
+            lines += do_tools([(parts[1], json.loads(parts[2]) if len(parts) > 2 else {})], give_ids=cmd == "DO")
+        elif cmd == "PAR":
+            lines += do_tools([tuple(c) for c in json.loads(raw.strip()[4:])])
         elif cmd in ("ASK", "ASK2"):
             q = {"questions": [{"question": "Quelle couleur ?", "header": "Couleur", "multiSelect": False,
                                 "options": [{"label": "Bleu", "description": ""}, {"label": "Rouge", "description": ""}]}]}

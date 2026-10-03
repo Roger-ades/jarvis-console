@@ -95,12 +95,14 @@ class TaskIn(BaseModel):
     attachments: list[str] = []
     context: list[dict] = []
     not_before: float | None = None  # start at that time (e.g. when the account limit resets)
+    regard: dict | None = None       # what the user looks at in the console (console/regard.py)
 
 
 class MessageIn(BaseModel):
     text: str = ""
     attachments: list[str] = []
     compact: bool = False  # compact the session's context first
+    regard: dict | None = None
 
 
 class DisplayAnswerIn(BaseModel):
@@ -407,7 +409,8 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def create_task(body: TaskIn):
         return engine.create_task(body.prompt, profile=body.profile, model=body.model, preset=body.preset,
                                   workdir=body.workdir, effort=body.effort, confirmed=body.confirmed, team=body.team,
-                                  attachments=body.attachments, context=body.context, not_before=body.not_before)
+                                  attachments=body.attachments, context=body.context, not_before=body.not_before,
+                                  regard=body.regard)
 
     # -------------------------------------------------------- attachments (raw body: no multipart dependency)
     @app.post("/api/uploads")
@@ -454,7 +457,28 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/message")
     def task_message(tid: str, body: MessageIn):
-        return engine.followup(tid, body.text, body.attachments, compact=body.compact)
+        return engine.followup(tid, body.text, body.attachments, compact=body.compact, regard=body.regard)
+
+    # -------------------------------------------------------- what Claude changed in files (console/changes.py)
+    @app.get("/api/tasks/{tid}/changes")
+    def task_changes(tid: str):
+        return engine.file_changes(tid)
+
+    @app.get("/api/tasks/{tid}/changes/{cid}")
+    def task_change(tid: str, cid: str):
+        return engine.file_change(tid, cid)
+
+    @app.post("/api/tasks/{tid}/changes/{cid}/undo")
+    def task_change_undo(tid: str, cid: str, body: dict = Body(default={})):
+        return engine.undo_change(tid, cid, force=bool(body.get("force")))
+
+    @app.post("/api/tasks/{tid}/changes/{cid}/redo")
+    def task_change_redo(tid: str, cid: str, body: dict = Body(default={})):
+        return engine.undo_change(tid, cid, force=bool(body.get("force")), redo=True)
+
+    @app.post("/api/tasks/{tid}/changes-file/undo")
+    def task_change_file_undo(tid: str, body: dict = Body(...)):
+        return engine.undo_file(tid, str(body.get("path") or ""))
 
     @app.post("/api/tasks/{tid}/displays/{key}/answer")
     def task_display_answer(tid: str, key: str, body: DisplayAnswerIn):

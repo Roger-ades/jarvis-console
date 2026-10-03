@@ -20,7 +20,8 @@ import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
 import { $, STATUS, confirmDialog, copyText, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast } from "./util.js";
-import { configure as configureDisplays, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
+import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
+import * as regard from "./regard.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
 import * as wm from "./wm.js";
 
@@ -110,6 +111,7 @@ function applyConfig(config, meta) {
   document.documentElement.setAttribute("data-theme", config.general.theme);
   store.set("jarvis.theme", config.general.theme);
   wm.configure({ default_width: config.ui.default_width, default_height: config.ui.default_height });
+  regard.configure({}); // (the chips follow the "Joindre ce que je regarde" setting)
 }
 
 async function reloadConfig() {
@@ -463,6 +465,9 @@ function history() { return store.get("jarvis.prompts", []); }
 
 const attacher = new Attacher($("#cmd-files"));
 const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
+// "Ce que je regarde": the preview, display or text the user looks at goes with the next request
+regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
+regard.chip($("#cmd-regard"));
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
 
 /** From a window: this discussion becomes context of the next request. */
@@ -499,10 +504,11 @@ async function submit(extra = {}) {
   if (!prompt && !files.length && !context.length && !attacher.busy()) return;
   if (!attacher.ready()) return;
   const wd = $("#opt-workdir").value;
+  const seen = regard.get();
   const body = {
     prompt, profile: S.profile, model: $("#opt-model").value || null, preset: $("#opt-preset").value || null,
     effort: $("#opt-effort").value || null, workdir: wd && wd !== "__other__" ? wd : null,
-    team: $("#opt-team").getAttribute("aria-pressed") === "true", attachments: files, context, ...extra,
+    team: $("#opt-team").getAttribute("aria-pressed") === "true", attachments: files, context, regard: regard.payload(seen), ...extra,
   };
   const checked = await limitGuard(body);
   if (!checked) return; // cancelled: the text stays in the bar
@@ -518,7 +524,7 @@ async function submit(extra = {}) {
     store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
   }
   const t = await launch("/api/tasks", body);
-  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); }
+  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); }
   else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
 }
 

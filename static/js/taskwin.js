@@ -5,7 +5,9 @@ import { mdElement } from "./md.js";
 import {
   ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, modelName, toast, toolIcon, toolLabel,
 } from "./util.js";
+import { changesUpdated, counts, openChanges, openDiff } from "./changes.js";
 import { openDisplayModal, openDisplayWindow, renderDisplay, setAnswer, setDoc } from "./display.js";
+import * as regard from "./regard.js";
 import { paint, taskTint } from "./tint.js";
 import { openPreview, revealImage, thumbnail } from "./viewer.js";
 import * as wm from "./wm.js";
@@ -133,6 +135,7 @@ export class TaskWindow {
     this.agents = new Map();
     this.toolCounts = new Map();
     this.apprEls = new Map();
+    this.changes = new Map(); // file changes of the discussion (console/changes.py), by id
     this.lastText = "";
     this.build();
   }
@@ -168,10 +171,13 @@ export class TaskWindow {
     this.att = new Attacher(this.attList);
     this.att.bindDrop(this.el);
     this.att.bindPaste(this.input);
+    // "Ce que je regarde": shown while this window has the focus, sent with the follow-up
+    this.regardList = h("div", { class: "att-list win-att win-regard" });
+    this.regardChip = regard.chip(this.regardList, { visible: () => wm.focused() === this.id, here: this.id });
     this.foot = h("footer", { class: "win-foot" }, this.input, this.att.button("icon-btn"),
       h("button", { type: "button", class: "send-mini", title: "Envoyer (Entrée)", "aria-label": "Envoyer", svg: "send",
         on: { click: () => this.sendFollowup() } }));
-    this.el.append(this.head, this.sub, this.main, this.approvals, this.attList, this.foot);
+    this.el.append(this.head, this.sub, this.main, this.approvals, this.regardList, this.attList, this.foot);
     this.timer = setInterval(() => this.tick(), 1000);
     // What the session does, from its transcripts: every agent's tools, background sub-agents included
     this.activity = null;
@@ -217,6 +223,7 @@ export class TaskWindow {
     clearInterval(this.timer);
     clearInterval(this.actTimer);
     this.att.picker.remove();
+    this.regardChip.dispose();
     wm.unregister(this.id);
   }
 
@@ -603,6 +610,12 @@ export class TaskWindow {
       box.append(list);
       list.querySelectorAll(".fileref.img").forEach((el) => thumbnail(el, this.id, this.tint()));
     }
+    if (d.regard) {
+      const r = d.regard;
+      const what = r.path ? h("a", { href: "#", class: "fileref", "data-path": r.path, title: `Aperçu : ${r.path}` }, r.label) : h("span", {}, r.label);
+      box.append(h("div", { class: "msg-regard", title: r.selection ? `Texte sélectionné :\n${r.selection}` : "" },
+        svg("eye"), h("span", {}, "Regard : ", what), r.selection ? h("q", {}, r.selection) : null));
+    }
     return box;
   }
 
@@ -756,6 +769,14 @@ export class TaskWindow {
       case "display_answer":
         setAnswer(this.id, d);
         break;
+      case "change":
+        this.addChange(d);
+        if (live) changesUpdated(this.id);
+        break;
+      case "change_state":
+        this.changeState(d);
+        if (live) changesUpdated(this.id);
+        break;
       case "policy":
         this.push(this.line(`Refusé : ${toolLabel(d.tool)}${d.target ? ` — ${d.target}` : ""}. ${d.reason || ""}`, "policy", "shield"), parent);
         break;
@@ -830,6 +851,35 @@ export class TaskWindow {
     this.refreshGroup(g);
     this.tools.set(d.id, { row, status, details, group: g, parent, name: d.name, path });
     if (this.nearBottom()) this.body.scrollTop = this.body.scrollHeight;
+  }
+
+  /** A file a tool changed: a button on its action opens the differences (and undo). */
+  addChange(d) {
+    this.changes.set(d.id, d);
+    const t = this.tools.get(d.tool_use_id);
+    if (!t) return;
+    const btn = h("button", { type: "button", class: "pv-btn chg-btn", title: `Différences de ${d.path} (annuler possible)`,
+      on: { click: (e) => { e.preventDefault(); e.stopPropagation(); this.showChange(d.id); } } },
+    svg("diff"), h("span", {}, counts(d)));
+    t.status.before(btn);
+    d.btn = btn;
+  }
+
+  changeState(d) {
+    const c = this.changes.get(d.id);
+    if (c) {
+      c.state = d.state;
+      c.btn?.classList.toggle("undone", d.state === "annule");
+    }
+    const name = baseName(d.path);
+    this.push(d.state === "annule"
+      ? this.line(`Modification annulée : ${name}${d.forced ? " (forcée)" : ""} — Claude le saura avec ton prochain message.`, "denied", "undo")
+      : this.line(`Modification rétablie : ${name}`, "approved", "retry"));
+  }
+
+  showChange(id) {
+    const c = this.changes.get(id);
+    if (c) openDiff(this.id, c, { color: this.tint(), task: () => this.task });
   }
 
   addAgent(d, parent, ts) {
@@ -1112,9 +1162,12 @@ export class TaskWindow {
     }
     this.input.value = "";
     autoGrow(this.input, 120);
+    // only what this window's bar showed (it shows the chip while the window has the focus)
+    const seen = wm.focused() === this.id ? regard.get() : null;
     try {
-      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text, attachments: files, compact } });
+      await api(`/api/tasks/${this.id}/message`, { method: "POST", body: { text, attachments: files, compact, regard: regard.payload(seen) } });
       this.att.sent(files);
+      regard.sent(seen);
     } catch (e) {
       toast(e.message, "err");
       if (!this.input.value.trim()) this.input.value = text;
@@ -1174,6 +1227,9 @@ export class TaskWindow {
       "-",
       { label: "Relancer", run: () => this.ctx.retry(this.id) },
       ...others.map((p) => ({ label: `Dupliquer avec ${p.name}`, run: () => this.ctx.duplicate(this.id, p.id) })),
+      "-",
+      { label: t.changed_files ? `Fichiers modifiés (${t.changed_files})…` : "Fichiers modifiés…",
+        run: () => openChanges(this.id, { color: this.tint(), task: () => this.task, title: this.task.title }) },
       "-",
       { label: "Copier le résultat", disabled: !t.result, run: () => copyText(t.result || "") },
       { label: "Ouvrir dans un terminal", disabled: !t.resumable, run: async () => {

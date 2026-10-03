@@ -452,7 +452,9 @@ function tabInterface() {
       num("Largeur par défaut (px)", "ui.default_width", { min: 320, max: 4000 }),
       num("Hauteur par défaut (px)", "ui.default_height", { min: 200, max: 4000 }),
       select("Rangement par défaut", "ui.arrange", [["cascade", "Cascade"], ["mosaique", "Mosaïque"]]),
-      check("Sons de notification", "ui.sounds"))),
+      check("Sons de notification", "ui.sounds"),
+      check("Joindre ce que je regarde", "ui.regard",
+        { help: "L'aperçu ou l'affichage au premier plan et le texte sélectionné partent avec ton message (une puce « Regard » le montre, sa croix le retire)." }))),
     section("Aperçus", "Images, PDF, pages web et fichiers des dossiers de la tâche s'affichent dans la console.", grid(
       check("Ouvrir les liens web dans l'aperçu intégré", "ui.link_preview",
         { help: "Ctrl/⌘ + clic ouvre toujours le vrai navigateur. Certains sites refusent l'affichage intégré." }),

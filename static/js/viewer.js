@@ -153,8 +153,10 @@ export async function openPreview(opts) {
       act("max", "Agrandir / rétablir (double-clic sur la barre)", () => wm.toggleMax(id)),
       act("close", "Fermer (Échap)", close)));
   const el = paint(h("section", { class: `win pv-win k-${kind}`, role: "dialog", "aria-label": `Aperçu ${title}` }, head, body), opts.color);
+  // what "Ce que je regarde" sends when this window is in front (regard.js); the path is the real one once loaded
+  const regard = opts.url ? { type: "page", url: opts.url } : { type: "fichier", path: opts.path, ...(opts.taskId ? { task: opts.taskId } : {}) };
   wm.register(id, el, { handle: head, ephemeral: true, size: SIZES[kind] || SIZES.other, fresh: true,
-    meta: { title, subtitle: opts.path || opts.url, color: colorOf(opts.color), icon: kind === "image" ? "image" : kind === "web" ? "globe" : "file", onClose: close } });
+    meta: { title, subtitle: opts.path || opts.url, color: colorOf(opts.color), icon: kind === "image" ? "image" : kind === "web" ? "globe" : "file", onClose: close, regard } });
   const fitImage = (img) => img.addEventListener("load", () => {
     if (img.naturalWidth) wm.setSize(id, Math.max(360, img.naturalWidth + 34), Math.max(220, img.naturalHeight + 86));
   }, { once: true });
@@ -223,6 +225,7 @@ export async function openPreview(opts) {
   const load = async () => {
     const r = await api(src.get(path), { raw: true });
     where = decodeURIComponent(r.headers.get("X-File-Path") || "") || where;
+    regard.path = where;
     const b = await r.blob();
     const changed = !first;
     stamp = r.headers.get("X-File-Stamp") || "";
@@ -282,14 +285,17 @@ async function openResult(opts) {
       act("close", "Fermer (Échap)", close)));
   const el = paint(h("section", { class: `win pv-win k-${kind === "mail" || kind === "html" ? "html" : "text"}`, role: "dialog",
     "aria-label": `Aperçu ${result.title || "résultat"}` }, head, body), opts.color);
+  const regard = { type: "resultat", task: taskId, call: result.id, tool: result.tool || "", title: result.title || "",
+    kind: result.kind || "", ...(result.contient ? { contient: result.contient } : {}) };
   wm.register(id, el, { handle: head, ephemeral: true, size: kind === "mail" ? { w: 860, h: 820 } : SIZES[kind] || SIZES.text, fresh: true,
-    meta: { title: result.title || "Résultat", subtitle: subtitle.textContent, color: colorOf(opts.color), icon, onClose: close } });
+    meta: { title: result.title || "Résultat", subtitle: subtitle.textContent, color: colorOf(opts.color), icon, onClose: close, regard } });
 
   const q = (remote) => `/api/tasks/${taskId}/result?id=${encodeURIComponent(result.id)}&contient=${encodeURIComponent(result.contient || "")}&remote=${remote}`;
   let v;
   try { v = await api(q(false)); } catch (e) { body.replaceChildren(h("div", { class: "line err pv-err" }, e.message)); return; }
   title.textContent = v.title || "Résultat";
   subtitle.textContent = `Résultat de ${shortTool(v.tool)}`;
+  Object.assign(regard, { title: v.title || regard.title, tool: v.tool || regard.tool, kind: v.kind || regard.kind });
   if (v.weblink) {
     actions.append(act("external", "Ouvrir dans Outlook (navigateur)", () => window.open(v.weblink, "_blank", "noopener,noreferrer")),
       act("copy", "Copier le lien", () => copyText(v.weblink)));

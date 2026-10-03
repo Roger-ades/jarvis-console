@@ -340,6 +340,7 @@ class UISettings(BaseModel):
     sounds: bool = False
     link_preview: bool = True
     auto_images: bool = False
+    regard: bool = True  # "Ce que je regarde": the preview or selected text goes with the message
 
 
 class History(BaseModel):

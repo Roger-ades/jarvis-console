@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { mdElement } from "./md.js";
 import { confirmDialog, copyText, h, toast } from "./util.js";
 import { openPreview, fileBlob, pinButton, thumbnail } from "./viewer.js";
+import { look } from "./regard.js";
 import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
@@ -62,7 +63,7 @@ function redraw(e) {
 /** The element that shows a display; it follows every update until it leaves the page. */
 export function renderDisplay(taskId, key, opts = {}) {
   const e = entry(taskId, key);
-  const root = paint(h("div", { class: `dsp dsp-${opts.mode || "conversation"}`, "data-task": taskId }), opts.color);
+  const root = paint(h("div", { class: `dsp dsp-${opts.mode || "conversation"}`, "data-task": taskId, "data-key": key }), opts.color);
   if (!e) return root;
   const m = { root, mode: opts.mode || "conversation", color: opts.color };
   e.mounts.add(m);
@@ -565,7 +566,8 @@ export function openDisplayWindow(taskId, key, color) {
   // the title follows updates
   e.mounts.add({ root: win, update: () => { title.textContent = e.doc.titre; } });
   wm.register(id, win, { handle: head, ephemeral: true, size: { w: 780, h: 680 }, fresh: true,
-    meta: { title: e.doc.titre, subtitle: "Affichage de Claude", color: colorOf(color), icon: "sparkle", onClose: close } });
+    meta: { title: e.doc.titre, subtitle: "Affichage de Claude", color: colorOf(color), icon: "sparkle", onClose: close,
+      regard: { type: "affichage", task: taskId, key } } });
   return id;
 }
 
@@ -599,6 +601,7 @@ export function openDisplayModal(taskId, key, color) {
   document.addEventListener("keydown", onKey, true);
   document.getElementById("modal-root").append(overlay);
   modal = { id0, close };
+  look({ type: "affichage", task: taskId, key }); // in front of everything: what the user looks at
   box.querySelector(".icon-btn")?.focus();
 }
 

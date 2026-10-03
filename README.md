@@ -18,6 +18,11 @@ tes abonnements Claude via la CLI Claude Code.
 - **Contrôle de chaque appel d'outil** (sous-agents compris) : refus, validation humaine
   dans la fenêtre, contraintes sur les paramètres (Odoo), dossiers interdits.
 - **Traçabilité** : historique persistant, journal d'audit exportable, arrêt d'urgence.
+- **Ce que je regarde** : l'aperçu ou l'affichage au premier plan et le texte sélectionné
+  partent avec ton message ; **différences et annulation** de chaque fichier modifié par Claude.
+
+La suite prévue (déclencheurs, boîte de réception, validations depuis le téléphone…) est dans
+[docs/feuille-de-route.md](docs/feuille-de-route.md).
 
 ---
 
@@ -201,6 +206,47 @@ menu ⋯ d'une fenêtre : « Utiliser comme contexte d'une demande ».
 **Nouvelle discussion à partir d'ici** (menu ⋯ d'une fenêtre) : une copie repart avec
 tout le contexte, dans le même dossier ; l'originale ne change pas.
 
+### Ce que je regarde
+
+Pour dire « corrige ce paragraphe » ou « explique ce tableau » sans copier-coller : quand tu
+sélectionnes du texte (dans un aperçu, un affichage de Claude ou une de ses réponses) ou que tu
+mets un aperçu ou un affichage au premier plan, une puce **Regard** apparaît dans la barre de
+saisie (barre du bas, et suite de la fenêtre que tu utilises). Elle dit ce qui partira avec ton
+message ; sa croix le retire. À l'envoi, la console ajoute au message le fichier ou la page
+regardés (chemin, adresse), l'affichage (titre) et le texte sélectionné, présenté à Claude
+comme une donnée et non comme une consigne. Ta bulle le rappelle (« Regard : rapport.md »).
+
+- Un affichage ou un résultat d'outil (un mail…) d'une **autre discussion du même compte**
+  part avec son contenu : la nouvelle discussion ne l'a jamais vu. D'un compte à l'autre,
+  seuls le titre et ta sélection passent.
+- Le regard ne donne aucun droit : lire le fichier passe par les autorisations de la
+  discussion. Le texte sélectionné dans un PDF, un mail ou une page web (affichés dans un
+  cadre isolé) n'est pas lisible par la console : seul le fichier ou la page est cité.
+- Envoyé une fois : la puce revient dès que tu sélectionnes autre chose ou reviens sur un
+  aperçu. Désactivable dans Configuration → Interface → « Joindre ce que je regarde ».
+
+### Différences et annulation des modifications de fichiers
+
+Chaque écriture de Claude par ses outils de fichiers (Write, Edit, MultiEdit, NotebookEdit,
+sous-agents compris) est suivie : la console garde le fichier tel qu'il était juste avant
+(au moment où tu valides, si l'écriture attendait ta validation) et tel que Claude l'a
+laissé, dans ses données, inaccessibles aux agents.
+
+- Sur l'action, un bouton **+2 −1** ouvre les **différences** (lignes retirées et ajoutées).
+- Menu ⋯ d'une fenêtre → **Fichiers modifiés** : les fichiers touchés par la discussion,
+  leurs modifications, **Tout annuler** pour un fichier (de la plus récente à la plus
+  ancienne : il revient à son état d'avant la discussion).
+- **Annuler** remet le fichier dans son état d'avant (un fichier créé par Claude est
+  supprimé), après confirmation, seulement s'il n'a pas changé depuis : sinon la console le
+  dit (« Modifié depuis », « Modifiée ensuite » quand une modification plus récente de Claude
+  suit) et propose de forcer. **Rétablir** défait l'annulation, y compris une annulation
+  forcée (ce qu'elle a écrasé est gardé).
+- Claude l'apprend avec ton message suivant (« l'utilisateur a annulé tes modifications
+  de … »), pour ne pas tenir le fichier pour ce qu'il a écrit.
+
+Ne sont pas suivis : les fichiers écrits par une commande (Bash, PowerShell), ceux de plus
+de 2 Mo. Les copies suivent la tâche : elles partent quand elle est supprimée ou purgée.
+
 ### Pièces jointes
 
 Trombone de la barre du bas ou d'une fenêtre, **glisser-déposer** (sur la barre, sur une
@@ -377,7 +423,7 @@ Ne mets jamais ce serveur sur le réseau ou sur internet.
 
 Tout est dans `data/` (ignoré par git) : `config.json` et ses versions précédentes
 (`config-history/`), `console.db` (tâches, flux, journal d'audit, positions des
-fenêtres), `token`. La configuration s'exporte et s'importe en JSON (validée par schéma)
+fenêtres), `modifications/` (copies avant / après des fichiers modifiés par Claude), `token`. La configuration s'exporte et s'importe en JSON (validée par schéma)
 et chaque enregistrement garde la version précédente, restaurable en un clic.
 
 Réglages de démarrage facultatifs : copie `.env.example` en `.env`
@@ -397,6 +443,8 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/content.py` | origine des aperçus HTML (`apercu.localhost`) : adresses à durée limitée, CSP, images du web au clic |
 | `console/results.py` | lecture d'un résultat d'outil (mail, HTML, JSON, texte, image) pour `afficher_resultat` |
 | `console/display.py` | affichages de `presenter` : vérification des blocs, limites, réponses aux choix et boutons |
+| `console/regard.py` | « Ce que je regarde » : vérification et mise en forme de ce qui part avec le message |
+| `console/changes.py` | modifications de fichiers : copies avant / après, différences, annuler et rétablir |
 | `console/routines.py` | routines : planification et calcul des prochaines exécutions |
 | `console/winsys.py` | démarrage à l'ouverture de session (Windows, macOS) |
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |

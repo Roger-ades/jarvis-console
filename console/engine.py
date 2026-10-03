@@ -24,9 +24,11 @@ from pathlib import Path
 
 from . import activity as activity_mod
 from . import attachments as att
+from . import changes as changes_mod
 from . import display as display_mod
 from . import claude_cli, cloud, content, library, mcp, presence
 from . import project_tools
+from . import regard as regard_mod
 from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
                      expand_path, trusted_url, web_domain)
@@ -201,6 +203,8 @@ class Run:
     # are what earlier processes (earlier follow-ups) used plus the latest figures of this one
     cost_base: float = 0.0
     usage_base: dict = field(default_factory=dict)
+    # files that Claude's file tools are about to write, as they are now (tool_use_id -> Snapshot)
+    snaps: dict = field(default_factory=dict)
 
 
 def _ktok(n: int) -> str:
@@ -308,6 +312,8 @@ class Engine:
         self._calls_lock = threading.Lock()
         self._displays: dict[str, dict[str, dict]] = {}  # task -> displays composed by Claude (tool "presenter")
         self._displays_lock = threading.Lock()
+        self.changes = changes_mod.Changes(self.data_dir / "modifications")  # what Claude changed in files
+        self._snaps_lock = threading.Lock()
         self.routines: dict[str, Routine] = {}
         for raw in store.kv_get("routines", []) or []:
             try:
@@ -438,10 +444,11 @@ class Engine:
     def _purge_old(self):
         days = self.cfg.history.retention_days
         n = self.store.purge(time.time() - days * 86400, sorted(TERMINAL))
-        if n:
-            with self._lock:
-                alive = {t["id"] for t in self.store.list_tasks(limit=100000)}
+        with self._lock:
+            alive = {t["id"] for t in self.store.list_tasks(limit=100000)}
+            if n:
                 self.tasks = {k: v for k, v in self.tasks.items() if k in alive}
+        self.changes.sweep(alive)
 
     def shutdown(self):
         self._stop = True
@@ -493,7 +500,8 @@ class Engine:
                     fork: bool = True, history: list | None = None, origin: str = "",
                     routine: dict | None = None, closed: bool = False, team: bool = False,
                     attachments: list[str] | None = None, context: list[dict] | None = None,
-                    extra_dirs: list[str] | None = None, not_before: float | None = None) -> dict:
+                    extra_dirs: list[str] | None = None, not_before: float | None = None,
+                    regard: dict | None = None) -> dict:
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif : réactive la console avant de lancer une tâche.", 423)
         cfg = self.cfg
@@ -544,6 +552,7 @@ class Engine:
             raise TaskError(str(e), e.status) from e
         if context:
             files += self._context_files(prof, context, adir)
+        seen, seen_block = self._regard(regard, "", prof.id)
         t = {
             "id": tid, "title": _title(text), "prompt": text, "profile": prof.id,
             "profile_name": prof.name, "color": prof.color, "model": model, "effort": effort,
@@ -553,7 +562,8 @@ class Engine:
             "cost_usd": 0.0, "duration_ms": 0, "result": "", "error": "", "is_error": False,
             "pinned": False, "closed": bool(closed), "retry_of": retry_of, "pending": [], "mcp": [],
             "todos": [], "usage": {}, "output_bytes": 0, "truncated": False, "model_resolved": "",
-            "queued_messages": [att.message(text, files)], "origin": origin, "routine": routine,
+            "queued_messages": [att.message(text + (f"\n\n{seen_block}" if seen_block else ""), files)],
+            "origin": origin, "routine": routine, "regard": seen,
             "attachments_dir": str(adir), "attachments": files,
             "not_before": float(not_before) if not_before and not_before > now else None,
             "resumed_from": resume, "fork_next": bool(resume and fork), "action": self._action_link(text, wd),
@@ -574,13 +584,15 @@ class Engine:
             self._save(t)
             if history:
                 self._event(tid, "history", {"session": resume, "items": history[-40:], "total": len(history)})
-            self._event(tid, "user", {"text": text, "first": True, **({"files": files} if files else {})})
+            self._event(tid, "user", {"text": text, "first": True, **({"files": files} if files else {}),
+                                      **({"regard": regard_mod.public(seen)} if seen else {})})
             if t["not_before"]:
                 self._event(tid, "status", {"status": "queued", "text": "Programmée pour "
                             + time.strftime("%d/%m %H:%M", time.localtime(t["not_before"]))
                             + " : réinitialisation de la limite du compte."})
             self._audit("tâche créée", {"demande": _clip(text, 2000), "modèle": model, "preset": pre.name,
                                         **({"pièces jointes": [f["path"] for f in files]} if files else {}),
+                                        **({"regard": regard_mod.label(seen)} if seen else {}),
                                         "dossier": wd, "effort": effort or "défaut",
                                         **({"équipe": team_models} if team_agents else {}),
                                         **({"reprise": resume, "copie": fork} if resume else {}),
@@ -593,7 +605,7 @@ class Engine:
         t = self._get(tid)
         return self.create_task(t["prompt"], profile=t["profile"], model=t["model"], preset=t["preset"],
                                 workdir=t["workdir"], effort=t["effort"], confirmed=confirmed, retry_of=tid,
-                                team=bool(t.get("team")), attachments=self._restage(t))
+                                team=bool(t.get("team")), attachments=self._restage(t), regard=t.get("regard"))
 
     def duplicate(self, tid: str, profile: str, confirmed: bool = False) -> dict:
         t = self._get(tid)
@@ -603,7 +615,7 @@ class Engine:
         preset = t["preset"] if self.cfg.preset(t["preset"]) else None
         return self.create_task(t["prompt"], profile=prof.id, model=t["model"], preset=preset,
                                 effort=t["effort"], confirmed=confirmed, retry_of=tid, team=bool(t.get("team")),
-                                attachments=self._restage(t))
+                                attachments=self._restage(t), regard=t.get("regard"))
 
     def fork(self, tid: str, prompt: str, confirmed: bool = False) -> dict:
         """A new discussion that starts with this one's whole context; the original stays as it is."""
@@ -713,6 +725,41 @@ class Engine:
             out.append({**att.write_text(dest, f"contexte - {title}.md", md), "context": True, "title": title})
         return out
 
+    def _regard(self, raw, here: str, pid: str) -> tuple[dict | None, str]:
+        """What the user looks at (regard.py) and the text added to the message. A display or a tool's
+        result of another discussion of the same account comes with its content: the receiving
+        discussion has never seen it."""
+        r = regard_mod.clean(raw)
+        if not r:
+            return None, ""
+        excerpt = ""
+        src_id = r.get("task") or ""
+        if src_id and src_id != here and ("key" in r or "call" in r):
+            src = self.tasks.get(src_id) or self.store.get_task(src_id)
+            if src and src.get("profile") == pid:
+                try:
+                    excerpt = self._regard_excerpt(src, r)
+                except Exception:  # noqa: BLE001 - an unreadable excerpt never stops the message
+                    excerpt = ""
+        return r, regard_mod.block(r, here, excerpt)
+
+    def _regard_excerpt(self, src: dict, r: dict) -> str:
+        if "key" in r:
+            d = self._display(src["id"], r["key"])
+            return json.dumps({k: v for k, v in d["doc"].items() if k != "ou"}, ensure_ascii=False) if d else ""
+        call, _ = self._find_call(src, {"id": r["call"]})
+        if not call:
+            return ""
+        v = self._view(src, call, r.get("contient", ""))
+        if v["kind"] == "mail":
+            m = v.get("meta") or {}
+            head = [f"Objet : {v['title']}", *(f"{k} : {m[f]}" for k, f in (("De", "from"), ("À", "to"), ("Cc", "cc"),
+                                                                             ("Date", "date")) if m.get(f))]
+            return "\n".join(head) + "\n\n" + regard_mod.plain(v.get("page") or "")
+        if v.get("text") is not None:
+            return v["text"]
+        return regard_mod.plain(v["page"]) if v.get("page") else ""
+
     def _restage(self, t: dict) -> list[str] | None:
         root = self.attachments_root()
         ids = [i for i in (att.stage_copy(root, f["path"]) for f in t.get("attachments") or []) if i]
@@ -737,8 +784,10 @@ class Engine:
         return t
 
     # -------------------------------------------------------- follow-ups
-    def followup(self, tid: str, text: str, attachments: list[str] | None = None, compact: bool = False) -> dict:
-        """compact: have Claude Code compact the session first (/compact), then send the message if any."""
+    def followup(self, tid: str, text: str, attachments: list[str] | None = None, compact: bool = False,
+                 regard: dict | None = None) -> dict:
+        """compact: have Claude Code compact the session first (/compact), then send the message if any.
+        regard: what the user looks at in the console (regard.py), added to the message."""
         text = (text or "").strip()
         if not text and not attachments and not compact:
             raise TaskError("Message vide.")
@@ -762,12 +811,16 @@ class Engine:
                 t["attachments"] = [*(t.get("attachments") or []), *files]
                 if run and run.policy and adir not in run.policy.ctx.add_dirs:
                     run.policy.ctx.add_dirs.append(adir)  # the live session may read it at once
-            sent = att.message(text, files)
+            seen, seen_block = self._regard(regard, tid, t["profile"])
+            notes = self._change_notes(t)
+            sent = att.message(text + "".join(f"\n\n{b}" for b in (seen_block, notes) if b), files)
             if compact:
                 self._event(tid, "info", {"text": "Compactage du contexte avant d'envoyer la suite…"})
-            self._event(tid, "user", {"text": text, **({"files": files} if files else {})})
+            self._event(tid, "user", {"text": text, **({"files": files} if files else {}),
+                                      **({"regard": regard_mod.public(seen)} if seen else {})})
             self._audit("message de suite", {"texte": _clip(text, 2000), **({"compactage": True} if compact else {}),
-                                             **({"pièces jointes": [f["path"] for f in files]} if files else {})}, t)
+                                             **({"pièces jointes": [f["path"] for f in files]} if files else {}),
+                                             **({"regard": regard_mod.label(seen)} if seen else {})}, t)
             self._deliver(tid, t, run, ["/compact", sent] if compact else [sent])
             self._save(t)
         self._wake.set()
@@ -1836,6 +1889,130 @@ class Engine:
                                                  "is_error": bool(block.get("is_error")),
                                                  "preview": _clip(_tool_result_text(block.get("content")), 4000),
                                                  "parent": msg.get("parent_tool_use_id")})
+                self._record_change(tid, str(block.get("tool_use_id") or ""), bool(block.get("is_error")),
+                                    msg.get("parent_tool_use_id") or "")
+
+    # -------------------------------------------------------- file changes (differences, undo: changes.py)
+    def _snap(self, run: Run, t: dict, tool: str, tin: dict, cid: str = ""):
+        """The file a file tool is about to write, as it is now. Taken again by each later check of the
+        same call (an approval may wait a while): the copy is the file just before the write."""
+        if tool not in changes_mod.TOOLS:
+            return
+        snap = changes_mod.snapshot(tool, tin, t["workdir"])
+        if not snap:
+            return
+        with self._snaps_lock:
+            key = cid if cid else next((k for k, s in reversed(run.snaps.items()) if s.tool == tool and s.path == snap.path), "")
+            if key in run.snaps:
+                snap.ts = run.snaps[key].ts  # (its place among the pending writes of the same file)
+            run.snaps[key or f"?{secrets.token_hex(4)}"] = snap
+            while len(run.snaps) > 64 or sum(len(s.before or b"") for s in run.snaps.values()) > 64 * 1024 * 1024:
+                run.snaps.pop(next(iter(run.snaps)))
+
+    def _record_change(self, tid: str, cid: str, failed: bool, parent: str = ""):
+        """A file tool's result: what it changed is kept (before / after) if the file really changed."""
+        run = self.runs.get(tid)
+        if not run or not run.snaps or not cid:
+            return
+        with self._calls_lock:
+            call = (self._calls.get(tid) or {}).get(cid) or {}
+        tool = call.get("name", "")
+        with self._snaps_lock:
+            snap = run.snaps.pop(cid, None)
+            if snap is None and tool in changes_mod.TOOLS:
+                # a CLI that does not give the call's id to the hook: the oldest pending write of that file
+                path = changes_mod.target(tool, call.get("input") or {}, self.tasks[tid]["workdir"])
+                key = next((k for k, s in run.snaps.items() if k.startswith("?") and s.tool == tool and s.path == path), None)
+                snap = run.snaps.pop(key) if key else None
+            # writes of the same file still pending (parallel calls): this one ends where the next begins
+            later = sorted((s for s in run.snaps.values() if snap and s.path == snap.path and s.ts > snap.ts),
+                           key=lambda s: s.ts)
+        if snap is None or failed:
+            return
+        try:
+            after = later[0].before if later else changes_mod.read(snap.path)
+            row = self.changes.record(tid, snap, after, cid, parent)
+        except (changes_mod.ChangeError, OSError):
+            return
+        if not row:
+            return
+        with self._lock:
+            t = self.tasks[tid]
+            t["changed_files"] = len({r["path"] for r in self.changes.rows(tid)})
+            self._save(t)
+        self._event(tid, "change", changes_mod.Changes.public(row, with_status=False))
+
+    def _change_error(self, e: changes_mod.ChangeError) -> TaskError:
+        return TaskError(str(e), e.status, **({"conflict": True} if e.conflict else {}))
+
+    def file_changes(self, tid: str) -> dict:
+        self._get(tid)
+        return {"changes": self.changes.listing(tid)}
+
+    def file_change(self, tid: str, cid: str) -> dict:
+        self._get(tid)
+        try:
+            return self.changes.diff(tid, cid)
+        except changes_mod.ChangeError as e:
+            raise self._change_error(e) from e
+
+    def _change_allowed(self, t: dict, cid: str) -> dict:
+        try:
+            row = self.changes.get(t["id"], cid)
+        except changes_mod.ChangeError as e:
+            raise self._change_error(e) from e
+        if self._task_guard(t).forbidden_hit({"file_path": row["path"]}, "Write"):
+            raise TaskError("Ce fichier est protégé par la configuration de sécurité : la console n'y écrit pas.", 403)
+        return row
+
+    def undo_change(self, tid: str, cid: str, force: bool = False, redo: bool = False) -> dict:
+        """The user undoes one of Claude's changes (redo: undoes the undo). Claude learns it with the next
+        message, so that it does not take the file for what it wrote."""
+        t = self._get(tid)
+        self._change_allowed(t, cid)
+        try:
+            row = (self.changes.redo if redo else self.changes.undo)(tid, cid, force)
+        except changes_mod.ChangeError as e:
+            raise self._change_error(e) from e
+        what = "rétablie" if redo else "annulée"
+        with self._lock:
+            t = self._get(tid)
+            notes = [n for n in t.get("change_notes") or [] if n.get("path") != row["path"]]
+            t["change_notes"] = [*notes, {"path": row["path"], "state": row["state"]}][-20:]
+            self._save(t)
+        self._event(tid, "change_state", {"id": cid, "state": row["state"], "path": row["path"],
+                                          **({"forced": True} if row.get("forced") and not redo else {})})
+        self._audit(f"modification {what}", {"chemin": row["path"], "outil": row["tool"],
+                                             **({"forcée": True} if force else {})}, t)
+        return changes_mod.Changes.public(row)
+
+    def undo_file(self, tid: str, path: str) -> dict:
+        """Every change of one file, newest first: the file as it was before the discussion touched it."""
+        rows = [r for r in self.changes.rows(tid) if r["path"] == path and r.get("state") != "annule"]
+        if not rows:
+            raise TaskError("Aucune modification de ce fichier à annuler.", 404)
+        done = []
+        for r in reversed(rows):
+            try:
+                done.append(self.undo_change(tid, r["id"]))
+            except TaskError as e:
+                if not done:
+                    raise
+                return {"undone": done, "stopped": e.message}
+        return {"undone": done}
+
+    def _change_notes(self, t: dict) -> str:
+        """What the user undid (or redid) since Claude's last message, for the next message."""
+        notes = t.pop("change_notes", None) or []
+        undone = [n["path"] for n in notes if n.get("state") == "annule"]
+        redone = [n["path"] for n in notes if n.get("state") == "fait"]
+        lines = []
+        if undone:
+            lines.append("L'utilisateur a annulé tes modifications de ces fichiers depuis la console (ils sont revenus "
+                         "à leur état d'avant ; relis-les avant de les modifier) :\n" + "\n".join(f"- {p}" for p in undone))
+        if redone:
+            lines.append("L'utilisateur a rétabli tes modifications de ces fichiers :\n" + "\n".join(f"- {p}" for p in redone))
+        return "\n\n".join(lines)
 
     def _on_result(self, tid: str, t: dict, run: Run, msg: dict):
         run.results += 1
@@ -1924,6 +2101,8 @@ class Engine:
                 return self._respond(run, rid, _hook(v.decision, v.reason))
             if tool in INTERACTIVE_TOOLS:
                 return self._respond(run, rid, {})
+            cid = str(req.get("tool_use_id") or hin.get("tool_use_id") or "")
+            self._snap(run, t, tool, tin, cid)
             if v.decision == "ask":
                 appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="hook", tool=tool, suggest=suggest_rules(tool, tin),
                                 input=tin, reason=v.reason)
@@ -1931,6 +2110,8 @@ class Engine:
                 def answer(a: Approval, rid=rid):
                     reason = (f"Refusé par l'utilisateur{' : ' + a.message if a.message else '.'}"
                               if a.decision == "deny" else "Approuvé par l'utilisateur.")
+                    if a.decision == "allow":
+                        self._snap(run, t, tool, tin, cid)  # the file may have changed while the approval waited
                     self._respond(run, rid, _hook("allow" if a.decision == "allow" else "deny", reason))
                 return self._park(tid, run, appr, answer)
             if v.decision == "allow" and is_mcp(tool):
@@ -1958,11 +2139,13 @@ class Engine:
                                                  "message": a.message or "L'utilisateur n'a pas répondu."})
                 return self._park(tid, run, appr, answer_q)
             v = pol.evaluate(tool, tin)
+            cid = str(req.get("tool_use_id") or "")
             if v.decision == "deny":
                 self._event(tid, "policy", {"tool": tool, "decision": "deny", "reason": v.reason,
                                             "target": _clip(summarize_target(tool, tin), 300)})
                 return self._respond(run, rid, {"behavior": "deny", "message": v.reason})
             if v.decision == "allow" and tool not in INTERACTIVE_TOOLS:
+                self._snap(run, t, tool, tin, cid)
                 return self._respond(run, rid, {"behavior": "allow", "updatedInput": tin})
             if v.decision == "ask" or pre_unlisted == "ask" or tool == "ExitPlanMode":
                 kind = "plan" if tool == "ExitPlanMode" else "permission"
@@ -1972,6 +2155,7 @@ class Engine:
 
                 def answer_p(a: Approval, rid=rid, tin=tin):
                     if a.decision == "allow":
+                        self._snap(run, t, tool, tin, cid)  # the file may have changed while the approval waited
                         self._respond(run, rid, {"behavior": "allow", "updatedInput": tin})
                     else:
                         self._respond(run, rid, {"behavior": "deny", "message":
@@ -2582,6 +2766,7 @@ class Engine:
             self._audit("tâche supprimée", {"titre": t["title"]}, t)
         with self._calls_lock:
             self._calls.pop(tid, None)
+        self.changes.drop(tid)
         self.bus.publish("deleted", {"id": tid})
 
     def list_tasks(self, include_closed: bool = True, limit: int = 500) -> list[dict]:
@@ -2597,6 +2782,7 @@ class Engine:
         with self._lock:
             alive = {t["id"] for t in self.store.list_tasks(limit=100000)}
             self.tasks = {k: v for k, v in self.tasks.items() if k in alive}
+        self.changes.sweep(alive)
         self._audit("purge de l'historique", {"tâches supprimées": n, "plus_de_jours": days})
         self.bus.publish("reload", {})
         return n

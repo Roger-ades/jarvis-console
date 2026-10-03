@@ -1491,3 +1491,54 @@ th[data-sort="desc"] .dsp-sort::after { content: "▼"; }
 .dsp-app-frame { width: 100%; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); display: block; }
 .dsp-app-note { display: flex; align-items: center; gap: 5px; font-size: 11px; }
 .dsp-app-note .i svg { width: 12px; height: 12px; }
+
+/* ------------------------------------------------ "Ce que je regarde" (regard.js) */
+.att.regard { max-width: 440px; border-color: color-mix(in srgb, var(--info) 45%, transparent); background: color-mix(in srgb, var(--info) 10%, var(--surface-2)); }
+.att.regard .att-ic { color: var(--info); }
+.att.regard .att-name b { font-weight: 600; color: var(--info); }
+.att-list.win-regard:not([hidden]) + .att-list.win-att { border-top: 0; padding-top: 6px; }
+.att-list.win-regard:not([hidden]) ~ .win-foot { border-top: 0; }
+.msg-regard { display: flex; align-items: flex-start; gap: 5px; margin-top: 7px; font-size: 11.5px; color: var(--text-2); white-space: normal; }
+.msg-regard > .i { flex: none; color: var(--info); margin-top: 1px; }
+.msg-regard > .i svg { width: 13px; height: 13px; }
+.msg-regard > span { flex: none; }
+.msg-regard q { min-width: 0; color: var(--text-3); font-style: italic; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* ------------------------------------------------ file changes (changes.js) */
+.tool .chg-btn { width: auto; gap: 3px; padding: 0 5px; cursor: pointer; font: 10.5px var(--mono); color: var(--text-3); }
+.tool .chg-btn.undone span { text-decoration: line-through; }
+.tool .chg-btn.undone { color: var(--err); }
+.chg-body { background: var(--surface); }
+.chg-note { margin: 14px 16px; font-size: 12px; }
+.warn-text { color: var(--warn); }
+.chg-status.s-annule, .chg-status.s-modifie { color: var(--warn); }
+.pv-note > .i { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
+.pv-note > .i svg { width: 13px; height: 13px; }
+.chg-diff { flex: 1; min-height: 0; }
+.chg-diff table { width: 100%; border-collapse: collapse; font: 12px/1.55 var(--mono); }
+.chg-diff td { padding: 0 8px; vertical-align: top; }
+.chg-diff td.ln { width: 1%; min-width: 34px; text-align: right; color: var(--text-3); user-select: none; border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.chg-diff td.sg { width: 1%; padding: 0 2px 0 6px; color: var(--text-3); user-select: none; }
+.chg-diff td.tx { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.chg-diff tr.add { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.chg-diff tr.add td.sg, .chg-diff tr.add td.tx { color: color-mix(in srgb, var(--ok) 55%, var(--text)); }
+.chg-diff tr.del { background: color-mix(in srgb, var(--err) 12%, transparent); }
+.chg-diff tr.del td.sg, .chg-diff tr.del td.tx { color: color-mix(in srgb, var(--err) 55%, var(--text)); }
+.chg-diff tr.hunk td { padding: 4px 8px; color: var(--info); background: color-mix(in srgb, var(--info) 8%, var(--surface-2)); font-size: 11px; }
+.chg-file { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.chg-fhead { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 6px; }
+.chg-fname { display: inline-flex; align-items: center; gap: 5px; color: var(--text); text-decoration: none; flex: none; }
+.chg-fname .i svg { width: 14px; height: 14px; }
+.chg-fname:hover b { text-decoration: underline; }
+.chg-fhead small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); }
+.chg-rows { display: flex; flex-direction: column; gap: 4px; }
+.chg-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; font-size: 12px; }
+.chg-row:hover { background: var(--surface-2); }
+.chg-row .grow { flex: 1; }
+.chg-row.undone .chg-n { text-decoration: line-through; color: var(--text-3); }
+.chg-when, .chg-n { font: 11px var(--mono); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.chg-tool { color: var(--text-2); }
+.chg-badge { font-size: 10.5px; padding: 1px 7px; border-radius: 10px; background: var(--surface-3); color: var(--text-2); }
+.chg-badge.s-annule, .chg-badge.s-modifie { background: var(--warn-soft); color: var(--warn); }
+.chg-row .btn .i, .chg-fhead .btn .i, .pv-actions .btn .i { display: inline-flex; margin-right: 4px; }
+.chg-row .btn .i svg, .chg-fhead .btn .i svg, .pv-actions .btn .i svg { width: 12px; height: 12px; }
