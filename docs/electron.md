@@ -43,13 +43,23 @@ depuis le dossier ; il démarre l'application installée si elle existe. Pour le
 
 ### Au quotidien
 
+Plus de fenêtre principale : tout passe par la barre JARVIS et des fenêtres de Windows.
+
 - **Ctrl+Alt+J** appelle la **barre JARVIS** en bas de l'écran où se trouve la souris : la barre de
   commande (puces Regard, pièces jointes, contexte, compte, dossier, réglages) et les pastilles de
   tâches. Échap, une demande envoyée ou un clic ailleurs la rangent ; l'épingle la garde affichée.
-- Chaque discussion, aperçu, affichage ou fenêtre de différences s'ouvre en fenêtre de Windows.
-- La **fenêtre JARVIS** (barre du haut, accueil, tiroirs, configuration, Ctrl+K) s'ouvre par le bouton
-  de la barre, l'icône de la zone de notification ou le lanceur. La fermer la range ; fermée, elle le
-  reste au démarrage suivant (seule la barre s'affiche).
+- **L'emblème JARVIS**, à gauche de la barre, ouvre le **menu JARVIS** : tâches en cours, à valider et
+  en file ; comptes et leurs limites ; Rechercher, Projet, Notes, Historique, Routines, claude.ai,
+  Sessions, Ranger, Configuration, Arrêt d'urgence ; projets épinglés et discussions à reprendre.
+  « Ouvrir JARVIS » (icône de la zone de notification, lanceur) ouvre la barre avec ce menu.
+- Chaque discussion, aperçu, affichage ou fenêtre de différences s'ouvre en fenêtre de Windows. Les
+  **panneaux** (Historique, Sessions, Routines, Projet, Notes) aussi, chacun dans la sienne (position et
+  taille gardées) ; leur bouton ramène une fenêtre déjà ouverte.
+- La **configuration** (Ctrl+,), la **recherche** (Ctrl+K), l'assistant de démarrage et les questions
+  (confirmer, renommer, éditeur de routine…) s'ouvrent dans une fenêtre à leur taille ; une question
+  posée dans une discussion reste dans sa fenêtre. Le bouton de fermeture vaut Échap.
+- Au-dessus de la barre : ce que la console a à dire (connexion perdue, arrêt d'urgence, mise à jour)
+  et les **rappels** des notes, qui l'appellent sans prendre le clavier.
 - Une validation en attente produit une notification avec **Approuver** et **Refuser** ; un clic
   ailleurs sur la notification ouvre la discussion. La pastille de la barre des tâches compte les
   validations en attente.
@@ -118,11 +128,11 @@ Le calque ferait une démonstration rapide mais un mauvais outil de tous les jou
   le jeton de `data/token` pour obtenir un code d'accès à usage unique (`/api/auth/code`). Il possède
   l'icône de notification, les raccourcis globaux, les fenêtres natives, les vues de sites, les
   permissions et les téléchargements.
-- **Page moteur : la fenêtre JARVIS.** Elle charge `http://127.0.0.1:<port>/#code=…` et fait tourner
-  tout le JavaScript : état, flux temps réel, regard, affichages. Elle reste vivante cachée
-  (`backgroundThrottling: false`, pour que Chromium ne ralentisse pas une page qu'il croit en
-  arrière-plan) : fermer la fenêtre JARVIS la range, et au démarrage suivant elle reste cachée si on
-  l'avait fermée ; barre, fenêtres, notifications et icône de notification continuent sans elle.
+- **Page moteur : la fenêtre JARVIS, cachée.** Elle charge `http://127.0.0.1:<port>/#code=…` et fait
+  tourner tout le JavaScript : état, flux temps réel, regard, affichages. En *Intégré au bureau*, elle
+  ne montre que l'écran de démarrage, puis se cache dès que la console se charge et ne revient plus
+  (sauf si la barre ne peut pas s'ouvrir) ; `backgroundThrottling: false` pour que Chromium ne
+  ralentisse pas une page qu'il croit en arrière-plan. En *Une fenêtre JARVIS*, c'est la fenêtre.
 - **Fenêtres JARVIS : des fenêtres enfants de la page moteur.** Une fenêtre s'ouvre par
   `window.open` depuis la page moteur ; le processus principal lui donne son apparence
   (`setWindowOpenHandler`, `overrideBrowserWindowOptions`) ; la page moteur déplace dans son document
@@ -177,18 +187,28 @@ Ce qu'il faut adapter pour les documents enfants :
   l'appelle en bas de l'écran où se trouve la souris, comme PowerToys Run ; Échap, une demande
   envoyée ou un clic ailleurs la rangent, sauf si elle est épinglée (pas pendant le choix d'un
   fichier). Elle grandit vers le haut, bord du bas fixe, quand une liste (skills, profils), les
-  réglages ou un message s'ouvrent au-dessus. Une boîte de dialogue ou Ctrl+K demandés depuis la barre
-  s'ouvrent dans la fenêtre JARVIS, puis la barre revient ; les toasts restent dans la barre.
+  réglages, le menu JARVIS, un message ou un rappel s'ouvrent au-dessus.
+- **Menu JARVIS** : la barre du haut et l'accueil de la fenêtre JARVIS, déplacés dans la barre (mêmes
+  éléments, mêmes modules) : compteurs, comptes (leurs limites s'ouvrent dans la barre), actions,
+  projets épinglés, discussions à reprendre. Les bandeaux (connexion, arrêt d'urgence, mise à jour) et
+  les rappels s'affichent au-dessus de la barre.
 - **Icône de la zone de notification** : tâches en cours, en file et à valider ; menu Ouvrir JARVIS,
   Nouvelle demande (la barre), Se déconnecter des sites, Quitter. Une pastille sur les boutons de la
   barre des tâches de Windows (`setOverlayIcon`, sur chaque fenêtre de JARVIS) signale une validation
   en attente.
-- **Fenêtre JARVIS** : la barre du haut, l'accueil (projets, reprendre), les tiroirs (Historique,
-  Sessions, Routines, Projet, Notes), la configuration et Ctrl+K. C'est la page sans son bureau ; elle
-  s'ouvre quand on en a besoin (bouton de la barre, icône de notification, boîte de dialogue). Un
-  rappel des notes l'amène devant sans prendre le clavier, avec une notification.
-- **Toasts** : dans la fenêtre de la dernière action (barre, discussion, fenêtre JARVIS) ; une tâche
-  terminée ou en erreur, quand on ne la regarde pas, en notification native.
+- **Fenêtres cadres** ([static/js/wm.js](../static/js/wm.js), `jarvis-win:cadre-…`) : ce que la fenêtre
+  JARVIS contenait encore, chacun dans une fenêtre de l'OS avec un bandeau de titre sous les boutons
+  natifs. Les **panneaux** : l'élément du tiroir passe dans sa fenêtre et revient dans la page quand
+  elle se ferme. Les **modales** (configuration, Ctrl+K, assistant, questions) : `util.modalHost`
+  donne aux modules le `#modal-root` où les construire ; une fenêtre de modale s'ouvre cachée et grande,
+  mesure la boîte (parties défilantes déroulées), prend sa taille et s'affiche au centre de l'écran de
+  la souris ; la boîte remplit alors la fenêtre. Une question posée par-dessus reste une boîte au
+  milieu de cette fenêtre. Le bouton de fermeture envoie Échap à la modale du dessus.
+- **Où va une question** : dans la fenêtre de la discussion où on l'a demandée, ou dans la fenêtre de
+  la modale d'où elle vient ; depuis la barre, un panneau ou rien, dans une fenêtre à elle. La
+  configuration a toujours la sienne (position et taille gardées).
+- **Toasts** : dans la fenêtre de la dernière action (barre, discussion, panneau, modale), sinon dans
+  la barre ; une tâche terminée ou en erreur, quand on ne la regarde pas, en notification native.
 - **Mode « Bureau JARVIS »** : l'interface actuelle dans une seule fenêtre, pour qui la préfère
   (moteur DOM de `wm.js`).
 
@@ -314,9 +334,13 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
 - notifications : un lien `jarvis://` fabriqué sans le secret ne décide rien, le bouton Approuver de
   la notification valide (journal : « allow ») ;
 - barre JARVIS : elle grandit vers le haut (liste, réglages), Échap la range, l'épingle la garde, une
-  demande envoyée crée la tâche et la range, boîte de dialogue et Ctrl+K dans la fenêtre JARVIS puis
-  retour de la barre, toasts dans la barre ; rien ne change en affichage *Une fenêtre JARVIS* ;
-- fenêtre JARVIS fermée qui reste fermée au démarrage suivant, rappel qui l'amène devant ;
+  demande envoyée crée la tâche et la range, toasts dans la barre ; rien ne change en affichage
+  *Une fenêtre JARVIS* ;
+- plus de fenêtre principale : la fenêtre JARVIS reste cachée ; menu JARVIS dans la barre (compteurs,
+  comptes, actions, projets) ; Historique et Routines en fenêtres (un deuxième clic ramène la même) ;
+  configuration, recherche, assistant de démarrage, éditeur de routine et question d'arrêt d'urgence
+  en fenêtres à leur taille, fermées par Échap ou leur bouton ; bandeau d'arrêt d'urgence et rappel
+  au-dessus de la barre ; second lancement : la barre avec son menu ; l'emblème de la barre animé ;
 - application empaquetée (electron-builder, cible Linux) : elle retrouve le dossier, exécute son
   `shell/main.js`, retombe sur sa propre copie quand le dossier attend un Electron plus récent, et
   prend le relais de l'application lancée par `start-app.bat` ;
@@ -327,7 +351,9 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
 - Installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
   (Paramètres → Applications), démarrage avec la session qui suit l'application installée.
 - Barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J (pas de conflit
-  avec d'autres outils), clic ailleurs qui la range.
+  avec d'autres outils), clic ailleurs qui la range ; menu JARVIS.
+- Fenêtres des panneaux et des modales : bandeau de titre sous les boutons natifs, taille des
+  questions, glisser une fenêtre par son bandeau.
 - Notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
   de la barre des tâches.
 - Fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
@@ -344,7 +370,9 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
 4. **Notifications** avec Approuver et Refuser. *Fait.*
 5. **Barre JARVIS** flottante, raccourci global, icône de notification. *Fait.*
 6. **Finitions** : fenêtre JARVIS qui reste cachée, rappels, pastille sur chaque fenêtre. *Fait.*
-7. **Installateur**, signature, mises à jour de l'application. *Fait ; à essayer sous Windows.*
+7. **Plus de fenêtre principale** : menu JARVIS dans la barre, panneaux et modales en fenêtres de
+   l'OS, bandeaux et rappels au-dessus de la barre. *Fait.*
+8. **Installateur**, signature, mises à jour de l'application. *Fait ; à essayer sous Windows.*
 
 ## Ce qui ne change pas
 
