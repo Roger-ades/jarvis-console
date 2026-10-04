@@ -40,7 +40,7 @@ Trois sections, dans cet ordre.
 
 | Entrée | Source | Boutons |
 |---|---|---|
-| Validation d'un appel d'outil | `pending` de la tâche (`hook`, `permission`) | Approuver, Refuser, Ouvrir ; « expire à 10:42 » |
+| Validation d'un appel d'outil | `pending` de la tâche (`hook`, `permission`) | Approuver, Refuser, Détail, Ouvrir ; « expire à 10:42 » |
 | Question, plan, proposition | `pending` (`question`, `plan`, `proposal`) | Ouvrir |
 | Validation expirée | notée par le délai de validation (voir plus bas) | Reprendre, Ouvrir, Ignorer |
 | Choix en attente | affichage dont un bloc `choix` ou `actions` n'a pas de réponse, sans message de l'utilisateur depuis | Ouvrir l'affichage, Ignorer |
@@ -59,6 +59,19 @@ Ouvrir, Plus tard… et Vu, comme la popup actuelle.
 
 Une tâche annulée par l'utilisateur n'y entre jamais : c'est lui qui l'a arrêtée. Une discussion qui
 continue (message de suite) redevient non lue à chaque fin de tour qu'on n'a pas regardée.
+
+### Approuver depuis la boîte
+
+Décidé : une validation d'appel d'outil s'approuve ou se refuse sur place, et Ouvrir reste à côté pour
+passer par la fenêtre.
+
+- La ligne montre l'outil, sa cible et la raison donnée par la politique. **Détail** déplie ce que
+  montre la carte de la fenêtre : les paramètres complets de l'appel (le contenu à écrire, la
+  commande, les valeurs envoyées à Odoo).
+- **Refuser** ouvre un champ pour un message à Claude, facultatif, comme dans la fenêtre.
+- « Toujours pour ce projet » (mémoriser une règle) reste dans la fenêtre : c'est un réglage, qui se
+  relit avant d'être accepté.
+- Questions, plans et propositions s'ouvrent dans leur fenêtre : on y répond ou on les relit en entier.
 
 ### Validation expirée : Reprendre
 
@@ -137,12 +150,13 @@ fenêtre de l'OS (fenêtre cadre de [static/js/wm.js](../static/js/wm.js)) en *I
 position et taille gardées.
 
 - En haut, **Aujourd'hui**, sans Claude : rappels à venir dans la journée, routines prévues, limites
-  des comptes si l'une dépasse 70 %. Puis le brief du jour s'il existe (voir plus bas).
+  des comptes si l'une dépasse 70 %. Puis le brief du jour de chaque compte qui l'a activé (voir plus
+  bas).
 - Les trois sections, chacune avec son compteur ; filtres par compte et par projet ; « Tout marquer
   comme lu ».
 - Chaque ligne : liseré compte × projet (`paint`), titre de la discussion, ce qui attend (outil et
-  cible, question, titre de l'affichage), âge, échéance d'une validation, boutons. Une validation
-  montre la raison donnée par la politique, comme la carte de la fenêtre.
+  cible, question, titre de l'affichage), âge, échéance d'une validation, boutons (voir « Approuver
+  depuis la boîte »).
 - L'extrait d'une réponse est du texte brut, borné à 300 caractères, sans liens ni images : il peut
   venir d'un mail ou d'une page.
 - Les validations d'une même discussion se regroupent, comme les exécutions d'une même routine.
@@ -183,28 +197,67 @@ terminée qu'on ne regardait pas. Ouvrir une notification marque l'entrée lue. 
 - Une routine peut être **en tête de la boîte** : son dernier résultat (son affichage, s'il en a un)
   s'y montre en haut jusqu'à l'exécution suivante. C'est le principe du brief du matin.
 - Champs ajoutés à `Routine` ([console/routines.py](../console/routines.py)) : `inbox`
-  (`"always"` ou `"errors"`) et `headline` (booléen).
+  (`"always"` ou `"errors"`), `headline` (booléen) et `brief` (le compte d'un brief du matin, géré par
+  la console).
 
 ## Brief du matin
 
-Une routine comme une autre, proposée comme modèle dans Nouvelle routine (Claude peut aussi la
-proposer avec `proposer` dans un projet) :
+Un brief **par compte**, quel que soit le nombre de comptes, **désactivé par défaut** : l'utilisateur
+l'active compte par compte. Ce n'est pas une consigne à écrire : un réglage du compte, dont la console
+tire la demande envoyée à Claude.
 
-- **Quand** : en semaine à 7:45, sans fenêtre, en tête de la boîte.
-- **Quoi** : les mails importants arrivés depuis la veille (MCP Office 365), les devis Odoo en attente
-  (MCP Odoo, en lecture), l'agenda du jour ; puis un seul affichage `presenter` d'id `brief` :
-  chiffres clés, chronologie pour l'agenda, tableau des devis, liste des mails. `afficher_resultat`
-  ouvre un mail tel quel, `afficher` un devis dans la fenêtre Odoo.
-- **Avec quoi** : preset Lecture seule, compte Travail, un modèle moyen et un effort faible : une
-  exécution par jour.
-- La boîte montre l'affichage en tête, replié sur ses chiffres clés ; Ouvrir le met dans sa fenêtre.
-  Ses choix et boutons marchent comme ailleurs : ils reviennent à la session de la routine.
-- **Sécurité** : la routine lit des mails, la porte d'entrée principale des injections. D'où le preset
-  Lecture seule : rien n'est écrit ni envoyé, et une proposition reste une carte à valider. Les mails
-  sont des données, pas des consignes (déjà dit à Claude dans le prompt système).
+### Réglages
+
+Configuration → Profils → *compte* → **Brief du matin** :
+
+- **Activer** (non par défaut), **heure** et **jours** (en semaine à 7:45 au départ).
+- **Sources** : mails, devis Odoo, agenda, chacune à cocher. Seules celles que les serveurs MCP du
+  compte permettent sont proposées (Office 365 ou Gmail pour les mails et l'agenda, Odoo pour les
+  devis).
+- **Mails importants** : des critères, pas une liste figée, parce qu'ils suivent les dossiers en
+  cours :
+  - au niveau du compte, ce qui compte toujours : expéditeurs ou domaines, mots de l'objet, dossiers
+    de la boîte mail, et une consigne libre (« les demandes de devis, les relances de paiement ») ;
+  - au niveau de chaque projet, ce qui ne compte que pendant le dossier : ses correspondants, ses
+    mots-clés, sa consigne. Ils se règlent avec le projet (« Mails à suivre », dans ses réglages) et
+    comptent tant que la case **Suivre dans le brief** est cochée. Un dossier qui se termine : on la
+    décoche, les critères restent pour plus tard. Ceux d'un projet sans compte attitré valent pour les
+    briefs de tous les comptes.
+- **Devis en attente** : les devis pas encore envoyés ; les brouillons ne comptent pas. Le filtre
+  Odoo exact reste à préciser (voir Questions ouvertes) ; il fait partie des réglages, pour suivre la
+  façon de travailler.
+- **Modèle et effort** : ceux du compte par défaut ; un modèle moyen et un effort faible suffisent pour
+  une exécution par jour.
+
+### Exécution
+
+- Une routine gérée par la console (`brief: <profil>` dans `Routine`), visible dans le panneau
+  Routines (« Brief du matin · Travail ») avec un lien vers ses réglages au lieu de l'éditeur de
+  consigne. Sans fenêtre, en tête de la boîte.
+- À chaque exécution, la console écrit la demande à partir des réglages du moment : sources cochées,
+  critères du compte, critères des projets suivis (avec leur nom), définition des devis en attente.
+  Changer un critère vaut dès le brief suivant.
+- Toujours avec le preset **Lecture seule**, quel que soit celui du compte : rien n'est écrit ni
+  envoyé.
+- Claude rend un seul affichage `presenter` d'id `brief` : chiffres clés, chronologie pour l'agenda,
+  tableau des devis, liste des mails avec le critère qui les a retenus (« projet Dupont »,
+  « expéditeur client-x.fr »). `afficher_resultat` ouvre un mail tel quel, `afficher` un devis dans la
+  fenêtre Odoo.
+- La boîte montre en tête le brief de chaque compte activé, replié sur ses chiffres clés et à la
+  couleur du compte ; Ouvrir le met dans sa fenêtre. Ses choix et boutons reviennent à la session du
+  brief, comme ailleurs.
+
+### Sécurité
+
+- Le brief lit des mails, la porte d'entrée principale des injections : d'où le preset Lecture seule
+  imposé. Une proposition éventuelle (`proposer`) reste une carte à valider.
+- Les critères sont écrits par l'utilisateur, jamais par Claude : un mail piégé ne doit pas pouvoir
+  faire ignorer un expéditeur. Plus tard, Claude pourra suggérer un critère depuis le brief
+  (« ajouter ce correspondant au projet Dupont »), toujours comme une proposition à valider.
+- Les mails sont des données, pas des consignes (déjà dit à Claude dans le prompt système).
 
 La partie sans Claude (validations en attente, échecs de la nuit, rappels et routines du jour) est la
-boîte elle-même : elle ne coûte rien et reste là même si le brief est désactivé.
+boîte elle-même : elle ne coûte rien et reste là même pour un compte sans brief.
 
 ## Actions du compte en boutons
 
@@ -213,16 +266,20 @@ Aujourd'hui, seules les commandes et skills du dossier d'un projet deviennent de
 (`commands/<nom>.md` et `skills/<nom>/SKILL.md` de `~/.claude-work` par exemple), ne se lancent qu'en
 les tapant après `/`.
 
+- **Pour chaque compte, quel que soit leur nombre, au choix de l'utilisateur** : Configuration →
+  Profils → *compte* → **Actions du compte en boutons**, désactivé par défaut. Tant que la case n'est
+  pas cochée, la console ne lit pas ces fichiers et ne montre rien ; `/` dans la barre marche comme
+  aujourd'hui.
 - **Mêmes règles que les actions de projet** : lues par la même fonction (`scan` sur un dossier de
   base), épinglées par empreinte (`action_pins`, clé `compte:<profil>`). Une action nouvelle ou modifiée
   montre son contenu avant de pouvoir être lancée. Modèle et effort réglables par action.
 - **Lancement** : une discussion normale `/nom arguments` sur ce compte, dans le dossier choisi dans la
   barre. Si ce dossier est un projet, avec son preset, son modèle et son effort, sinon ceux du compte ;
   le modèle et l'effort de l'action passent avant.
-- **Où** : Configuration → Profils → *compte* → Actions (liste, validation, réglages, case « Dans le
-  menu ») ; Ctrl+K ; une ligne de boutons dans le menu JARVIS pour celles cochées « Dans le menu » ;
-  l'onglet Actions d'un projet, section « Du compte » ; une routine peut en lancer une (bloquée si
-  l'action a changé depuis sa validation, comme pour un projet).
+- **Où** : Configuration → Profils → *compte* → Actions, une fois activées (liste, validation,
+  réglages, case « Dans le menu ») ; Ctrl+K ; une ligne de boutons dans le menu JARVIS pour celles
+  cochées « Dans le menu » ; l'onglet Actions d'un projet, section « Du compte ». Une routine peut en
+  lancer une (bloquée si l'action a changé depuis sa validation, comme pour un projet).
 - **Même nom dans le projet et dans le compte** : on ne sait pas d'avance laquelle Claude Code
   exécutera. Le bouton ne part que si les deux sont validées, et la console signale le doublon.
 - **Hors champ** : les skills des plugins, gérées par Claude Code. `/` dans la barre reste comme
@@ -250,9 +307,11 @@ les tapant après `/`.
    dans l'application (Linux, affichage virtuel), comme pour Electron.
 3. **Routines** : réglage « Dans la boîte de réception », exécutions non lancées et manquées,
    Reprendre, routine en tête.
-4. **Brief du matin** : modèle de routine, section Aujourd'hui, affichage en tête.
-5. **Actions du compte** : lecture et épinglage, Configuration → Profils, Ctrl+K, menu JARVIS, onglet
-   Actions du projet, routines.
+4. **Brief du matin** : réglages par compte (`Profile.brief` dans
+   [console/config.py](../console/config.py)), « Mails à suivre » des projets (`Project.mails`),
+   demande écrite par la console, routine gérée, section Aujourd'hui, affichage en tête.
+5. **Actions du compte** : case par compte (`Profile.account_actions`), lecture et épinglage,
+   Configuration → Profils, Ctrl+K, menu JARVIS, onglet Actions du projet, routines.
 6. **Finitions** : « Pendant ton absence », regroupements.
 
 Les étapes 1 à 3 font la boîte ; 4 et 5 peuvent suivre dans l'ordre qu'on veut. Les déclencheurs
@@ -274,10 +333,17 @@ boîte comme le résultat d'une routine.
 La politique d'autorisations, le délai de validation, les fenêtres des discussions, les notifications,
 l'historique, les notes et leurs rappels.
 
+## Décisions
+
+- Brief du matin : par compte, désactivé par défaut ; mails importants définis par des critères du
+  compte et des projets suivis ; devis en attente = devis pas encore envoyés, sans les brouillons.
+- Approuver et refuser depuis la boîte, avec Détail et Ouvrir à côté.
+- Actions du compte en boutons : pour chaque compte, activées au choix de l'utilisateur.
+
 ## Questions ouvertes
 
-- Brief du matin : heure, compte, et ce qu'il couvre. Quels mails comptent comme importants ? Quels
-  devis Odoo sont « en attente » : envoyés et non confirmés, brouillons de plus de quelques jours ?
-- Approuver un appel d'outil directement depuis la boîte, comme depuis une notification, ou toujours
-  ouvrir la fenêtre ?
-- Actions du compte : pour les deux comptes, ou seulement Travail ?
+- **Devis en attente, côté Odoo** : un devis pas encore envoyé est à l'état `draft`, le même que celui
+  d'un brouillon (Odoo passe à `sent` à l'envoi). Qu'est-ce qui distingue chez vous un devis prêt d'un
+  brouillon : une étiquette, une étape, la personne qui l'a créé (les devis préparés par Claude sont
+  des brouillons), une date de validité renseignée, des lignes complètes ? Ce critère devient le
+  filtre par défaut.
