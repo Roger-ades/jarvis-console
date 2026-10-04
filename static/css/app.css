@@ -292,6 +292,22 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   :root[data-theme="systeme"] .home-head .wordmark { background: linear-gradient(180deg, #0b2a42, var(--accent)); -webkit-background-clip: text; background-clip: text; filter: none; }
 }
 @media (max-height: 760px) { .home-head .empty-mark { width: 120px; height: 120px; } }
+/* widgets: displays pinned to the desktop, a column on the right under the windows (widgets.js) */
+.widgets { position: absolute; top: 12px; right: 12px; bottom: calc(var(--dock-h, 110px) + 12px); width: min(380px, 42vw); z-index: 0;
+  display: flex; flex-direction: column; gap: 10px; overflow-y: auto; scrollbar-width: thin; }
+.widgets[hidden] { display: none; }
+#desktop.has-widgets .empty-hint { padding-right: calc(min(380px, 42vw) + 36px); }
+.wg { flex: none; display: flex; flex-direction: column; max-height: 440px; border-radius: 12px; overflow: hidden;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--border);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .18); backdrop-filter: blur(6px); position: relative; }
+.wg::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--pc, var(--accent)); }
+.wg-head { display: flex; align-items: center; gap: 8px; padding: 8px 6px 8px 14px; border-bottom: 1px solid var(--border); }
+.wg-head > .i { color: var(--pc, var(--accent)); flex: none; }
+.wg-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wg-t b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wg-t small { font-size: 10.5px; color: var(--text-3); }
+.wg-body { overflow: auto; padding: 4px 12px 10px; font-size: 12.5px; scrollbar-width: thin; }
+.wg-body .dsp-widget { gap: 10px; }
 .home-grid { pointer-events: auto; width: min(920px, 100%); display: flex; flex-direction: column; gap: 18px; text-align: left; }
 .home-grid:empty { display: none; }
 .home-sec h3 { margin: 0 0 8px; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); font-weight: 700; }

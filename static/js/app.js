@@ -10,6 +10,7 @@ import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed,
 import { projectActionsChanged, projectFollow, toggleProject } from "./project.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
+import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
 import { openConfig, updateProbe } from "./config.js";
@@ -74,6 +75,7 @@ async function boot() {
   loadAccountActions(profiles());
   onAccountActions(renderHome);
   initInbox(inboxCtx);
+  initWidgets({ profiles, openTask });
   setInterval(renderPills, 60_000); // a window past its reset time goes back to 0
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
@@ -84,6 +86,7 @@ async function boot() {
     notes: notesChanged,
     inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
     account_actions: () => loadAccountActions(profiles()),
+    widgets: widgetsChanged,
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
   checkVersion();
@@ -753,6 +756,7 @@ const winCtx = {
 configureDisplays({
   autoImages: winCtx.autoImages,
   openTask,
+  pinToDesktop: pinDisplay,
   // jarvis.action() of an application, confirmed by the user: the action of the discussion's project
   appAction: (taskId, name, args) => {
     const t = S.tasks.get(taskId);

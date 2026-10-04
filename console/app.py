@@ -852,6 +852,28 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def routine_run(rid: str):
         return engine.run_routine(rid, manual=True)
 
+    # -------------------------------------------------------- widgets (displays pinned to the desktop)
+    @app.get("/api/widgets")
+    def widgets():
+        return {"widgets": engine.list_widgets()}
+
+    @app.post("/api/widgets")
+    def widget_pin(body: dict = Body(...)):
+        return engine.pin_widget(str(body.get("task") or ""), str(body.get("key") or ""))
+
+    @app.delete("/api/widgets/{wid}")
+    def widget_unpin(wid: str):
+        engine.unpin_widget(wid)
+        return {"ok": True}
+
+    @app.post("/api/widgets/{wid}/refresh")
+    def widget_refresh(wid: str):
+        return engine.refresh_widget(wid)
+
+    @app.post("/api/widgets/{wid}/auto")
+    def widget_auto(wid: str, body: dict = Body(...)):
+        return engine.auto_widget(wid, str(body.get("every") or ""))
+
     @app.get("/api/cloud-routines")
     def cloud_routines(profile: str, refresh: bool = False):
         return engine.cloud_routines(profile, refresh)

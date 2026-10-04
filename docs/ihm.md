@@ -62,6 +62,15 @@ directement.
   séries du graphique) part avec le message, citée comme une donnée. Un affichage marque ce qui se
   désigne avec `data-pick` (la description) et `data-pick-label` ; une ligne de tableau se décrit
   seule à partir des en-têtes. Maj + clic droit garde le menu du navigateur.
+- **Widgets du bureau** ([console/widgets.py](../console/widgets.py), [static/js/widgets.js](../static/js/widgets.js)) :
+  le bouton « Épingler au bureau » d'un affichage (dans la discussion ou sa fenêtre) le garde dans une
+  colonne à droite du bureau, sous les fenêtres, même discussion fermée (12 au plus, `kv` « widgets »).
+  Un widget suit son affichage : tout appel à `presenter` avec le même `id`, dans une discussion du même
+  compte, remplace son contenu. « Actualiser » demande à Claude une nouvelle version dans une discussion
+  à part (même compte, dossier, modèle et autorisations que l'originale ; la demande d'origine est citée
+  comme donnée). Le menu ⋯ règle une actualisation automatique (toutes les heures, chaque matin, en
+  semaine) : une routine « Widget · titre » qui ne signale que ses erreurs dans la boîte ; détacher le
+  widget supprime sa routine.
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du

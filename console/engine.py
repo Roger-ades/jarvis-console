@@ -38,6 +38,7 @@ from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, Proj
 from .permissions import (INTERACTIVE_TOOLS, Policy, cli_permission_args, is_mcp, norm, parse_rule,
                           policy_context, project_rule_problem, suggest_rules, summarize_target, within)
 from . import team as team_mod
+from . import widgets as widgets_mod
 from .routines import Routine
 from .store import Store
 
@@ -392,6 +393,7 @@ class Engine:
                 self.routines[r.id] = r
             except ValueError:
                 continue
+        self.widgets: list[dict] = [w for w in store.kv_get("widgets", []) or [] if isinstance(w, dict) and w.get("id")]
         self.sync_briefs()
         self._recover()
         self._purge_old()
@@ -2996,6 +2998,7 @@ class Engine:
             t["last_display"] = {"key": key, "titre": _clip(doc["titre"], 200), "ts": time.time()}
             self._save(t, publish=False)
         self._event(tid, "display", {"key": key, "rev": rev, **doc})
+        self._follow_widgets(t, key, doc, rev)
         self._audit("affichage", {"titre": _clip(doc["titre"], 200), "où": doc["ou"], "id": key,
                                   "blocs": [b["type"] for b in doc["blocs"]], **({"mise à jour": rev} if rev > 1 else {})}, t)
         where = {"conversation": "dans la conversation", "fenetre": "dans une fenêtre", "modale": "au premier plan"}[doc["ou"]]
@@ -4164,6 +4167,96 @@ class Engine:
             self.routines.pop(rid, None)
             self._audit("routine supprimée", {"nom": r.name})
             self._persist_routines()
+
+    # ------------------------------------------------------------ widgets (console/widgets.py)
+    def _persist_widgets(self):
+        self.store.kv_set("widgets", self.widgets)
+        self.bus.publish("widgets", {"widgets": self.list_widgets()})
+
+    def _widget(self, wid: str) -> dict:
+        w = next((x for x in self.widgets if x["id"] == wid), None)
+        if not w:
+            raise TaskError("Widget inconnu.", 404)
+        return w
+
+    def list_widgets(self) -> list[dict]:
+        with self._lock:
+            for w in self.widgets:  # a routine removed from the Routines drawer no longer refreshes it
+                if w.get("routine") and w["routine"] not in self.routines:
+                    w["routine"], w["auto"] = "", ""
+            return [widgets_mod.public(w) for w in self.widgets]
+
+    def pin_widget(self, tid: str, key: str) -> dict:
+        """The display `key` of a discussion stays on the desktop; pinned again, it is only brought up to date."""
+        t = self._get(tid)
+        d = self._display(tid, key)
+        if not d:
+            raise TaskError("Affichage introuvable.", 404)
+        with self._lock:
+            w = next((x for x in self.widgets if x["profile"] == t["profile"] and x["key"] == key), None)
+            if w:
+                w.update(doc=d["doc"], rev=d["rev"], task=tid, updated=time.time())
+            else:
+                if len(self.widgets) >= widgets_mod.MAX_WIDGETS:
+                    raise TaskError(f"{widgets_mod.MAX_WIDGETS} widgets au plus : détache-en un d'abord.", 409)
+                w = widgets_mod.new(t, key, d["doc"], d["rev"])
+                self.widgets.append(w)
+            self._audit("widget épinglé", {"titre": _clip(d["doc"]["titre"], 200), "id": key}, t)
+            self._persist_widgets()
+            return widgets_mod.public(w)
+
+    def unpin_widget(self, wid: str):
+        with self._lock:
+            w = self._widget(wid)
+            if w.get("routine") in self.routines:
+                self.routines.pop(w["routine"])
+                self._persist_routines()
+            self.widgets.remove(w)
+            self._audit("widget détaché", {"titre": _clip(w["doc"].get("titre") or "", 200), "id": w["key"]})
+            self._persist_widgets()
+
+    def refresh_widget(self, wid: str) -> dict:
+        """A new version asked to Claude now, in a discussion of its own (same account, folder, permissions)."""
+        with self._lock:
+            w = dict(self._widget(wid))
+        return self.create_task(widgets_mod.refresh_prompt(w), profile=w["profile"], model=w.get("model") or None,
+                                preset=w.get("preset") or None, workdir=w.get("workdir") or None, confirmed=True,
+                                closed=True, origin="widget")
+
+    def auto_widget(self, wid: str, every: str) -> dict:
+        """The routine that refreshes a widget: every hour, each morning, on weekdays, or none."""
+        if every and every not in widgets_mod.AUTO:
+            raise TaskError("Fréquence inconnue.", 422)
+        with self._lock:
+            w = self._widget(wid)
+            rid = w.get("routine") if w.get("routine") in self.routines else ""
+            if not every:
+                if rid:
+                    self.routines.pop(rid)
+                    self._persist_routines()
+                w["routine"], w["auto"] = "", ""
+            else:
+                title = w["doc"].get("titre") or w["key"]
+                prof = self.cfg.profile(w["profile"])
+                if not prof:
+                    raise TaskError(f"Profil inconnu : {w['profile']}")
+                r = self.save_routine({**({"id": rid} if rid else {}), "name": f"Widget · {title}"[:80],
+                                       "prompt": widgets_mod.refresh_prompt(w), "profile": w["profile"],
+                                       "preset": w.get("preset") or prof.default_preset,
+                                       "model": w.get("model") or "", "workdir": w.get("workdir") or "",
+                                       "schedule": widgets_mod.AUTO[every], "open_window": False, "inbox": "errors"})
+                w["routine"], w["auto"] = r["id"], every
+            self._persist_widgets()
+            return widgets_mod.public(w)
+
+    def _follow_widgets(self, t: dict, key: str, doc: dict, rev: int):
+        """A display presented again with the id of a widget (same account) becomes its content."""
+        with self._lock:
+            hit = [w for w in self.widgets if w["profile"] == t["profile"] and w["key"] == key]
+            for w in hit:
+                w.update(doc=doc, rev=rev, task=t["id"], updated=time.time())
+            if hit:
+                self._persist_widgets()
 
     def run_routine(self, rid: str, manual: bool = False) -> dict:
         with self._lock:

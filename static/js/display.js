@@ -13,7 +13,7 @@ import * as wm from "./wm.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const entries = new Map(); // `${taskId}|${key}` -> {taskId, key, doc, rev, answers: Map, mounts: Set, …}
-let settings = { autoImages: () => false, appAction: null };
+let settings = { autoImages: () => false, appAction: null, pinToDesktop: null };
 export function configure(s) { settings = { ...settings, ...s }; }
 
 const icon = (name) => h("span", { class: "i", svg: name });
@@ -80,11 +80,16 @@ export function unmount(root) {
   for (const e of entries.values()) for (const m of e.mounts) if (m.root === root) e.mounts.delete(m);
 }
 
+const desktopPin = (e) => (settings.pinToDesktop ? h("button", { type: "button", class: "icon-btn",
+  title: "Épingler au bureau JARVIS : un widget qui reste et que Claude peut actualiser", "aria-label": "Épingler au bureau",
+  svg: "gauge", on: { click: () => settings.pinToDesktop(e.taskId, e.key) } }) : null);
+
 function content(e, m) {
   const { doc } = e;
   const out = [];
   if (m.mode === "conversation") {
     out.push(h("div", { class: "dsp-head" }, icon("sparkle"), h("span", { class: "dsp-title" }, doc.titre),
+      desktopPin(e),
       h("button", { type: "button", class: "icon-btn", title: "Ouvrir dans une fenêtre", "aria-label": "Ouvrir dans une fenêtre",
         svg: "max", on: { click: () => openDisplayWindow(e.taskId, e.key, m.color) } })));
   }
@@ -670,7 +675,7 @@ export function openDisplayWindow(taskId, key, color) {
   const head = h("header", { class: "win-head pv-head" },
     h("span", { class: "pv-ic", svg: "sparkle" }),
     h("div", { class: "vh" }, title, h("small", {}, "Affichage de Claude")),
-    h("div", { class: "pv-actions" }),
+    h("div", { class: "pv-actions" }, desktopPin(e)),
     h("div", { class: "win-actions" },
       pinButton(id),
       act("min", "Réduire", () => wm.minimize(id)),
