@@ -48,10 +48,13 @@ Plus de fenêtre principale : tout passe par la barre JARVIS et des fenêtres de
 - **Ctrl+Alt+J** appelle la **barre JARVIS** en bas de l'écran où se trouve la souris : la barre de
   commande (puces Regard, pièces jointes, contexte, compte, dossier, réglages) et les pastilles de
   tâches. Échap, une demande envoyée ou un clic ailleurs la rangent ; l'épingle la garde affichée.
-- **L'emblème JARVIS**, à gauche de la barre, ouvre le **menu JARVIS** : tâches en cours, à valider et
-  en file ; comptes et leurs limites ; Rechercher, Projet, Notes, Historique, Routines, claude.ai,
-  Sessions, Ranger, Configuration, Arrêt d'urgence ; projets épinglés et discussions à reprendre.
-  « Ouvrir JARVIS » (icône de la zone de notification, lanceur) ouvre la barre avec ce menu.
+- **L'emblème JARVIS**, à gauche de la barre, ouvre le **menu JARVIS** : en tête, la boîte de réception
+  (les entrées les plus urgentes et « Tout voir », un badge sur l'emblème compte ce qui est à faire) ;
+  tâches en cours, à valider et en file ; comptes et leurs limites ; Boîte, Rechercher, Projet, Notes,
+  Historique, Routines, claude.ai, Sessions, Ranger, Configuration, Arrêt d'urgence ; actions du compte
+  mises dans le menu, projets épinglés et discussions à reprendre. « Ouvrir JARVIS » (icône de la zone
+  de notification, lanceur) ouvre la barre avec ce menu. La boîte de réception est décrite dans
+  [boite-de-reception.md](boite-de-reception.md).
 - Chaque discussion, aperçu, affichage ou fenêtre de différences s'ouvre en fenêtre de Windows. Les
   **panneaux** (Historique, Sessions, Routines, Projet, Notes) aussi, chacun dans la sienne (position et
   taille gardées) ; leur bouton ramène une fenêtre déjà ouverte.
@@ -196,8 +199,10 @@ Ce qu'il faut adapter pour les documents enfants :
   éléments, mêmes modules) : compteurs, comptes (leurs limites s'ouvrent dans la barre), actions,
   projets épinglés, discussions à reprendre. Les bandeaux (connexion, arrêt d'urgence, mise à jour) et
   les rappels s'affichent au-dessus de la barre.
-- **Icône de la zone de notification** : tâches en cours, en file et à valider ; menu Ouvrir JARVIS,
-  Nouvelle demande (la barre), Se déconnecter des sites, Quitter. Une pastille sur les boutons de la
+- **Icône de la zone de notification** : tâches en cours, en file et à valider, entrées à lire ; menu
+  Boîte de réception (avec ses compteurs), Ouvrir JARVIS, Nouvelle demande (la barre), Se déconnecter
+  des sites, Quitter. Le verrouillage et la mise en veille de la session (`powerMonitor`) sont signalés à
+  la page : au retour, « Pendant ton absence : … » au-dessus de la barre. Une pastille sur les boutons de la
   barre des tâches de Windows (`setOverlayIcon`, sur chaque fenêtre de JARVIS) signale une validation
   en attente.
 - **Fenêtres cadres** ([static/js/wm.js](../static/js/wm.js), `jarvis-win:cadre-…`) : ce que la fenêtre

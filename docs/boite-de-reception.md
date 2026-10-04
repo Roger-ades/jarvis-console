@@ -1,7 +1,7 @@
-# Boîte de réception (conception)
+# Boîte de réception
 
-Note de travail : le serveur est en place (étape 1 ci-dessous), l'interface pas encore. C'est l'étape 3
-de la [feuille de route](feuille-de-route.md).
+Note de travail : en place (étapes 1 à 6 ci-dessous), à essayer sous Windows (voir « À vérifier sous
+Windows »). C'est l'étape 3 de la [feuille de route](feuille-de-route.md).
 Objectif : un seul endroit pour tout ce qui attend l'utilisateur, quels que soient la discussion, la
 fenêtre, le compte ou le projet ; et les commandes du compte en boutons, comme celles des projets.
 
@@ -220,9 +220,9 @@ tire la demande envoyée à Claude.
 Configuration → Profils → *compte* → **Brief du matin** :
 
 - **Activer** (non par défaut), **heure** et **jours** (en semaine à 7:45 au départ).
-- **Sources** : mails, devis Odoo, agenda, chacune à cocher. Seules celles que les serveurs MCP du
-  compte permettent sont proposées (Office 365 ou Gmail pour les mails et l'agenda, Odoo pour les
-  devis).
+- **Sources** : mails, devis Odoo, agenda, chacune à cocher. Claude les lit avec les serveurs MCP du
+  compte (Office 365 ou Gmail pour les mails et l'agenda, Odoo pour les devis) ; une source
+  indisponible est signalée en une ligne dans le brief.
 - **Mails importants** : des critères, pas une liste figée, parce qu'ils suivent les dossiers en
   cours :
   - au niveau du compte, ce qui compte toujours : expéditeurs ou domaines, mots de l'objet, dossiers
@@ -232,18 +232,22 @@ Configuration → Profils → *compte* → **Brief du matin** :
     comptent tant que la case **Suivre dans le brief** est cochée. Un dossier qui se termine : on la
     décoche, les critères restent pour plus tard. Ceux d'un projet sans compte attitré valent pour les
     briefs de tous les comptes.
-- **Devis en attente** : par défaut, les devis pas encore envoyés (état `draft`) dont le vendeur est
-  l'utilisateur Odoo choisi ici (**Mon utilisateur Odoo**, une liste lue dans Odoo par le serveur MCP du
-  compte). Les devis préparés pour d'autres vendeurs ne comptent pas. Le filtre fait partie des
-  réglages, pour suivre la façon de travailler.
+- **Devis en attente** : les devis pas encore envoyés (état `draft`) dont le vendeur est l'utilisateur
+  Odoo choisi ici (**Mon utilisateur Odoo**). Les devis des autres vendeurs ne comptent pas. Le champ
+  prend un nom, ou un utilisateur de la liste que **Chercher dans Odoo** lit : une courte discussion du
+  compte, en lecture seule, qui reste dans l'historique et n'entre pas dans la boîte. Vide : l'utilisateur
+  avec lequel le serveur Odoo est connecté.
 - **Modèle et effort** : ceux du compte par défaut ; un modèle moyen et un effort faible suffisent pour
   une exécution par jour.
 
 ### Exécution
 
-- Une routine gérée par la console (`brief: <profil>` dans `Routine`), visible dans le panneau
-  Routines (« Brief du matin · Travail ») avec un lien vers ses réglages au lieu de l'éditeur de
-  consigne. Sans fenêtre, en tête de la boîte.
+- Une routine gérée par la console ([console/brief.py](../console/brief.py), `brief-<compte>`), visible
+  dans le panneau Routines (« Brief du matin · Travail ») avec **Réglages** au lieu de l'interrupteur :
+  le compte l'active ou la retire. Sans fenêtre, en tête de la boîte, rattrapée au démarrage si la
+  console était arrêtée à l'heure prévue. Une réussite n'entre pas dans « À lire » (elle est en tête) ;
+  une erreur arrive dans « À faire ». **Lancer maintenant** dans ses réglages, ou **Lancer** dans
+  Routines.
 - À chaque exécution, la console écrit la demande à partir des réglages du moment : sources cochées,
   critères du compte, critères des projets suivis (avec leur nom), définition des devis en attente.
   Changer un critère vaut dès le brief suivant.
@@ -309,24 +313,58 @@ les tapant après `/`.
 
 ## Étapes
 
-1. **Serveur** : `inbox.py`, marques de lecture, validations expirées et Reprendre, affichages en
-   attente, exécutions de routines, compteurs dans `state`, événement et API. *Fait :
-   [tests/test_inbox.py](../tests/test_inbox.py) (fonction pure, moteur avec la fausse CLI, API).*
-2. **Interface** : panneau (tiroir et fenêtre de l'OS), barre du haut, menu JARVIS, Ctrl+K, icône de
-   notification ; `S.attention` remplacé. Playwright sur le serveur de démo, dans le navigateur et
-   dans l'application (Linux, affichage virtuel), comme pour Electron.
-3. **Routines** : réglage « Dans la boîte de réception », exécutions non lancées et manquées,
-   Reprendre, routine en tête.
+1. **Serveur** : [console/inbox.py](../console/inbox.py), marques de lecture, validations expirées et
+   Reprendre, affichages en attente, exécutions de routines, compteurs dans `state`, événement et API.
+   *Fait.*
+2. **Interface** ([static/js/inbox.js](../static/js/inbox.js)) : panneau (tiroir, ou fenêtre de l'OS en
+   *Intégré au bureau*), bouton **Boîte** et son badge, compteur « à valider », résumé en tête du menu
+   JARVIS (et de l'accueil du navigateur) avec un badge sur l'emblème, Ctrl+K, icône de la zone de
+   notification (« Boîte de réception (2 à faire · 3 à lire) »), `#boite` dans l'adresse. `S.attention`
+   laisse la place aux marques du serveur : une pastille de tâche réduite montre « • » quand elle est
+   non lue. *Fait.*
+3. **Routines** : réglage « Dans la boîte de réception » (chaque résultat ou seulement les erreurs ;
+   une réussite d'une routine « erreurs » ne sonne ni ne notifie), case « En tête de la boîte de
+   réception », exécutions non lancées et manquées, Reprendre. *Fait.*
 4. **Brief du matin** : réglages par compte (`Profile.brief` dans
-   [console/config.py](../console/config.py)), « Mails à suivre » des projets (`Project.mails`),
-   demande écrite par la console, routine gérée, section Aujourd'hui, affichage en tête.
-5. **Actions du compte** : case par compte (`Profile.account_actions`), lecture et épinglage,
-   Configuration → Profils, Ctrl+K, menu JARVIS, onglet Actions du projet, routines.
-6. **Finitions** : « Pendant ton absence », regroupements.
+   [console/config.py](../console/config.py)), « Mails à suivre » des projets (`Project.mails`, dans la
+   fenêtre de réglages du projet), demande écrite par la console ([console/brief.py](../console/brief.py)),
+   routine gérée, Chercher dans Odoo, section Aujourd'hui (rappels et routines du jour, comptes au-delà de
+   70 %), affichage en tête de la boîte (replié, **Déplier**). *Fait.*
+5. **Actions du compte** ([static/js/accountactions.js](../static/js/accountactions.js)) : case par
+   compte (`Profile.account_actions`), lecture et épinglage (`compte:<id>`), Configuration → Profils
+   (Voir ou Relire, Dans le menu, Lancer), Ctrl+K, boutons « Actions » de l'accueil et du menu JARVIS,
+   onglet Actions du projet (« Du compte … »), routines, doublons de nom. *Fait.*
+6. **Finitions** : « Pendant ton absence » (verrouillage ou veille de la session dans l'application de
+   bureau, `powerMonitor` ; page cachée plus de 15 min dans le navigateur), regroupements. *Fait.*
 
-Les étapes 1 à 3 font la boîte ; 4 et 5 peuvent suivre dans l'ordre qu'on veut. Les déclencheurs
-(étape 4 de la feuille de route) peuvent avancer en parallèle : une tâche déclenchée arrivera dans la
-boîte comme le résultat d'une routine.
+## Ce qui est vérifié
+
+- **Tests Python** : [tests/test_inbox.py](../tests/test_inbox.py) (entrées, lu et non lu, validation
+  décidée depuis la boîte et notée au journal, expiration et Reprendre, annulation qui n'est pas une
+  expiration, affichage en attente, routines « erreurs » et en tête, rappels, événement regroupé, API)
+  et [tests/test_brief_actions.py](../tests/test_brief_actions.py) (réglages du brief, demande écrite,
+  routine qui suit le compte, liste des utilisateurs Odoo, actions du compte : désactivées par défaut,
+  validation, modification, doublons, routines, API).
+- **Dans Chromium**, sur le serveur de démo (fausse CLI) : badge, panneau, Approuver depuis la boîte
+  (journal « utilisateur (boîte de réception) »), Détail, Lu, carte en tête avec son affichage,
+  section Aujourd'hui, « Pendant ton absence », bouton d'action du compte sur l'accueil et dans
+  Ctrl+K, éditeur de routine, réglages du brief et des actions du compte ; aucune erreur dans la console
+  du navigateur.
+
+## À vérifier sous Windows
+
+- Application de bureau, *Intégré au bureau* : la boîte dans sa fenêtre (position gardée), le résumé
+  en tête du menu JARVIS et le badge de l'emblème, l'entrée « Boîte de réception » de l'icône de la zone
+  de notification.
+- « Pendant ton absence » après un verrouillage (Windows+L) et après une mise en veille.
+- Approuver et Refuser depuis la boîte une validation qui a aussi sa notification (la notification
+  disparaît).
+- Un vrai brief : Office 365 et Odoo du compte Travail, **Chercher dans Odoo**, un projet avec des
+  « Mails à suivre ».
+- Une commande de `~/.claude-work/commands` en bouton, lancée depuis le menu JARVIS et depuis un projet.
+
+Les déclencheurs (étape 4 de la feuille de route) arriveront dans la boîte comme le résultat d'une
+routine.
 
 ## Pour la suite
 

@@ -6,13 +6,15 @@ Only the marks live elsewhere: `read_at` on a task, `read` on a routine run, the
 Claude never sees the inbox: no prompt, no tool.
 
 Three sections, in this order: "todo" (blocks or waits for a decision), "read" (arrived while the user
-looked elsewhere), "reminder" (the notes' reminders due).
+looked elsewhere), "reminder" (the notes' reminders due). Above them, "head": the latest result of the
+routines set to show at the top (the morning briefs), until their next run; it is not counted.
 """
 from __future__ import annotations
 
 import re
 
-SECTIONS = ("todo", "read", "reminder")
+SECTIONS = ("head", "todo", "read", "reminder")
+COUNTED = ("todo", "read", "reminder")
 APPROVE = ("hook", "permission")        # tool calls: approved or refused from the inbox
 ENDED = ("done", "error", "interrupted")  # a cancelled task never comes: the user stopped it
 CHOICE_BLOCKS = ("choix", "actions")    # display blocks that wait for a click
@@ -82,6 +84,8 @@ def entries(tasks, routines, notes, *, now: float, since: float | None, approval
     out: list[dict] = []
     after = since if since is not None else float("inf")
     groups: dict[str, list[dict]] = {}
+    heads = {r.get("id"): r for r in routines if r.get("headline")}
+    latest: dict[str, dict] = {}   # the latest result of each routine shown at the top
 
     def base(t: dict) -> dict:
         pid = t.get("profile") or ""
@@ -117,8 +121,13 @@ def entries(tasks, routines, notes, *, now: float, since: float | None, approval
                         "ts": d.get("ts"), "key": d.get("key"), **base(t), "summary": d.get("titre") or "",
                         "actions": ["open", "dismiss"]})
         ended = t.get("ended") or 0
-        if t.get("status") not in ENDED or ended < after or ended <= (t.get("read_at") or 0):
-            continue
+        rid = (t.get("routine") or {}).get("id")
+        if rid in heads and t.get("status") == "done":
+            if ended > ((latest.get(rid) or {}).get("ended") or 0):
+                latest[rid] = t
+            continue   # shown at the top, not among the results to read
+        if t.get("status") not in ENDED or ended < after or ended <= (t.get("read_at") or 0) or t.get("origin") == "reglage":
+            continue   # (a search made from the configuration answers there)
         if t["status"] != "done":
             out.append({"id": f"fin:{tid}", "section": "todo", "kind": t["status"], "ts": ended, **base(t),
                         "summary": plain(t.get("error") or "", EXCERPT) if not light else "",
@@ -137,6 +146,16 @@ def entries(tasks, routines, notes, *, now: float, since: float | None, approval
                     **base(last), "title": (last.get("routine") or {}).get("name") or last.get("title") or "",
                     "count": len(group), "task_ids": [t["id"] for t in group],
                     "excerpt": "" if light else plain(last.get("result") or ""), "actions": ["open", "read"]})
+
+    for rid, t in latest.items():
+        if t.get("headline_hidden"):
+            continue
+        r = heads[rid]
+        out.append({"id": f"une:{rid}", "section": "head", "kind": "headline", "ts": t.get("ended"), **base(t),
+                    "title": r.get("name") or t.get("title") or "", "routine": {"id": rid, "name": r.get("name")},
+                    "brief": r.get("brief") or "", "display": t.get("last_display") or None,
+                    "unread": (t.get("ended") or 0) > (t.get("read_at") or 0),
+                    "excerpt": "" if light else plain(t.get("result") or "", 600), "actions": ["open", "hide"]})
 
     for r in routines:
         for run in r.get("runs") or []:
@@ -174,4 +193,4 @@ def entries(tasks, routines, notes, *, now: float, since: float | None, approval
 
 
 def counts(items: list[dict]) -> dict:
-    return {s: sum(1 for e in items if e["section"] == s) for s in SECTIONS}
+    return {s: sum(1 for e in items if e["section"] == s) for s in COUNTED}

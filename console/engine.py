@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import activity as activity_mod
 from . import attachments as att
+from . import brief as brief_mod
 from . import changes as changes_mod
 from . import display as display_mod
 from . import inbox as inbox_mod
@@ -352,6 +353,7 @@ class Engine:
                 self.routines[r.id] = r
             except ValueError:
                 continue
+        self.sync_briefs()
         self._recover()
         self._purge_old()
         self._schedule_routines(startup=True)
@@ -1045,7 +1047,7 @@ class Engine:
                 read(tid)
             for e in picked:
                 kind = e["kind"]
-                if kind in ("done", "routine", "error", "interrupted"):
+                if kind in ("done", "routine", "error", "interrupted") or (kind == "headline" and not dismiss):
                     for tid in e.get("task_ids") or [e["task_id"]]:
                         read(tid)
                 elif kind == "run":
@@ -1069,6 +1071,11 @@ class Engine:
                         touched[t["id"]] = t
                 elif kind == "reminder":
                     reminders.append(e["note_id"])
+                elif kind == "headline":
+                    t = self.tasks.get(e["task_id"])
+                    if t is not None:
+                        t["headline_hidden"] = True
+                        touched[t["id"]] = t
                 else:
                     continue  # an approval waiting
                 marked += 1
@@ -1168,6 +1175,8 @@ class Engine:
         cfg = self.cfg.model_copy(deep=True)
         old = next((p for p in cfg.projects if norm(p.folder) == norm(folder)), None)
         proj.created = old.created if old else time.time()
+        if old and "mails" not in data:
+            proj.mails = old.mails
         cfg.projects = [p for p in cfg.projects if norm(p.folder) != norm(folder)] + [proj]
         self.cfg_store.save(cfg, f"projet {proj.name}")
         self.bus.publish("projects", {"projects": self.projects()})
@@ -1362,11 +1371,112 @@ class Engine:
                 raise TaskError(f"L'action « /{name} » {why} : relis-la avant de la lancer.", 409,
                                 need_approval=True, action=a)
             self.approve_action(proj.folder, name, approve)
+        acc_pid = proj.profile or profile or self.cfg.general.default_profile
+        twin = next((x for x in self.account_actions(acc_pid) if x["name"] == name), None)
+        if twin and twin["status"] != "ok":
+            raise TaskError(f"Le compte {twin['profile_name']} a aussi une action « /{name} », pas validée : on ne sait pas "
+                            "laquelle Claude Code suivra. Valide-la (Configuration → Profils), ou renomme l'une des deux.", 409)
         args = " ".join(str(arguments or "").split())[:4000]
         pref = self._action_prefs(proj.folder).get(name, {})
         return self.create_task(f"/{name} {args}".strip(), profile=proj.profile or profile or None,
                                 model=pref.get("model") or proj.model or None, preset=proj.preset or None,
                                 workdir=proj.folder, effort=pref.get("effort") or proj.effort or None,
+                                confirmed=confirmed, origin="action")
+
+    # -------------------------------------------------------- account actions (its commands and skills)
+    def _account_dir(self, prof: Profile) -> Path:
+        return Path(expand_path(prof.config_dir) or str(Path.home() / ".claude"))
+
+    def account_actions(self, pid: str, content: bool = False) -> list[dict]:
+        """The commands and skills of an account's configuration folder, as buttons once the user turned
+        them on for that account (Configuration → Profils): pinned by fingerprint like a project's, "ok",
+        "nouvelle" or "modifiee", with the model, effort and place in the menu chosen for each."""
+        prof = self.cfg.profile(pid or "")
+        if not prof or not prof.account_actions:
+            return []
+        base = self._account_dir(prof)
+        key = f"compte:{prof.id}"
+        pins = (self.store.kv_get("action_pins", {}) or {}).get(key, {})
+        prefs = (self.store.kv_get("action_prefs", {}) or {}).get(key, {})
+        out = []
+        for a in project_tools.scan_dir(base) if base.is_dir() else []:
+            pin = pins.get(a["name"])
+            a["status"] = "ok" if pin == a["hash"] else ("modifiee" if pin else "nouvelle")
+            a.update({"model": "", "effort": "", "menu": False, **prefs.get(a["name"], {}),
+                      "scope": "compte", "profile": prof.id, "profile_name": prof.name})
+            if not content:
+                a.pop("content", None)
+                a.pop("files", None)
+            out.append(a)
+        return out
+
+    def _account_action(self, pid: str, name: str) -> dict:
+        prof = self.cfg.profile(pid or "")
+        if not prof:
+            raise TaskError("Compte inconnu.", 404)
+        if not prof.account_actions:
+            raise TaskError(f"Les actions du compte {prof.name} ne sont pas activées (Configuration → Profils).", 409)
+        a = next((x for x in self.account_actions(pid, content=True) if x["name"] == name), None)
+        if not a:
+            raise TaskError(f"Action du compte introuvable : /{name}", 404)
+        return a
+
+    def approve_account_action(self, pid: str, name: str, fp: str) -> dict:
+        """The user validated an action of the account as shown: the fingerprint must still be that of the files."""
+        a = self._account_action(pid, name)
+        if a["hash"] != fp:
+            raise TaskError("L'action a changé depuis son affichage : relis-la avant de la valider.", 409,
+                            need_approval=True, action=a)
+        pins = self.store.kv_get("action_pins", {}) or {}
+        pins.setdefault(f"compte:{pid}", {})[name] = fp
+        self.store.kv_set("action_pins", pins)
+        self._audit("action du compte validée", {"compte": a["profile_name"], "action": f"/{name}", "fichier": a["path"],
+                                                 "empreinte": fp})
+        self.bus.publish("account_actions", {"profile": pid})
+        return {**a, "status": "ok"}
+
+    def set_account_action_prefs(self, pid: str, name: str, model: str = "", effort: str = "", menu: bool = False) -> dict:
+        self._account_action(pid, name)
+        model, effort = (model or "").strip(), (effort or "").strip()
+        if model and not re.fullmatch(r"[A-Za-z0-9._:\-\[\]]{1,80}", model):
+            raise TaskError("Nom de modèle invalide.")
+        if effort not in ("", "low", "medium", "high", "xhigh", "max"):
+            raise TaskError("Niveau d'effort invalide.")
+        prefs = self.store.kv_get("action_prefs", {}) or {}
+        mine = prefs.setdefault(f"compte:{pid}", {})
+        if model or effort or menu:
+            mine[name] = {"model": model, "effort": effort, "menu": bool(menu)}
+        else:
+            mine.pop(name, None)
+        self.store.kv_set("action_prefs", prefs)
+        self.bus.publish("account_actions", {"profile": pid})
+        return {"model": model, "effort": effort, "menu": bool(menu)}
+
+    def run_account_action(self, pid: str, name: str, arguments: str = "", workdir: str = "", confirmed: bool = False,
+                           approve: str = "") -> dict:
+        """An action of the account launched from its button: a normal discussion of the account ("/nom
+        arguments") in the folder chosen; a project folder brings its preset, model and effort (the action's
+        own model and effort first). A project with an action of the same name: both must be validated,
+        since nobody knows beforehand which one Claude Code follows."""
+        a = self._account_action(pid, name)
+        if a["status"] != "ok":
+            if approve != a["hash"]:
+                why = "a changé depuis sa validation" if a["status"] == "modifiee" else "n'a pas encore été validée"
+                raise TaskError(f"L'action du compte « /{name} » {why} : relis-la avant de la lancer.", 409,
+                                need_approval=True, action=a)
+            self.approve_account_action(pid, name, approve)
+        proj = self._project(workdir) if workdir else None
+        if proj and os.path.isdir(proj.folder):
+            twin = next((x for x in self.project_actions(proj.folder) if x["name"] == name), None)
+            if twin and twin["status"] != "ok":
+                raise TaskError(f"Le projet « {proj.name} » a aussi une action « /{name} », pas validée : on ne sait pas "
+                                "laquelle Claude Code suivra. Valide-la dans le projet, ou renomme l'une des deux.", 409)
+        args = " ".join(str(arguments or "").split())[:4000]
+        pref = (self.store.kv_get("action_prefs", {}) or {}).get(f"compte:{pid}", {}).get(name, {})
+        return self.create_task(f"/{name} {args}".strip(), profile=pid,
+                                model=pref.get("model") or (proj.model if proj else "") or None,
+                                preset=(proj.preset if proj else "") or None, workdir=(proj.folder if proj else workdir) or None,
+                                effort=pref.get("effort") or (proj.effort if proj else "") or None,
                                 confirmed=confirmed, origin="action")
 
     def project_routines(self, folder: str) -> list[dict]:
@@ -1375,15 +1485,20 @@ class Engine:
                 if r.workdir and norm(r.workdir) == key]
 
     def _routine_action_problem(self, r: Routine) -> str | None:
-        """A routine that launches a project action runs it only as the user validated it."""
+        """A routine that launches an action (of its project, or of its account) runs it only as the user
+        validated it."""
         act = project_tools.action_of(r.prompt)
-        proj = self._project(r.workdir) if act and r.workdir else None
-        if not proj:
+        if not act:
             return None
-        a = next((x for x in self.project_actions(proj.folder) if x["name"] == act[0]), None)
+        proj = self._project(r.workdir) if r.workdir else None
+        a = next((x for x in self.project_actions(proj.folder) if x["name"] == act[0]), None) if proj else None
         if a and a["status"] != "ok":
             return (f"L'action « /{a['name']} » {'a changé depuis sa validation' if a['status'] == 'modifiee' else 'n’est pas validée'} : "
                     "ouvre le projet pour la relire et la valider.")
+        acc = next((x for x in self.account_actions(r.profile) if x["name"] == act[0]), None)
+        if acc and acc["status"] != "ok":
+            return (f"L'action du compte « /{acc['name']} » {'a changé depuis sa validation' if acc['status'] == 'modifiee' else 'n’est pas validée'} : "
+                    "relis-la dans Configuration → Profils → Actions du compte.")
         return None
 
     # -------------------------------------------------------- what Claude proposes to add to a project
@@ -2515,6 +2630,7 @@ class Engine:
             if any(b["type"] in inbox_mod.CHOICE_BLOCKS for b in doc["blocs"]):
                 clicks = [*clicks, {"key": key, "titre": _clip(doc["titre"], 200), "ts": time.time()}][-20:]
             t["waiting_displays"] = clicks
+            t["last_display"] = {"key": key, "titre": _clip(doc["titre"], 200), "ts": time.time()}
             self._save(t, publish=False)
         self._event(tid, "display", {"key": key, "rev": rev, **doc})
         self._audit("affichage", {"titre": _clip(doc["titre"], 200), "où": doc["ou"], "id": key,
@@ -3549,6 +3665,8 @@ class Engine:
         from .config import format_errors
         with self._lock:
             old = self.routines.get(str(data.get("id", "")))
+            if (old and old.brief) or data.get("brief"):
+                raise TaskError("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.", 409)
             base = old.model_dump() if old else {}
             keep = {k: base[k] for k in ("created", "last_run", "runs") if k in base}
             try:
@@ -3565,9 +3683,12 @@ class Engine:
 
     def delete_routine(self, rid: str):
         with self._lock:
-            r = self.routines.pop(rid, None)
+            r = self.routines.get(rid)
             if not r:
                 raise TaskError("Routine inconnue.", 404)
+            if r.brief:
+                raise TaskError("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.", 409)
+            self.routines.pop(rid, None)
             self._audit("routine supprimée", {"nom": r.name})
             self._persist_routines()
 
@@ -3587,9 +3708,16 @@ class Engine:
                 if why:
                     raise TaskError(why)
                 blocked = self.limit_block(r.profile)
-                t = self.create_task(r.prompt, profile=r.profile, model=r.model or None, preset=r.preset,
+                prompt = r.prompt
+                if r.brief:   # a morning brief: the request is written now, from the account's settings
+                    prof = self.cfg.profile(r.brief)
+                    if not prof or not prof.brief.enabled:
+                        raise TaskError("Le brief de ce compte est désactivé.")
+                    prompt = brief_mod.prompt(prof, self.cfg.projects, now, r.last_run)
+                t = self.create_task(prompt, profile=r.profile, model=r.model or None, preset=r.preset,
                                      workdir=r.workdir or None, effort=r.effort or None, confirmed=True,
-                                     origin="routine", routine={"id": r.id, "name": r.name}, closed=not r.open_window,
+                                     origin="routine", routine={"id": r.id, "name": r.name, "inbox": r.inbox},
+                                     closed=not r.open_window,
                                      team=r.team, not_before=blocked + 60 if blocked else None)
                 run["task_id"] = t["id"]
                 if blocked:
@@ -3627,6 +3755,53 @@ class Engine:
                         r.enabled = False
             self.store.kv_set("routines", [r.model_dump() for r in self.routines.values()])
 
+    def sync_briefs(self):
+        """The routines of the morning briefs follow the accounts' settings: one per account whose brief is
+        on (brief.py), none for the others. Their runs and last run are kept."""
+        with self._lock:
+            changed = False
+            want = {brief_mod.routine_id(p.id): p for p in self.cfg.profiles if p.brief.enabled}
+            for rid, r in list(self.routines.items()):
+                if r.brief and rid not in want:
+                    self.routines.pop(rid)
+                    changed = True
+            for rid, p in want.items():
+                old = self.routines.get(rid)
+                keep = {k: getattr(old, k) for k in ("created", "last_run", "runs", "next_run")} if old else {}
+                try:
+                    r = Routine.model_validate({**brief_mod.routine_fields(p), **keep})
+                except ValueError:
+                    continue
+                if old and old.model_dump() == r.model_dump():
+                    continue
+                if not old or old.schedule != r.schedule:
+                    r.next_run = r.schedule.next_after(time.time())
+                self.routines[rid] = r
+                changed = True
+            if changed:
+                self._persist_routines()
+
+    def odoo_users_start(self, pid: str) -> dict:
+        """Configuration → Profils → Brief du matin → Chercher dans Odoo: a short discussion of the account,
+        read-only, that lists the Odoo users (its answer is read by odoo_users_result)."""
+        if not self.cfg.profile(pid):
+            raise TaskError("Compte inconnu.", 404)
+        t = self.create_task(brief_mod.USERS_PROMPT, profile=pid, preset=brief_mod.PRESET, effort="low",
+                             confirmed=True, origin="reglage", closed=True)
+        return {"task_id": t["id"]}
+
+    def odoo_users_result(self, pid: str, tid: str) -> dict:
+        t = self._get(tid)
+        if t.get("origin") != "reglage" or t.get("profile") != pid:
+            raise TaskError("Recherche introuvable.", 404)
+        if t["status"] in ACTIVE:
+            return {"status": "running"}
+        if t["status"] != "done":
+            return {"status": "error", "error": t.get("error") or "La recherche n'a pas abouti."}
+        users = brief_mod.parse_users(t.get("result") or "")
+        return {"status": "done", "users": users,
+                **({} if users else {"error": "Aucun utilisateur lu dans Odoo : le serveur Odoo du compte répond-il ?"})}
+
     def _routine_loop(self):
         tick = 0
         while not self._stop:
@@ -3647,6 +3822,9 @@ class Engine:
         r = self.routines.get(info.get("id", ""))
         if not r:
             return
+        if r.inbox == "errors" and t["status"] == "done":
+            t["read_at"] = time.time()   # only its errors wait in the inbox
+            self.store.save_task(t)
         for run in r.runs:
             if run.get("task_id") == t["id"]:
                 run["status"] = t["status"]

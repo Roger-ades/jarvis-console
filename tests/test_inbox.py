@@ -278,3 +278,45 @@ def test_inbox_api(client):  # noqa: F811
     assert r.status_code == 404
     r = client.post("/api/tasks/aaaa1111/approvals/zz", json={"decision": "allow", "via": "boite"}, headers=_h(client))
     assert r.status_code == 409
+
+
+# ------------------------------------------------------------ routines: errors only, at the top
+
+def test_a_routine_set_to_errors_only_leaves_its_successes_read(engine):
+    engine.inbox(start=True)
+    r = engine.save_routine({"name": "Discrète", "prompt": "écho", "profile": "work", "preset": "lecture",
+                             "schedule": {"kind": "interval", "every_min": 60}, "open_window": False, "inbox": "errors"})
+    assert r["inbox"] == "errors"
+    ok = engine.run_routine(r["id"])
+    settle(engine, ok["id"])
+    wait_for(lambda: engine.tasks[ok["id"]].get("read_at"))
+    assert not any(e["kind"] in ("routine", "done") for e in engine.inbox()["entries"])
+    assert engine.tasks[ok["id"]]["routine"]["inbox"] == "errors"
+    engine.routines[r["id"]].prompt = "FAIL"   # the next run ends with an error
+    failed = engine.run_routine(r["id"])
+    settle(engine, failed["id"])
+    assert f"fin:{failed['id']}" in ids(engine, "todo")   # an error always comes
+
+
+def test_a_routine_at_the_top_shows_its_latest_result(engine):
+    engine.inbox(start=True)
+    offer = {"titre": "Brief", "blocs": [{"type": "texte", "texte": "3 devis"}]}
+    r = engine.save_routine({"name": "Point du matin", "prompt": "PRESENT " + json.dumps(offer, ensure_ascii=False),
+                             "profile": "work", "preset": "lecture", "schedule": {"kind": "interval", "every_min": 60},
+                             "open_window": False, "headline": True})
+    first = engine.run_routine(r["id"])
+    settle(engine, first["id"])
+    second = engine.run_routine(r["id"])
+    settle(engine, second["id"])
+    out = engine.inbox()
+    head = [e for e in out["entries"] if e["section"] == "head"]
+    assert [e["id"] for e in head] == [f"une:{r['id']}"] and head[0]["task_id"] == second["id"]
+    assert head[0]["display"]["titre"] == "Brief" and head[0]["unread"] is True
+    assert not any(e["kind"] == "routine" for e in out["entries"])   # not among the results to read
+    assert out["counts"] == {"todo": 0, "read": 0, "reminder": 0}    # the top is not counted
+    engine.inbox_mark(ids=[head[0]["id"]], dismiss=True)             # hidden until the next run
+    assert not [e for e in engine.inbox()["entries"] if e["section"] == "head"]
+    third = engine.run_routine(r["id"])
+    settle(engine, third["id"])
+    head = [e for e in engine.inbox()["entries"] if e["section"] == "head"]
+    assert head and head[0]["task_id"] == third["id"]

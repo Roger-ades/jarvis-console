@@ -4,6 +4,7 @@
 // the project ("/nom arguments") with the project's account and preset, and the model and effort
 // chosen for the action (else the project's). Its launches are listed under it.
 import { api, ApiError } from "./api.js";
+import { accountActionRows } from "./accountactions.js";
 import { STATUS, dialog, fmtDate, h, modelName, toast } from "./util.js";
 import { openRoutineEditor, setRoutineEnabled } from "./routines.js";
 import { projectTint } from "./tint.js";
@@ -36,8 +37,9 @@ function modelLabel(ctx, a) {
 }
 
 /** What the action makes Claude do, read before it is validated. Resolves true when validated. */
-export function reviewAction(a, { launching = false, readOnly = false, tint = null } = {}) {
+export function reviewAction(a, { launching = false, readOnly = false, tint = null, why: note = null } = {}) {
   const why = readOnly ? "Action validée : ce que Claude suit quand tu la lances. Une modification du fichier demandera une nouvelle validation."
+    : note && a.status !== "modifiee" ? note
     : a.status === "modifiee"
     ? "Son contenu a changé depuis ta dernière validation (par Claude ou par quelqu'un d'autre) : relis-le."
     : "Claude suivra ces consignes avec les autorisations du projet. Toute modification future demandera une nouvelle validation.";
@@ -118,6 +120,15 @@ export async function renderActions(body, ctx, ws, refresh) {
     : [h("div", { class: "empty-row" }, "Aucune action. Demande à Claude d'en proposer une, ou ajoute un fichier dans .claude/commands du dossier.")]));
   routines.replaceChildren(...(res.routines.length ? res.routines.map((r) => routineRow(ctx, proj, r, refresh))
     : [h("div", { class: "empty-row" }, "Aucune routine pour ce projet.")]));
+  // the actions of the account, launched in this project's folder (once the user turned them on)
+  const acc = ctx.profiles().find((p) => p.id === (proj.profile || ctx.currentProfile?.()));
+  if (!acc?.account_actions) return;
+  const own = h("div", { class: "drawer-list flat" });
+  list.after(h("div", { class: "sec-title pad" }, `Du compte ${acc.name}`), own);
+  try {
+    const { actions } = await api(`/api/accounts/${acc.id}/actions`);
+    own.replaceChildren(...accountActionRows({ ...ctx, workdir: () => proj.folder }, acc, actions, refresh));
+  } catch (e) { own.replaceChildren(h("div", { class: "line err" }, e.message)); }
 }
 
 function actionRow(ctx, proj, a, refresh) {

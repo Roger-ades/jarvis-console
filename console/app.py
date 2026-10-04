@@ -346,6 +346,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                 pass
         store.audit("configuration modifiée", {"raison": reason})
         engine.bus.publish("config", {"reason": reason})
+        engine.sync_briefs()   # the morning briefs' routines follow the accounts' settings
         return {"config": dump(cfg), "meta": meta(),
                 "restart_needed": cfg.general.port != old_port}
 
@@ -391,6 +392,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
             return _err(422, "Cette version n'est plus valide.", errors=format_errors(exc))
         store.audit("configuration restaurée", {"version": body.get("id")})
         engine.bus.publish("config", {"reason": "retour"})
+        engine.sync_briefs()
         return {"config": dump(cfg), "meta": meta()}
 
     @app.get("/api/config/export")
@@ -412,6 +414,14 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def login_profile(pid: str):
         engine.open_login(pid)
         return {"ok": True}
+
+    @app.post("/api/profiles/{pid}/odoo-users")
+    def odoo_users_start(pid: str):
+        return engine.odoo_users_start(pid)
+
+    @app.get("/api/profiles/{pid}/odoo-users/{tid}")
+    def odoo_users_result(pid: str, tid: str):
+        return engine.odoo_users_result(pid, tid)
 
     @app.get("/api/profiles/{pid}/mcp")
     def profile_mcp(pid: str):
@@ -595,6 +605,26 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return engine.run_action(str(body.get("folder") or ""), str(body.get("name") or ""),
                                  str(body.get("arguments") or ""), confirmed=bool(body.get("confirmed")),
                                  approve=str(body.get("approve") or ""), profile=body.get("profile") or None)
+
+    # -------------------------------------------------------- the account's actions (its commands and skills)
+    @app.get("/api/accounts/{pid}/actions")
+    def account_actions(pid: str, content: bool = False):
+        return {"actions": engine.account_actions(pid, content=content)}
+
+    @app.post("/api/accounts/{pid}/actions/approve")
+    def account_action_approve(pid: str, body: dict = Body(...)):
+        return engine.approve_account_action(pid, str(body.get("name") or ""), str(body.get("hash") or ""))
+
+    @app.post("/api/accounts/{pid}/actions/settings")
+    def account_action_settings(pid: str, body: dict = Body(...)):
+        return engine.set_account_action_prefs(pid, str(body.get("name") or ""), str(body.get("model") or ""),
+                                               str(body.get("effort") or ""), bool(body.get("menu")))
+
+    @app.post("/api/accounts/{pid}/actions/run")
+    def account_action_run(pid: str, body: dict = Body(...)):
+        return engine.run_account_action(pid, str(body.get("name") or ""), str(body.get("arguments") or ""),
+                                         str(body.get("workdir") or ""), confirmed=bool(body.get("confirmed")),
+                                         approve=str(body.get("approve") or ""))
 
     @app.delete("/api/workspace/rules")
     def workspace_rule_delete(pattern: str, profile: str | None = None, folder: str | None = None):

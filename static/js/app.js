@@ -1,5 +1,6 @@
 // Main: command bar, task windows, live stream, shortcuts, notifications.
 import { runAction } from "./actions.js";
+import { accountActions, loadAccountActions, onAccountActions, runAccountAction } from "./accountactions.js";
 import { ApiError, api, bootstrapAuth, openStream } from "./api.js";
 import { Attacher, hasFiles } from "./attach.js";
 import { ContextPicker } from "./context.js";
@@ -7,29 +8,30 @@ import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
 import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
 import { projectActionsChanged, projectFollow, toggleProject } from "./project.js";
-import { editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
+import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
 import { openConfig, updateProbe } from "./config.js";
 import { renderHistory, toggleHistory } from "./history.js";
+import { away, back, inboxChanged, inboxCounts, initInbox, isUnread, markTasksRead, onInbox, refresh as refreshInbox, toggleInbox } from "./inbox.js";
 import { showSession, toggleSessions } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { barSent, setupBar, toggleMenu } from "./bar.js";
-import { $, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
-import { configure as configureDisplays, displayTitle, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
+import { barSent, setMenuBadge, setupBar, toggleMenu } from "./bar.js";
+import { $, ACTIVE, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
+import { configure as configureDisplays, displayTitle, hasDisplay, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
 import { openPreview, refreshPreviews, revealImage } from "./viewer.js";
 import * as wm from "./wm.js";
 
 const S = {
   config: null, meta: null, state: {}, probes: {},
-  tasks: new Map(), windows: new Map(), attention: new Map(),
-  profile: null, lastRecall: -1,
+  tasks: new Map(), windows: new Map(),
+  profile: null, lastRecall: -1, routines: [],
 };
 const input = $("#cmd-input");
 const suggest = $("#suggest");
@@ -68,14 +70,20 @@ async function boot() {
   renderHome();
   renderPills();
   initNotes(notesCtx);
+  api("/api/routines").then((r) => { S.routines = r.routines || []; }).catch(() => {});
+  loadAccountActions(profiles());
+  onAccountActions(renderHome);
+  initInbox(inboxCtx);
   setInterval(renderPills, 60_000); // a window past its reset time goes back to 0
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
     probe: ({ profile: pid, probe }) => { S.probes[pid] = { ...(S.probes[pid] || {}), ...probe }; updateProbe(pid, probe); renderPills(); },
     config: reloadConfig, deleted: ({ id }) => { S.tasks.delete(id); closeWindow(id); renderHistory(); },
-    reload: resync, routines: (p) => { routinesChanged(p); projectActionsChanged(); }, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
+    reload: resync, routines: (p) => { S.routines = p.routines || S.routines; routinesChanged(p); projectActionsChanged(); }, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
     projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); projectActionsChanged(); },
     notes: notesChanged,
+    inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
+    account_actions: () => loadAccountActions(profiles()),
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
   checkVersion();
@@ -126,6 +134,7 @@ async function resync() {
     for (const t of tasks) onTask(t);
     for (const w of S.windows.values()) w.load();
     renderState();
+    refreshInbox();
   } catch { /* the stream will retry */ }
 }
 
@@ -162,6 +171,7 @@ async function reloadConfig() {
     renderPills();
     recolorTasks();
     switchDisplay();
+    loadAccountActions(profiles());
   } catch { /* keep the old one */ }
 }
 
@@ -196,7 +206,9 @@ function renderState() {
   renderPills();
   document.title = `${st.awaiting ? `(${st.awaiting}) ` : ""}JARVIS · Console d'agents`;
   if (!st.cli?.path) renderBanner();
-  window.jarvis?.status({ running: st.running || 0, awaiting: st.awaiting || 0, queued: st.queued || 0 });
+  const box = st.inbox || inboxCounts();
+  window.jarvis?.status({ running: st.running || 0, awaiting: st.awaiting || 0, queued: st.queued || 0,
+    todo: box.todo || 0, unread: box.read || 0, reminders: box.reminder || 0 });
 }
 
 function renderBanner(down = null) {
@@ -254,6 +266,8 @@ function showConfig(tabName = null) {
   openConfig({
     onSaved: (config, meta) => { applyConfig(config, meta); renderProfiles(); selectProfile(S.profile, false); renderPills(); recolorTasks(); },
     state: () => S.state, setEmergency, theme, openSetup: startSetup,
+    // the account's actions launched from the configuration (accountactions.js)
+    onTask: (t) => onTask(t, true), launch, workdir: () => panelCtx.workdir(),
   }, tabName).catch((e) => toast(e.message, "err"));
 }
 
@@ -483,7 +497,12 @@ function renderHome() {
     h("small", {}, [pname(p.folder), p.discussions ? `${p.discussions} discussion${p.discussions > 1 ? "s" : ""}` : "aucune discussion",
       p.last ? fmtDate(p.last) : ""].filter(Boolean).join(" · ")),
     p.profile && profile(p.profile) ? h("span", { class: "home-acc", style: { "--ac": profile(p.profile).color } }, profile(p.profile).name) : null);
+  const acts = profiles().flatMap((p) => accountActions(p.id).filter((a) => a.menu).map((a) => [p, a]));
   home.replaceChildren(...[
+    acts.length ? h("section", { class: "home-sec" }, h("h3", {}, "Actions"), h("div", { class: "home-acts" }, ...acts.map(([p, a]) =>
+      h("button", { type: "button", class: "home-act", style: { "--pc": p.color }, title: `${p.name} · /${a.name}${a.description ? ` — ${a.description}` : ""}`,
+        on: { click: () => runAccountAction(panelCtx, p, a, { workdir: currentFolder() }) } },
+      h("span", { class: "i", svg: "bolt" }), a.label, profiles().length > 1 ? h("small", {}, p.name) : null)))) : null,
     h("section", { class: "home-sec" }, h("h3", {}, "Projets"), h("div", { class: "home-cards" }, ...pinned.map(card),
       h("button", { type: "button", class: "home-card add", on: { click: newProject } }, h("b", {}, "+ Nouveau projet"),
         h("small", {}, "Un dossier, ses consignes et ses réglages")))),
@@ -512,13 +531,16 @@ regard.chip($("#cmd-regard"));
 // desktop app, "Intégré au bureau": no JARVIS window; the command bar floats in a window of its own, with
 // the top bar and the home screen in its menu, and the notices above it (bar.js)
 setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")],
-  menu: { status: [$("#counters"), $("#profile-pills")], actions: $("#topbar .top-actions"), home: $("#home") },
+  menu: { peek: $("#inbox-peek"), status: [$("#counters"), $("#profile-pills")], actions: $("#topbar .top-actions"), home: $("#home") },
   notices: [$("#banner"), $("#reminders")] });
 // desktop app: its global shortcut (or its notification area) asks for a new request, or for the menu
 window.jarvis?.onCommand(({ cmd, tid } = {}) => {
   if (cmd === "nouvelle-demande") { toggleMenu(false); input.focus(); input.select(); }
   else if (cmd === "menu") toggleMenu(true);
   else if (cmd === "ouvrir" && S.tasks.has(tid)) openTask(tid);   // a click on a notification
+  else if (cmd === "boite") openInbox();                           // the notification area's menu
+  else if (cmd === "absent") away();                               // the session locked or asleep…
+  else if (cmd === "retour") back();                               // …and back: what arrived meanwhile
 });
 $("#cmd-send").before(contextPicker.button("chip-toggle icon-only"), attacher.button("chip-toggle icon-only"));
 
@@ -720,7 +742,7 @@ const winCtx = {
   retry: (id) => launch(`/api/tasks/${id}/retry`, {}),
   duplicate: (id, pid) => launch(`/api/tasks/${id}/duplicate`, { profile: pid }),
   onClosed: (id) => { const t = S.tasks.get(id); if (t) t.closed = true; closeWindow(id); renderHistory(); },
-  onFocus: (id) => { if (S.attention.delete(id)) renderTaskbar(); },
+  onFocus: (id) => markTasksRead([id]),   // the user looks at the discussion: its end is read
   onAttention: (id, kind) => attention(id, kind),
   autoImages: () => !!S.config?.ui?.auto_images,
   addContext: (t) => addContext(t),
@@ -755,7 +777,6 @@ function openWindow(t, fresh) {
 function closeWindow(id) {
   const w = S.windows.get(id);
   if (w) { w.destroy(); S.windows.delete(id); }
-  S.attention.delete(id);
   $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
   renderTaskbar();
 }
@@ -772,6 +793,8 @@ function openTask(id) {
 function onTask(t, fresh = false) {
   const prev = S.tasks.get(t.id);
   S.tasks.set(t.id, t);
+  // a turn that ends under the user's eyes is read (its end is set now: the mark comes after it)
+  if (prev && ACTIVE.has(prev.status) && !ACTIVE.has(t.status) && looking(t.id)) markTasksRead([t.id], true);
   if (!prev) queueMicrotask(renderHome);
   const w = S.windows.get(t.id);
   if (w) w.update(t);
@@ -869,7 +892,7 @@ function renderTaskbar() {
 function taskPill(id) {
   const t = S.tasks.get(id), m = wm.meta(id);
   if (!t && !m) return null;
-  const n = S.attention.get(id) || 0;
+  const unread = !!t && isUnread(id);
   const name = t ? t.title : m.title;
   const close = () => (t ? S.windows.get(id)?.close() : m.onClose?.());
   const pill = h("div", {
@@ -881,7 +904,7 @@ function taskPill(id) {
   }, t ? h("span", { class: "sw" }) : h("span", { class: "pic", svg: m.icon || "file" }),
   h("span", { class: "tt" }, name),
   t ? h("span", { class: `dot s-${t.status}` }) : null,
-  t?.status === "awaiting" ? h("span", { class: "cnt" }, "!") : n ? h("span", { class: "cnt" }, String(n)) : null,
+  t?.status === "awaiting" ? h("span", { class: "cnt" }, "!") : unread ? h("span", { class: "cnt", title: "Non lue" }, "•") : null,
   h("button", { type: "button", class: "tp-x", title: "Fermer", "aria-label": `Fermer ${name}`, svg: "close",
     on: { click: (e) => { e.stopPropagation(); close(); } } }));
   dragPill(pill, id);
@@ -947,12 +970,15 @@ function nativeNotify(ev) {
     buttons: d.kind === "hook" || d.kind === "permission", looking: wm.focused() === ev.task_id && !wm.isMinimized(ev.task_id) });
 }
 
+/** The user has this discussion in front of them: its window focused, shown, in a visible page. */
+function looking(id) {
+  return wm.focused() === id && !wm.isMinimized(id) && !wm.docOf(id).hidden;
+}
+
 function attention(id, kind) {
   const t = S.tasks.get(id);
-  if (!t) return;
-  const away = document.hidden || wm.isMinimized(id) || wm.focused() !== id;
-  if (!away) return;
-  S.attention.set(id, (S.attention.get(id) || 0) + 1);
+  if (!t || looking(id)) return;
+  if (kind === "done" && t.routine?.inbox === "errors") return;   // a routine that only signals its errors
   renderTaskbar();
   const title = kind === "awaiting" ? `À valider · ${t.profile_name}` : kind === "error" ? `En erreur · ${t.profile_name}` : `Terminée · ${t.profile_name}`;
   if (S.config.ui.sounds) beep(kind === "awaiting" ? 880 : kind === "error" ? 220 : 560);
@@ -1062,12 +1088,15 @@ function searchAnything() {
     openSession: (pid, sid) => showSession(panelCtx, pid, sid),
     actions: () => [
       ...projectActions(),
+      ...accountActionItems(),
       { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => focusInput() },
       { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
       { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },
       { label: "Nouvelle note", icon: "note", hint: "Générale", keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: "" }) },
       ...(projectFor(currentFolder()) ? [{ label: `Nouvelle note du projet ${projectFor(currentFolder()).name}`, icon: "note",
         keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: projectFor(currentFolder()).folder }) }] : []),
+      { label: "Boîte de réception", icon: "bell", hint: summaryText(), keywords: "à valider à lire validations résultats routines rappels",
+        run: () => openInbox() },
       { label: "Notes", icon: "note", keywords: "rappels mémos pense-bête", run: () => toggleNotes(notesCtx) },
       { label: "Sessions Claude Code", icon: "list", keywords: "desktop cli reprendre", run: () => toggleSessions(panelCtx) },
       { label: "Routines", icon: "clock", keywords: "tâches planifiées programmer", run: () => toggleRoutines(panelCtx) },
@@ -1089,6 +1118,13 @@ function searchAnything() {
     ],
   });
 }
+/** The actions of the account chosen in the bar, in Ctrl+K: launched in the folder of the bar. */
+function accountActionItems() {
+  const p = profile();
+  return accountActions(p?.id).map((a) => ({ label: a.label, icon: "bolt", keywords: `${a.name} ${a.description || ""} action compte ${p.name}`,
+    hint: `${p.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAccountAction(panelCtx, p, a, { workdir: currentFolder() }) }));
+}
+
 /** The buttons of the active project in Ctrl+K: a launch is a normal discussion of the project. */
 function projectActions() {
   const proj = projectFor(currentFolder());
@@ -1097,7 +1133,7 @@ function projectActions() {
     hint: `${proj.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAction(panelCtx, proj.folder, a) }));
 }
 
-const DRAWERS = ["history", "sessions", "routines", "project", "notes"];
+const DRAWERS = ["inbox", "history", "sessions", "routines", "project", "notes"];
 function closeDrawers(except) {
   if (wm.isNative()) return;   // (desktop app: each panel is a window of its own, wm.nativePanels)
   for (const id of DRAWERS) if (id !== except) document.getElementById(id).hidden = true;
@@ -1184,6 +1220,46 @@ const notesCtx = {
   },
 };
 $("#btn-notes").addEventListener("click", () => toggleNotes(notesCtx));
+
+/** What the inbox needs (inbox.js): open a discussion or a display, relaunch, the routines, the notes. */
+const inboxCtx = {
+  profiles, closeDrawers,
+  openTask: (id) => { closeDrawers(); openTask(id); },
+  retry: (id) => launch(`/api/tasks/${id}/retry`, {}),
+  openRoutines: () => { if ($("#routines").hidden) toggleRoutines(panelCtx); },
+  notes: () => allNotes(),
+  routines: () => S.routines,
+  editNote: (n) => editNote(n),
+  openDisplay: (taskId, key, color) => openDisplayOf(taskId, key, color),
+  reveal: () => window.jarvis?.win(wm.isNative() ? "bar-reveal" : "hub-reveal"),
+};
+// the browser: a page hidden more than 15 minutes is an absence (the desktop app says when the session locks)
+let hiddenAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (window.jarvis) return;
+  if (document.hidden) { hiddenAt = Date.now() / 1000; return; }
+  if (hiddenAt && Date.now() / 1000 - hiddenAt > 15 * 60) { away(hiddenAt); back(); }
+  hiddenAt = 0;
+});
+const openInbox = () => toggleInbox(inboxCtx, true);
+const summaryText = () => { const c = inboxCounts(); return [c.todo && `${c.todo} à faire`, c.read && `${c.read} à lire`].filter(Boolean).join(" · "); };
+$("#btn-inbox").addEventListener("click", () => toggleInbox(inboxCtx));
+// the "à valider" counter (top bar, JARVIS menu) opens the inbox
+$("#counters").addEventListener("click", (e) => { if (e.target.closest(".counter.await")) openInbox(); });
+onInbox(() => { renderTaskbar(); const c = inboxCounts(); setMenuBadge((c.todo || 0) + (c.reminder || 0)); });
+
+/** A display that waits for a click: its discussion opens (its events bring the display), then the display
+ * in a window of its own. */
+function openDisplayOf(taskId, key, color) {
+  closeDrawers();
+  openTask(taskId);
+  let tries = 0;
+  const go = () => {
+    if (hasDisplay(taskId, key)) openDisplayWindow(taskId, key, color);
+    else if (++tries < 30) setTimeout(go, 100);
+  };
+  go();
+}
 $("#btn-history").addEventListener("click", () => {
   closeDrawers("history");
   toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask });
@@ -1202,7 +1278,7 @@ $("#menu-arrange").addEventListener("click", (e) => {
 wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
   if (!e.target.closest(".menu-wrap")) { $("#menu-arrange").hidden = true; $("#menu-claudeai").hidden = true; }
 }));
-document.addEventListener("visibilitychange", () => { if (!document.hidden && wm.focused()) S.attention.delete(wm.focused()); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && wm.focused()) markTasksRead([wm.focused()]); });
 
 // ------------------------------------------------------------ installable app
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
@@ -1226,7 +1302,8 @@ boot().then(() => {
   // app shortcuts (manifest) open a panel directly
   if (initialPanel === "routines") toggleRoutines(panelCtx);
   if (initialPanel === "sessions") toggleSessions(panelCtx);
-  if (["routines", "sessions"].includes(initialPanel)) history.replaceState(null, "", location.pathname);
+  if (initialPanel === "boite") openInbox();
+  if (["routines", "sessions", "boite"].includes(initialPanel)) history.replaceState(null, "", location.pathname);
 }).catch((e) => {
   console.error(e);
   toast(`Démarrage impossible : ${e.message}`, "err");

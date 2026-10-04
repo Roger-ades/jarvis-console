@@ -119,6 +119,71 @@ class McpSettings(BaseModel):
         return v
 
 
+def _short_list(v: list[str], what: str, n: int = 50, size: int = 200) -> list[str]:
+    out = [x.strip() for x in v if isinstance(x, str) and x.strip()]
+    if len(out) > n or any(len(x) > size for x in out):
+        raise ValueError(f"{what} : {n} valeurs au plus, {size} caractères chacune")
+    return out
+
+
+class MailCriteria(BaseModel):
+    """What makes a mail important for the morning brief (docs/boite-de-reception.md): written by the
+    user, never by Claude (a trapped mail must not be able to have a sender ignored)."""
+    senders: list[str] = Field(default_factory=list)    # addresses or domains
+    subjects: list[str] = Field(default_factory=list)   # words of the subject
+    folders: list[str] = Field(default_factory=list)    # folders of the mailbox
+    instructions: str = Field("", max_length=2000)      # in the user's words
+
+    @field_validator("senders", "subjects", "folders")
+    @classmethod
+    def _lists(cls, v: list[str]) -> list[str]:
+        return _short_list(v, "critères de mails")
+
+    def empty(self) -> bool:
+        return not (self.senders or self.subjects or self.folders or self.instructions.strip())
+
+
+class ProjectMails(MailCriteria):
+    """The mails of a project's correspondents count in the briefs while the project is followed."""
+    follow: bool = True
+
+
+class Brief(BaseModel):
+    """The morning brief of an account: off until the user turns it on; the console writes the request."""
+    enabled: bool = False
+    time: str = "07:45"
+    days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    mails: bool = True
+    quotes: bool = True
+    agenda: bool = True
+    important: MailCriteria = Field(default_factory=MailCriteria)
+    # the Odoo salesperson whose quotes not yet sent count ("" = the user the Odoo server connects as)
+    odoo_user: str = Field("", max_length=120)
+    odoo_user_id: int | None = None
+    model: str = ""
+    effort: Effort = "low"
+
+    @field_validator("time")
+    @classmethod
+    def _time(cls, v: str) -> str:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", (v or "").strip())
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+            raise ValueError("heure du brief attendue au format HH:MM")
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v: list[int]) -> list[int]:
+        return sorted({d for d in v if 0 <= d <= 6})
+
+    @field_validator("model")
+    @classmethod
+    def _model(cls, v: str) -> str:
+        if not _MODEL.fullmatch(v or ""):
+            raise ValueError("nom de modèle invalide")
+        return v
+
+
 class Profile(BaseModel):
     id: str
     name: str = Field(min_length=1, max_length=40)
@@ -135,6 +200,8 @@ class Profile(BaseModel):
     chrome: bool = False
     env: dict[str, str] = Field(default_factory=dict)
     mcp: McpSettings = Field(default_factory=McpSettings)
+    brief: Brief = Field(default_factory=Brief)
+    account_actions: bool = False   # the account's commands and skills as buttons (docs/boite-de-reception.md)
 
     @field_validator("id")
     @classmethod
@@ -247,6 +314,7 @@ class Project(BaseModel):
     model: str = ""
     effort: Literal["", "low", "medium", "high", "xhigh", "max"] = ""
     created: float = 0
+    mails: ProjectMails = Field(default_factory=ProjectMails)   # "Mails à suivre" (the morning briefs)
 
     @field_validator("color")
     @classmethod

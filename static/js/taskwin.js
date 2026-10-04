@@ -101,7 +101,8 @@ function pretty(v) {
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
 }
 
-function inputView(tool, inp) {
+/** A tool call's input, readable (the approval cards, the inbox's Détail). */
+export function inputView(tool, inp) {
   const box = h("div");
   if (!inp || typeof inp !== "object") return box;
   if (inp["_tronqué"]) { box.append(h("pre", {}, pretty(inp))); return box; }

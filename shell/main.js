@@ -12,7 +12,7 @@
 // Started by `electron .` (start-app.bat), or by the installed application (loader.js), which runs
 // this file from the JARVIS folder.
 "use strict";
-const { app, BrowserWindow, Menu, Notification, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme,
+const { app, BrowserWindow, Menu, Notification, Tray, WebContentsView, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, powerMonitor,
   screen, session, shell } = require("electron");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
@@ -361,6 +361,13 @@ function revealHub(newRequest = false) {
   if (newRequest) hub.webContents.send("jarvis:command", { cmd: "nouvelle-demande" });
 }
 
+/** The inbox: its window ("Intégré au bureau") or its panel in the JARVIS window. */
+function showInbox() {
+  wake();
+  if (mode !== "integre") revealHub();
+  if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd: "boite" });
+}
+
 function quit() { quitting = true; app.quit(); }
 
 // ------------------------------------------------------------------ connected sites
@@ -684,17 +691,20 @@ function makeTray() {
 
 function updateTray(s = {}) {
   const awaiting = Number(s.awaiting) || 0, running = Number(s.running) || 0, queued = Number(s.queued) || 0;
+  const todo = Number(s.todo) || 0, unread = Number(s.unread) || 0;   // the inbox (docs/boite-de-reception.md)
+  const inbox = [todo ? `${todo} à faire` : "", unread ? `${unread} à lire` : ""].filter(Boolean).join(" · ");
   // the badge of the taskbar: on every window of JARVIS (with "Intégré au bureau", the JARVIS window is often hidden)
   if (IS_WIN) {
     const icon = awaiting ? badge([240, 180, 92]) : null, label = awaiting ? `${awaiting} à valider` : "";
     for (const w of [hub, ...children.values()]) if (w && !w.isDestroyed()) w.setOverlayIcon(icon, label);
   }
   if (!tray) return;
-  tray.setToolTip(`JARVIS · ${running} en cours · ${awaiting} à valider${queued ? ` · ${queued} en file` : ""}`);
+  tray.setToolTip(`JARVIS · ${running} en cours · ${awaiting} à valider${queued ? ` · ${queued} en file` : ""}${unread ? ` · ${unread} à lire` : ""}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: awaiting ? `${awaiting} à valider` : "Rien à valider", enabled: false },
     { label: `${running} en cours${queued ? ` · ${queued} en file` : ""}`, enabled: false },
     { type: "separator" },
+    { label: `Boîte de réception${inbox ? ` (${inbox})` : ""}`, click: () => showInbox() },
     { label: "Ouvrir JARVIS", click: () => showHub() },
     { label: "Nouvelle demande", accelerator: SHORTCUT, click: () => showBar() },
     { type: "separator" },
@@ -820,6 +830,10 @@ async function main() {
     cb(sameOrigin(details?.requestingUrl || wc.getURL()) && ["notifications", "clipboard-sanitized-write"].includes(permission)));
   makeTray();
   createHub();
+  // the inbox's "Pendant ton absence": the page notes when the session locks or sleeps, then tells what came
+  for (const [ev, cmd] of [["lock-screen", "absent"], ["suspend", "absent"], ["unlock-screen", "retour"], ["resume", "retour"]]) {
+    powerMonitor.on(ev, () => { if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd }); });
+  }
   if (!(await serverUp(port))) {
     startServer();
     if (!(await waitServer(port, 180000))) {

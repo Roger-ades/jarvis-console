@@ -614,4 +614,5 @@ export function openDisplayModal(taskId, key, color) {
 }
 
 export const displayTitle = (taskId, key) => entry(taskId, key)?.doc.titre || "Affichage";
+export const hasDisplay = (taskId, key) => !!entry(taskId, key);
 export const isWindowOpen = (taskId, key) => { const id = wins.get(`${taskId}|${key}`); return !!id && wm.has(id); };

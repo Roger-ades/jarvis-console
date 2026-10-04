@@ -1,6 +1,7 @@
 // Configuration window: a working copy of the config edited through tabs,
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
+import { accountActionRows } from "./accountactions.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
 import { confirmDialog, createLauncher, fmtDate, h, modalHost, reveal, toast } from "./util.js";
 
@@ -246,13 +247,119 @@ function tabProfiles() {
         check("Claude in Chrome", `${base}.chrome`, { help: "--chrome" }),
         lines("Dossiers supplémentaires autorisés", `${base}.add_dirs`, { rows: 3, help: "Passés avec --add-dir. Un par ligne." }),
         kv("Variables d'environnement", `${base}.env`),
-      ), probeBox);
+      ), probeBox, briefBox(p, i), accountActionsBox(p, i));
     out.push(card);
   });
   out.push(h("button", { type: "button", class: "btn", on: { click: addProfile } }, "Ajouter un profil"));
   return out;
 }
 
+// ------------------------------------------------------------ the morning brief of an account
+const DAY_LETTERS = ["L", "M", "M", "J", "V", "S", "D"];
+const DAY_FULL = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+
+/** Configuration → Profils → Brief du matin (docs/boite-de-reception.md): off until turned on; the console
+ * writes the request from these settings at each run, with the preset Lecture seule. */
+function briefBox(p, i) {
+  const base = `profiles.${i}.brief`;
+  const b = getPath(base) || {};
+  const days = new Set(b.days || []);
+  const dayBtns = h("div", { class: "days" }, ...DAY_LETTERS.map((l, d) => {
+    const btn = h("button", { type: "button", class: `day${days.has(d) ? " on" : ""}`, title: DAY_FULL[d] }, l);
+    btn.addEventListener("click", () => {
+      if (!days.delete(d)) days.add(d);
+      btn.classList.toggle("on", days.has(d));
+      setPath(`${base}.days`, [...days].sort());
+    });
+    return btn;
+  }));
+  const timeEl = h("input", { type: "time", value: b.time || "07:45" });
+  timeEl.addEventListener("input", () => setPath(`${base}.time`, timeEl.value));
+  // the Odoo salesperson whose quotes not yet sent count: typed, or chosen from the users read in Odoo
+  const listId = `odoo-users-${p.id}`;
+  const datalist = h("datalist", { id: listId });
+  let users = [];
+  const userLabel = (u) => `${u.name}${u.login ? ` (${u.login})` : ""}`;
+  const userEl = h("input", { type: "text", value: b.odoo_user || "", list: listId, placeholder: "vide : l'utilisateur du serveur Odoo" });
+  const userNote = h("small", {}, b.odoo_user_id ? `Utilisateur Odoo n° ${b.odoo_user_id}.` : "Ses devis pas encore envoyés (état « draft ») comptent ; les autres vendeurs non.");
+  userEl.addEventListener("input", () => {
+    const u = users.find((x) => userLabel(x) === userEl.value || x.name === userEl.value);
+    setPath(`${base}.odoo_user`, u ? u.name : userEl.value.trim());
+    setPath(`${base}.odoo_user_id`, u ? u.id : null);
+    userNote.textContent = u ? `Utilisateur Odoo n° ${u.id}.` : "Nom libre : Claude cherchera ce vendeur dans Odoo.";
+  });
+  const find = h("button", { type: "button", class: "btn small" }, "Chercher dans Odoo");
+  find.addEventListener("click", async () => {
+    if (dirty && !(await save(true))) return;
+    find.disabled = true;
+    userNote.textContent = "Lecture des utilisateurs dans Odoo par une courte discussion du compte (lecture seule)…";
+    try {
+      const { task_id: tid } = await api(`/api/profiles/${p.id}/odoo-users`, { method: "POST" });
+      let r = { status: "running" };
+      for (let n = 0; n < 180 && r.status === "running"; n++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        r = await api(`/api/profiles/${p.id}/odoo-users/${tid}`);
+      }
+      users = r.users || [];
+      datalist.replaceChildren(...users.map((u) => h("option", { value: userLabel(u) })));
+      userNote.textContent = users.length ? `${users.length} utilisateur${users.length > 1 ? "s" : ""} trouvé${users.length > 1 ? "s" : ""} : choisis dans la liste.`
+        : r.error || "Rien trouvé.";
+      if (users.length) userEl.focus();
+    } catch (e) { userNote.textContent = e.message; }
+    find.disabled = false;
+  });
+  const runNow = h("button", { type: "button", class: "btn small", title: "Lancer le brief maintenant (enregistre d'abord la configuration)" }, "Lancer maintenant");
+  runNow.addEventListener("click", async () => {
+    if (!getPath(`${base}.enabled`)) { toast("Active d'abord le brief de ce compte.", "err"); return; }
+    if (dirty && !(await save(true))) return;
+    try { await api(`/api/routines/brief-${p.id}/run`, { method: "POST" }); toast("Brief lancé : il arrivera en tête de la boîte de réception.", "ok"); }
+    catch (e) { toast(e.message, "err"); }
+  });
+  return h("div", { class: "subcard brief-box" },
+    h("div", { class: "subcard-head" }, h("h4", {}, "Brief du matin"), runNow),
+    h("p", { class: "lead" }, "Un point du jour en tête de la boîte de réception : mails importants, devis Odoo pas encore envoyés, agenda. "
+      + "Claude lit avec le preset Lecture seule et ne modifie rien ; la demande est écrite par la console à partir de ces réglages."),
+    grid(
+      check("Activer le brief de ce compte", `${base}.enabled`, { help: "Désactivé par défaut. Une routine « Brief du matin » apparaît alors dans Routines." }),
+      field("Quand", h("div", { class: "row" }, timeEl, dayBtns), "S'il était arrêté à l'heure prévue, il est lancé au démarrage de la console."),
+      check("Mails importants", `${base}.mails`),
+      check("Devis Odoo pas encore envoyés", `${base}.quotes`),
+      check("Agenda du jour", `${base}.agenda`),
+      h("span", {}),
+      lines("Mails importants : expéditeurs ou domaines", `${base}.important.senders`, { rows: 3, cls: "", help: "Un par ligne : une adresse ou un domaine (client.fr)." }),
+      lines("Mots dans l'objet", `${base}.important.subjects`, { rows: 3, cls: "", help: "Un par ligne." }),
+      lines("Dossiers de la boîte mail", `${base}.important.folders`, { rows: 2, cls: "", help: "Un par ligne (vide : la boîte de réception)." }),
+      area("Consigne pour les mails", `${base}.important.instructions`, { rows: 3,
+        help: "En tes mots : ce qui compte en ce moment. Les critères des projets suivis (Projet → réglages → Mails à suivre) s'y ajoutent." }),
+      field("Mon utilisateur Odoo", h("div", { class: "row" }, userEl, find, datalist), null),
+      h("div", { class: "field" }, userNote),
+      select("Modèle", `${base}.model`, modelOptions([["", "défaut du compte"]])),
+      select("Effort", `${base}.effort`, EFFORTS),
+    ));
+}
+
+/** Configuration → Profils → Actions du compte en boutons: off by default (the console does not read the
+ * files then); once on and saved, the list to read, validate, put in the menu and launch. */
+function accountActionsBox(p, i) {
+  const path = `profiles.${i}.account_actions`;
+  const list = h("div", { class: "drawer-list flat" });
+  const load = async () => {
+    if (!getPath(path)) { list.replaceChildren(); return; }
+    if (dirty) { list.replaceChildren(h("div", { class: "empty-row" }, "Enregistre la configuration pour lire les actions du compte.")); return; }
+    list.replaceChildren(h("div", { class: "empty-row" }, "Lecture des actions…"));
+    try {
+      const { actions } = await api(`/api/accounts/${p.id}/actions`);
+      list.replaceChildren(...accountActionRows(ctx, draft.profiles[i], actions, load));
+    } catch (e) { list.replaceChildren(h("div", { class: "line err" }, e.message)); }
+  };
+  load();
+  return h("div", { class: "subcard" },
+    h("div", { class: "subcard-head" }, h("h4", {}, "Actions du compte en boutons")),
+    h("p", { class: "lead" }, "Les commandes (commands/) et les skills (skills/) du dossier de configuration du compte deviennent des boutons : "
+      + "Ctrl+K, menu JARVIS, onglet Actions des projets, routines. Chacune est relue et validée avant de servir ; modifiée, elle redemande ta validation."),
+    check("Activer pour ce compte", path, { help: "Désactivé par défaut : la console ne lit pas ces fichiers.", onChange: () => load() }),
+    list);
+}
 function tabPermissions() {
   const list = h("div", { class: "list" });
   const detail = h("div", { class: "detail" });

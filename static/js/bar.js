@@ -10,11 +10,11 @@ import { animateWith, logo } from "./logo.js";
 import { h, iconBtn, setNoticeHost, toast } from "./util.js";
 import * as wm from "./wm.js";
 
-let menuEl = null, menuBtn = null;
+let menuEl = null, menuBtn = null, menuCount = null;
 
-/** dock: the element moved into the bar; popups: what opens above it; menu: {status, actions, home},
- * the elements of the top bar and of the home screen for the menu; notices: elements shown above the
- * bar. Returns the bar's document, or null (browser, or one window). */
+/** dock: the element moved into the bar; popups: what opens above it; menu: {peek, status, actions, home},
+ * the inbox's summary and the elements of the top bar and of the home screen for the menu; notices:
+ * elements shown above the bar. Returns the bar's document, or null (browser, or one window). */
 export function setupBar({ dock, popups, menu, notices }) {
   if (!wm.isNative() || !window.jarvis) return null;
   const doc = wm.detachBar(dock);
@@ -25,13 +25,14 @@ export function setupBar({ dock, popups, menu, notices }) {
   setNoticeHost(() => notes);
   // the JARVIS menu
   menuEl = h("div", { class: "bar-menu", hidden: true, role: "dialog", "aria-label": "Menu JARVIS" },
+    menu.peek || null,
     h("div", { class: "bm-status" }, ...menu.status),
     h("div", { class: "bm-actions" }, menu.actions),
     h("div", { class: "bm-home" }, menu.home));
   dock.prepend(menuEl);
   menuBtn = h("button", { type: "button", class: "bar-jarvis", "aria-expanded": "false", "aria-label": "Menu JARVIS",
     title: "Menu JARVIS : projets, reprendre, historique, notes, routines, configuration…", on: { click: () => toggleMenu() } },
-  logo("bar-logo"));
+  logo("bar-logo"), menuCount = h("span", { class: "bj-count", hidden: true }));
   dock.querySelector(".composer-bar")?.prepend(menuBtn);
   animateWith(doc.defaultView);   // (the page's window is hidden)
   // a choice in the menu closes it (not the account pills, which show their limits, nor the sub-menus)
@@ -93,4 +94,12 @@ export function toggleMenu(open = menuEl?.hidden) {
 /** After a request is sent from the bar: it goes away (unless pinned). */
 export function barSent() {
   if (wm.isNative() && window.jarvis) window.jarvis.win("bar-sent");
+}
+
+/** The emblem of the bar shows what waits for a decision in the inbox (approvals, expired ones, reminders…). */
+export function setMenuBadge(n) {
+  if (!menuCount) return;
+  menuCount.hidden = !n;
+  menuCount.textContent = String(n || "");
+  menuBtn.title = `Menu JARVIS${n ? ` · ${n} à faire dans la boîte de réception` : ""} : projets, reprendre, historique, notes, routines, configuration…`;
 }

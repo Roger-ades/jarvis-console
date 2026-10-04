@@ -1633,3 +1633,112 @@ html.panel-doc .drawer-head { min-height: 48px; box-sizing: border-box; padding-
 html.panel-doc.os-darwin .drawer-head { padding: 0 14px 0 80px; }
 html.panel-doc .drawer-head :is(button, input, select, a, label, summary, [role="button"]) { -webkit-app-region: no-drag; app-region: no-drag; }
 html.panel-doc .drawer-head > .icon-btn[title="Fermer"] { display: none; }
+
+/* ------------------------------------------------ inbox (inbox.js) */
+#btn-inbox .ib-count { background: var(--accent); color: var(--accent-ink); border-radius: 999px; font-size: 10px; font-weight: 700; padding: 0 6px; line-height: 16px; margin-left: 2px; }
+#btn-inbox .ib-count.urgent { background: var(--warn); color: #1a1000; }
+#btn-inbox .ib-count[hidden] { display: none; }
+.counter.await.live { cursor: pointer; }
+.ib-list { display: flex; flex-direction: column; gap: 4px; }
+.ib-sec { display: flex; flex-direction: column; gap: 6px; }
+.ib-sec-title { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.ib-sec-title .btn { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.ib-row { position: relative; display: flex; flex-direction: column; gap: 5px; padding: 9px 10px 9px 14px; border-radius: 10px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); }
+.ib-row::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: var(--pc, var(--accent)); }
+.ib-row.tinted::before { background: linear-gradient(180deg, var(--pc-a), var(--pc-p)); }
+.ib-row:hover { border-color: var(--border-2); background: var(--surface-2); }
+.ib-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--pc, var(--accent)) 70%, transparent); outline-offset: 1px; }
+.ib-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; }
+.ib-head b { flex: none; }
+.ib-ic { width: 20px; height: 20px; flex: none; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-3); color: var(--text-2); }
+.ib-ic svg, .ib-ic span svg { width: 12px; height: 12px; }
+.ib-ic span { display: inline-flex; }
+.ib-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.ib-text { font-size: 12.5px; color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
+.ib-excerpt { font-size: 12px; color: var(--text-2); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ib-meta { font-size: 11px; color: var(--text-3); }
+.ib-soon { color: var(--warn); font-weight: 600; }
+.ib-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ib-actions input { flex: 1; min-width: 150px; height: 28px; }
+.ib-actions select.ib-later { height: 28px; font-size: 12px; }
+.ib-detail pre { max-height: 260px; overflow: auto; margin: 4px 0 0; }
+.ib-row .appr-target { font-size: 11.5px; }
+/* approvals waiting: in the warning color; those of a discussion together under its title */
+.ib-row.k-hook .ib-ic, .ib-row.k-permission .ib-ic, .ib-row.k-question .ib-ic, .ib-row.k-plan .ib-ic, .ib-row.k-proposal .ib-ic,
+.ib-row.k-expired .ib-ic, .ib-row.k-reminder .ib-ic { background: var(--warn-soft); color: var(--warn); }
+.ib-row.k-error .ib-ic, .ib-row.k-interrupted .ib-ic { background: var(--err-soft); color: var(--err); }
+.ib-row.k-done .ib-ic, .ib-row.k-routine .ib-ic { background: var(--ok-soft); color: var(--ok); }
+.ib-row.k-choice .ib-ic { background: color-mix(in srgb, var(--violet) 14%, transparent); color: var(--violet); }
+.ib-group { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 8px 8px 8px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--border)); background: color-mix(in srgb, var(--warn) 4%, var(--surface)); }
+.ib-group::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--pc, var(--accent)); }
+.ib-group.tinted::before { background: linear-gradient(180deg, var(--pc-a), var(--pc-p)); }
+.ib-ghead { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 2px; }
+.ib-gt { font-weight: 600; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-ghead small { color: var(--text-3); font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-row.in-group { padding-left: 10px; background: var(--surface); }
+.ib-row.in-group::before { display: none; }
+.ib-row[data-id] .btn[disabled] { opacity: .5; }
+/* the summary: at the top of the JARVIS menu, or on the home screen */
+.inbox-peek { display: flex; flex-direction: column; gap: 4px; text-align: left; pointer-events: auto; width: min(920px, 100%); }
+.inbox-peek[hidden] { display: none; }
+.empty-hint .inbox-peek { margin-bottom: 18px; }
+.ib-peek-head { display: flex; align-items: center; gap: 8px; }
+.ib-peek-head h3 { margin: 0; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); font-weight: 700; }
+.ib-peek-head .muted { flex: 1; font-size: 11.5px; }
+.ib-peek-row { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto auto; column-gap: 8px; align-items: center;
+  text-align: left; padding: 6px 10px 6px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); cursor: pointer; }
+.ib-peek-row::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--pc, var(--accent)); }
+.ib-peek-row:hover { background: var(--surface-2); border-color: var(--border-2); }
+.ib-peek-row .ib-ic { grid-row: span 2; }
+.ib-peek-row .t { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-peek-row small { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-peek-row.k-hook .ib-ic, .ib-peek-row.k-permission .ib-ic, .ib-peek-row.k-expired .ib-ic, .ib-peek-row.k-question .ib-ic,
+.ib-peek-row.k-plan .ib-ic, .ib-peek-row.k-proposal .ib-ic, .ib-peek-row.k-reminder .ib-ic { background: var(--warn-soft); color: var(--warn); }
+.bar-jarvis { position: relative; }
+.bj-count { position: absolute; top: -3px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--warn);
+  color: #1a1000; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; pointer-events: none; }
+.bj-count[hidden] { display: none; }
+/* at the top of the inbox: a routine's latest result (the morning briefs), then today */
+.ib-une { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 10px 14px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--pc, var(--accent)) 40%, var(--border)); background: color-mix(in srgb, var(--pc, var(--accent)) 5%, var(--surface)); }
+.ib-une::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 3px; background: var(--pc, var(--accent)); }
+.ib-une.tinted::before { background: linear-gradient(180deg, var(--pc-a), var(--pc-p)); }
+.ib-une-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ib-une-head b { font-size: 13px; }
+.ib-une-head small { flex: 1; min-width: 0; font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ib-une-body { max-height: 220px; overflow: hidden; position: relative;
+  -webkit-mask-image: linear-gradient(180deg, #000 75%, transparent); mask-image: linear-gradient(180deg, #000 75%, transparent); }
+.ib-une.open .ib-une-body { max-height: none; -webkit-mask-image: none; mask-image: none; }
+.ib-une.open .ib-une-head .btn.ghost { color: var(--accent); }
+.ib-today { padding: 2px 4px 4px; }
+.ib-today-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); padding: 2px 6px; }
+.ib-today-row .i { display: inline-flex; color: var(--text-3); }
+.ib-today-row .i svg { width: 13px; height: 13px; }
+.ib-today-row b { color: var(--text); font-weight: 600; min-width: 42px; }
+.ib-today-row.acc b { color: var(--pc); }
+/* the project dialog: "Mails à suivre" (the morning briefs) */
+.pf-mails { border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; display: flex; flex-direction: column; gap: 8px; }
+.pf-mails[open] { padding-bottom: 10px; }
+.pf-mails summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.pf-mails .muted { margin: 4px 0; font-size: 11.5px; }
+.pf-mails .pf-row { align-items: start; margin-top: 6px; }
+.pf-mails textarea { width: 100%; resize: vertical; font: 12px/1.45 var(--font); }
+/* Configuration → Profils: the morning brief and the account's actions of an account */
+.subcard { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 12px; background: var(--surface); }
+.subcard-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.subcard-head h4 { margin: 0; font-size: 12.5px; flex: 1; }
+.subcard > .lead { margin: 0 0 10px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.subcard .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.subcard .row input[type="text"] { flex: 1; min-width: 180px; }
+.act-menu { flex: none; font-size: 11.5px; color: var(--text-2); display: inline-flex; align-items: center; gap: 5px; }
+/* the account's actions in the menu and on the home screen */
+.home-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.home-act { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 6px 8px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 12px; cursor: pointer; }
+.home-act:hover { background: var(--surface-2); border-color: color-mix(in srgb, var(--pc) 50%, var(--border-2)); }
+.home-act .i { display: inline-flex; color: var(--pc); }
+.home-act .i svg { width: 13px; height: 13px; }
+.home-act small { color: var(--text-3); font-size: 10.5px; }
