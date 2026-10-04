@@ -46,6 +46,14 @@ directement.
   le donne) ; un clic déplie toutes les étapes. Le statut d'une discussion active porte le compteur
   (« En cours · 3/7 ») partout où il s'affiche, et le titre de la fenêtre native aussi. La liste
   d'un sous-agent ne remplace pas celle de l'agent principal.
+- **Ouvrir un fichier au bon endroit** ([static/js/highlight.js](../static/js/highlight.js)) : `afficher`
+  accepte `passage` (quelques mots exacts) et `page`. L'aperçu (Word, Excel, texte, Markdown, mail) fait
+  défiler jusqu'au passage et le surligne ; un PDF s'ouvre à la page. La recherche ignore les accents,
+  la casse et les espaces : un passage coupé par un retour à la ligne, du gras ou des cellules est
+  retrouvé. `chercher_documents` donne la page de chaque passage d'un PDF (l'index la garde) et rappelle
+  comment montrer un passage. Depuis Ctrl+K, le document s'ouvre au passage trouvé avec les mots
+  cherchés surlignés (Précédent / Suivant quand il y en a plusieurs). Le lien « Affiché : » de la
+  discussion rouvre le même endroit.
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du

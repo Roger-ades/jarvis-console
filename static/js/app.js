@@ -867,7 +867,7 @@ function showDisplay(ev) {
 function showFiles(ev) {
   if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
   const color = taskTint(S.tasks.get(ev.task_id));
-  for (const path of ev.data?.files || []) openPreview({ taskId: ev.task_id, path, color });
+  for (const path of ev.data?.files || []) openPreview({ taskId: ev.task_id, path, color, focus: ev.data.focus || null });
   for (const url of ev.data?.urls || []) {
     let image = false;
     try { image = IMG_EXT.test(new URL(url).pathname); } catch { /* shown as a page */ }
@@ -1022,7 +1022,8 @@ function onDocumentClick(e) {
   if (ref) {
     e.preventDefault();
     const taskId = ref.closest("[data-task]")?.dataset.task || ref.closest(".win")?.dataset.id;
-    if (taskId) openPreview({ taskId, path: ref.dataset.path, color: taskTint(S.tasks.get(taskId)) });
+    const focus = ref.dataset.passage || ref.dataset.page ? { text: ref.dataset.passage || "", page: Number(ref.dataset.page) || 0 } : null;
+    if (taskId) openPreview({ taskId, path: ref.dataset.path, color: taskTint(S.tasks.get(taskId)), focus });
     else toast("Aperçu disponible depuis la fenêtre de la tâche.");
     return;
   }

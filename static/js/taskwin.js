@@ -767,8 +767,11 @@ export class TaskWindow {
         break;
       case "show": {
         // Claude opened files in preview windows (app.js opens them): they stay reachable from here.
-        const refs = [...(d.files || []).map((p) => h("a", { href: "#", class: `fileref${IMG_FILE.test(p) ? " img" : ""}`, "data-path": p, title: `Aperçu : ${p}` },
-          p.split(/[\\/]/).pop())),
+        const at = d.focus || {};
+        const refs = [...(d.files || []).map((p) => h("a", { href: "#", class: `fileref${IMG_FILE.test(p) ? " img" : ""}`, "data-path": p,
+          "data-passage": at.text || null, "data-page": at.page || null,
+          title: `Aperçu : ${p}${at.page ? ` · page ${at.page}` : ""}${at.text ? `\nPassage : « ${at.text} »` : ""}` },
+        p.split(/[\\/]/).pop())),
         ...(d.urls || []).map((u) => h("a", { href: "#", class: "showurl", title: u,
           on: { click: (e) => { e.preventDefault(); openPreview({ url: u, kind: "web", color: this.tint() }); } } }, u.replace(/^https:\/\//, ""))),
         ...(d.results || []).map((r) => h("a", { href: "#", class: "showurl", title: `Résultat de ${r.tool}`,

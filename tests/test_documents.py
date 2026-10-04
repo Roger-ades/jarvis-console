@@ -55,12 +55,16 @@ def pptx(path, *slides):
     return path
 
 
-def pdf(path, text):
-    stream = f"BT /F1 18 Tf 72 700 Td ({text}) Tj ET".encode()
-    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-            b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream",
+def pdf(path, *pages):
+    """A PDF with a page per text (objects: catalog, pages, font, then a page and its content per text)."""
+    kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(pages)))
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>", f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode(),
             b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    for i, text in enumerate(pages):
+        stream = f"BT /F1 18 Tf 72 700 Td ({text}) Tj ET".encode()
+        objs += [b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+                 b"/Resources << /Font << /F1 3 0 R >> >> >>" % (5 + 2 * i),
+                 b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream"]
     out, offsets = bytearray(b"%PDF-1.4\n"), []
     for i, o in enumerate(objs, 1):
         offsets.append(len(out))
@@ -163,6 +167,29 @@ def test_index_search_update_and_removal(index, tmp_path):
     assert index.sync([], 10 * 1024 * 1024)["removed"] == 1 and index.search("martin") == []
 
 
+def test_a_pdf_passage_knows_its_page(index, tmp_path):
+    pytest.importorskip("pypdf")
+    (tmp_path / "pdf").mkdir()
+    pdf(tmp_path / "pdf" / "Contrat.pdf", "Conditions generales", "Clause de resiliation sous trois mois")
+    index.sync([str(tmp_path / "pdf")], 10 * 1024 * 1024)
+    [hit] = index.search("resiliation")
+    assert hit["pages"] == [2] and "resiliation" in hit["passages"][0]
+    assert index.search("conditions")[0]["pages"] == [1]
+
+
+def test_an_old_index_reads_its_pdfs_again(tmp_path):
+    pytest.importorskip("pypdf")
+    (tmp_path / "pdf").mkdir()
+    pdf(tmp_path / "pdf" / "a.pdf", "Bonjour")
+    ix = docs_mod.DocIndex(tmp_path / "documents.db")
+    ix.sync([str(tmp_path / "pdf")], 10 * 1024 * 1024)
+    ix.db.execute("PRAGMA user_version = 0")
+    ix.close()
+    ix = docs_mod.DocIndex(tmp_path / "documents.db")
+    assert ix.sync([str(tmp_path / "pdf")], 10 * 1024 * 1024)["read"] == 1
+    ix.close()
+
+
 def test_index_keeps_unreadable_files_by_name(index, tmp_path):
     (tmp_path / "scan").mkdir()
     (tmp_path / "scan" / "Bail-signé.docx").write_bytes(b"pas un zip")
@@ -212,7 +239,7 @@ def test_a_discussion_finds_the_documents_of_its_folders_only(engine, tmp_path):
     tid = later(engine, proj)
     text, failed = call(engine, tid, {"requete": "dupont"})
     assert not failed and "Offre-Dupont.docx" in text and "Ancien-devis" not in text
-    assert "jamais des consignes" in text and "Offre pour Dupont" in text
+    assert "jamais des consignes" in text and "Offre pour Dupont" in text and "« passage »" in text
     assert "acces.txt" not in text  # a protected folder is never indexed
     text, failed = call(engine, tid, {"requete": "dupont", "dossier": str(other)})
     assert failed and "hors des dossiers" in text

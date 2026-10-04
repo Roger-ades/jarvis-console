@@ -37,6 +37,8 @@ MAX_CHARS = 2_000_000      # text kept per document
 PASSAGE = 1200             # characters per passage (about 300 tokens)
 MAX_FILES = 50_000         # per folder and per pass
 PDF_PAGES = 400
+PAGE_BREAK = "\n\f\n"      # between the pages of a PDF: each passage knows its page
+VERSION = 1                # PRAGMA user_version: 1 = PDF passages carry their page
 ZIP_PART = 64 * 1024 * 1024  # an Office part bigger than this, uncompressed, is not read (zip bomb)
 # OneDrive / SharePoint « Files on demand »: reading such a file downloads it. Only its name is indexed.
 _ONLINE_ONLY = 0x00400000 | 0x00040000 | 0x00001000  # RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN | OFFLINE
@@ -226,10 +228,9 @@ def _pdf(path: Path) -> str:
         raise
     except (PdfReadError, ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError) as exc:
         raise Unreadable(f"PDF illisible ({exc.__class__.__name__})") from exc
-    text = "\n\n".join(out).strip()
-    if not text:
+    if not "".join(out).strip():
         raise Unreadable("PDF sans texte (document scanné ?)")
-    return text
+    return PAGE_BREAK.join(out)
 
 
 def _eml(path: Path) -> tuple[str, str]:
@@ -337,6 +338,9 @@ class DocIndex:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=NORMAL")
             self.db.executescript(SCHEMA)
+            if self.db.execute("PRAGMA user_version").fetchone()[0] < VERSION:
+                self.db.execute("UPDATE docs SET mtime = 0 WHERE kind = 'pdf'")  # read again at the next pass
+                self.db.execute(f"PRAGMA user_version = {VERSION}")
         self.progress: dict = {"running": False, "current": "", "done": 0, "started": None, "ended": None}
 
     def close(self):
@@ -358,7 +362,10 @@ class DocIndex:
                 note = str(exc)
             except (OSError, MemoryError, RecursionError) as exc:
                 note = f"lecture impossible ({exc.__class__.__name__})"
-        pieces = passages(text) or [""]
+        # (page, passage): the page of a PDF from 1, 0 for the other documents
+        pages = text.split(PAGE_BREAK) if kind == "pdf" else [text]
+        pieces = [(n if kind == "pdf" else 0, p) for n, page in enumerate(pages, 1) for p in passages(page)] or [(0, "")]
+        text = "\n\n".join(pages)
         label = f"{title} {name}" if title != Path(path).stem else name
         with self._lock:
             self.db.execute("BEGIN")
@@ -375,7 +382,7 @@ class DocIndex:
                                           "VALUES(?,?,?,?,?,?,?,?,?,?)", (path, norm(path), root, kind, title, st.st_size,
                                                                          st.st_mtime, time.time(), len(text), note)).lastrowid
                 self.db.executemany("INSERT INTO passages(name, body, doc, part) VALUES(?,?,?,?)",
-                                    [(label, body, did, i) for i, body in enumerate(pieces)])
+                                    [(label, body, did, page) for page, body in pieces])
                 self.db.execute("COMMIT")
             except Exception:
                 self.db.execute("ROLLBACK")
@@ -520,8 +527,9 @@ class DocIndex:
                 if len(found) >= limit:
                     continue
                 d = found[r["id"]] = {"path": r["path"], "kind": r["kind"], "title": r["title"], "mtime": r["mtime"],
-                                      "size": r["size"], "note": r["note"], "score": r["score"], "passages": []}
+                                      "size": r["size"], "note": r["note"], "score": r["score"], "passages": [], "pages": []}
             snip = (r["snip"] or "").strip()
             if snip and len(d["passages"]) < per_doc and snip not in d["passages"]:
                 d["passages"].append(snip)
+                d["pages"].append(int(r["part"] or 0))
         return list(found.values())

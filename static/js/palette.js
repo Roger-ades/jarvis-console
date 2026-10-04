@@ -68,7 +68,7 @@ export function openPalette(ctx) {
     if (server.documents?.length) groups.push(["Documents", server.documents.slice(0, 10).map((d) => ({
       icon: "file", title: baseName(d.path), snippet: d.snippet, serverMarks: true,
       sub: [KIND[d.kind] || d.kind, d.title && d.title !== baseName(d.path).replace(/\.[^.]+$/, "") ? d.title : "", parentName(d.path), fmtDate(d.mtime)].filter(Boolean).join(" · "),
-      run: () => openPreview({ doc: true, path: d.path }) }))]);
+      run: () => openPreview({ doc: true, path: d.path, focus: { text: d.snippet, words: (d.snippet.match(/\x02[^\x03]*\x03/g) || []).map((w) => w.slice(1, -1)), page: d.page || 0 } }) }))]);
     if (acts.length) groups.push(["Actions", acts.slice(0, q ? 8 : 10).map((a) => ({ icon: a.icon || "sparkle", title: a.label, sub: a.hint || "", run: a.run }))]);
     items = groups.flatMap(([, xs]) => xs);
     index = Math.min(index, Math.max(0, items.length - 1));

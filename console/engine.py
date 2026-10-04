@@ -70,7 +70,9 @@ SHOW_SPEC = {
         "application) : chemins absolus, ou relatifs au dossier de travail ; un simple nom de fichier est cherché "
         "dans les dossiers de la tâche. Pages : adresse https:// ; celles des applications web de tes serveurs MCP "
         "et des domaines approuvés par l'utilisateur s'ouvrent aussitôt, dans une fenêtre où il est connecté ; pour "
-        "les autres, la console lui propose de l'ouvrir et il décide. Pour montrer le résultat d'un outil déjà reçu "
+        "les autres, la console lui propose de l'ouvrir et il décide. Pour montrer un endroit précis d'un fichier (un "
+        "passage trouvé par chercher_documents, une clause, une ligne d'un tableau), ajoute « passage » : la console "
+        "ouvre le fichier à cet endroit et le surligne ; « page » ouvre un PDF à cette page. Pour montrer le résultat d'un outil déjà reçu "
         "(un mail, un enregistrement dont tu n'as pas l'adresse…), utilise plutôt afficher_resultat ; pour composer "
         "un affichage (galerie, résultats de recherche, tableau, graphique, fiche, choix à cliquer…), presenter."),
     "inputSchema": {
@@ -86,6 +88,10 @@ SHOW_SPEC = {
                     "id": {"type": "integer", "minimum": 1, "description": "Identifiant de l'enregistrement."},
                     "application": {"type": "string", "description": "Nom du serveur MCP Odoo, s'il y en a plusieurs."}}},
             },
+            "passage": {"type": "string", "maxLength": 600, "description": (
+                "Texte à surligner dans le fichier affiché, recopié tel quel (quelques mots à une phrase suffisent)."
+            )},
+            "page": {"type": "integer", "minimum": 1, "description": "Page d'un PDF à laquelle l'ouvrir."},
         },
     },
 }
@@ -1271,7 +1277,7 @@ class Engine:
         roots = [s["path"] for s in self._doc_sources()]
         hits = self.documents.search(q, roots=roots, limit=limit, per_doc=1, marks=("\x02", "\x03"), words=24)
         return [{"path": h["path"], "kind": h["kind"], "title": h["title"], "mtime": h["mtime"],
-                 "snippet": h["passages"][0] if h["passages"] else ""}
+                 "snippet": h["passages"][0] if h["passages"] else "", "page": h["pages"][0] if h["pages"] else 0}
                 for h in hits if not guard.forbidden_hit({"file_path": h["path"]}, "Read")]
 
     def _doc_scope(self, t: dict) -> tuple[list[str], list[str]]:
@@ -1331,7 +1337,10 @@ class Engine:
             title = f" « {h['title']} »" if h["title"] and h["title"] != Path(h["path"]).stem else ""
             lines.append(f"\n{i}. {h['path']}{title} — {docs_mod.KIND_LABELS.get(h['kind'], h['kind'])}, modifié le {when}"
                          + (f" ({h['note']})" if h["note"] else ""))
-            lines += [f"   « {_clip(' '.join(p.split()), 500)} »" for p in h["passages"]]
+            lines += [f"   « {_clip(' '.join(p.split()), 500)} »" + (f" (page {page})" if page else "")
+                      for p, page in zip(h["passages"], h["pages"])]
+        lines.append("\nPour montrer un passage à l'utilisateur : afficher avec ce fichier, « passage » (quelques mots "
+                     "exacts du passage) et, pour un PDF, « page ».")
         return "\n".join(lines), False
 
     def document_file(self, path: str) -> Path:
@@ -2823,7 +2832,8 @@ class Engine:
                 return ok({"content": [{"type": "text", "text": "Indisponible pendant un maintien du cache."}], "isError": True})
             args = params.get("arguments") or {}
             if params.get("name") == SHOW_SPEC["name"]:
-                text, failed = self.show_files(tid, args.get("fichiers"), args.get("enregistrements"))
+                text, failed = self.show_files(tid, args.get("fichiers"), args.get("enregistrements"),
+                                               passage=args.get("passage"), page=args.get("page"))
             elif params.get("name") == RESULT_SPEC["name"]:
                 text, failed = self.show_result(tid, args)
             elif params.get("name") == PRESENT_SPEC["name"]:
@@ -2878,11 +2888,20 @@ class Engine:
                 urls.append(mcp.odoo_record_url(app["url"], model, rid))
         return urls, errors
 
-    def show_files(self, tid: str, items, records=None) -> tuple[str, bool]:
+    def show_files(self, tid: str, items, records=None, passage=None, page=None) -> tuple[str, bool]:
         """Claude shows files to the user: each one checked like a preview, then opened in the UI. records: Odoo
-        records (model and id), opened at the address the console writes for them."""
+        records (model and id), opened at the address the console writes for them. passage, page: where to open
+        the files (the text highlighted, the page of a PDF)."""
         if isinstance(items, str):
             items = [items]
+        focus = {}
+        if isinstance(passage, str) and " ".join(passage.split()):
+            focus["text"] = " ".join(passage.split())[:600]
+        try:
+            if page is not None and int(page) >= 1:
+                focus["page"] = min(int(page), 100_000)
+        except (TypeError, ValueError):
+            pass
         apps = self._apps(tid)
         links, errors = self._record_urls(apps, records)
         items = [*links, *[str(x).strip().strip('"') for x in (items or []) if str(x).strip()]][:12]
@@ -2909,10 +2928,12 @@ class Engine:
             except TaskError as exc:
                 errors.append(f"{item} : {exc}")
         if files or urls or ask:
-            self._event(tid, "show", {"files": files, "urls": urls, "ask": ask})
+            self._event(tid, "show", {"files": files, "urls": urls, "ask": ask, **({"focus": focus} if files and focus else {})})
         lines = []
         if files or urls:
-            lines.append("Affiché dans la console JARVIS : " + ", ".join([*files, *urls]))
+            where = (" (" + ", ".join(x for x in (f"page {focus['page']}" if "page" in focus else "",
+                                                  "passage surligné s'il est trouvé" if "text" in focus else "") if x) + ")") if files and focus else ""
+            lines.append("Affiché dans la console JARVIS : " + ", ".join([*files, *urls]) + where)
         if ask:
             lines.append("Proposé à l'utilisateur, qui l'ouvrira s'il le souhaite (domaine non approuvé dans la "
                          "configuration de la console) : " + ", ".join(ask))

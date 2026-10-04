@@ -2,6 +2,7 @@
 // and web pages in a sandboxed frame. Local files come from the task's folders
 // through the console (token header), as blob URLs.
 import { api } from "./api.js";
+import { highlight } from "./highlight.js";
 import { mdElement } from "./md.js";
 import { copyText, dialog, downloadBlob, h, toast } from "./util.js";
 import { projectFor, projects as allProjects } from "./projects.js";
@@ -125,6 +126,7 @@ const SIZES = { image: { w: 720, h: 560 }, pdf: { w: 780, h: 900 }, html: { w: 9
 const open = new Map();   // what is shown -> window id
 const closers = new Map(); // window id -> close()
 const live = new Map();    // window id -> check(): reloads a file preview when the file changed
+const aimers = new Map();  // window id -> aim(focus): shows another place of the file already open
 let seq = 0;
 
 /** Keeps a window above the others (preview, display); a second click frees it. The pinned look comes
@@ -150,14 +152,20 @@ wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
 }));
 
 /** opts: {taskId, path} or {profile, folder, path} for a file, {url, kind:"web"|"image"} for the web,
- * {taskId, result: {id, contient, title, kind}} for a tool's result shown by Claude; color: accent. */
+ * {taskId, result: {id, contient, title, kind}} for a tool's result shown by Claude; color: accent;
+ * focus: {text, words, page}, the place of the file to show (a passage, words to mark, a page of a PDF). */
 export async function openPreview(opts) {
   if (opts.result) return openResult(opts);
   // desktop app: a web page opens in a window of its own, signed in with the site's own session
   if (opts.url && opts.kind !== "image" && window.jarvis?.openSite) { window.jarvis.openSite(opts.url); return; }
   const key = opts.url ? `url:${opts.url}` : `${opts.doc ? "doc" : opts.folder ? `dir:${opts.folder}` : `task:${opts.taskId}`}:${opts.path}`;
   const shown = open.get(key);
-  if (shown && wm.has(shown)) { if (wm.isMinimized(shown)) wm.restore(shown); else wm.focus(shown); live.get(shown)?.(); return; }
+  if (shown && wm.has(shown)) {
+    if (wm.isMinimized(shown)) wm.restore(shown); else wm.focus(shown);
+    live.get(shown)?.();
+    if (opts.focus) aimers.get(shown)?.(opts.focus);
+    return;
+  }
   const id = `pv-${++seq}`;
   open.set(key, id);
   const urls = [];
@@ -165,7 +173,7 @@ export async function openPreview(opts) {
   const body = h("div", { class: "pv-body" }, h("div", { class: "muted pv-wait" }, "Chargement…"));
   const actions = h("div", { class: "pv-actions" });
   const title = opts.path ? baseName(opts.path) : opts.url;
-  const close = () => { wm.unregister(id); open.delete(key); closers.delete(id); live.delete(id); urls.forEach((u) => URL.revokeObjectURL(u)); };
+  const close = () => { wm.unregister(id); open.delete(key); closers.delete(id); live.delete(id); aimers.delete(id); urls.forEach((u) => URL.revokeObjectURL(u)); };
   closers.set(id, close);
   const btn = (label, fn, cls = "") => h("button", { type: "button", class: `btn small ${cls}`, on: { click: fn } }, label);
   const act = (icon, label, fn) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, svg: icon, on: { click: fn } });
@@ -179,7 +187,8 @@ export async function openPreview(opts) {
       act("min", "Réduire", () => wm.minimize(id)),
       act("max", "Agrandir / rétablir (double-clic sur la barre)", () => wm.toggleMax(id)),
       act("close", "Fermer (Échap)", close)));
-  const el = paint(h("section", { class: `win pv-win k-${kind}`, role: "dialog", "aria-label": `Aperçu ${title}` }, head, body), opts.color);
+  const finder = h("div", { class: "pv-note pv-find", hidden: true });
+  const el = paint(h("section", { class: `win pv-win k-${kind}`, role: "dialog", "aria-label": `Aperçu ${title}` }, head, finder, body), opts.color);
   // what "Ce que je regarde" sends when this window is in front (regard.js); the path is the real one once loaded
   const regard = opts.url ? { type: "page", url: opts.url } : { type: "fichier", path: opts.path, ...(opts.taskId ? { task: opts.taskId } : {}) };
   wm.register(id, el, { handle: head, ephemeral: true, size: SIZES[kind] || SIZES.other, fresh: true,
@@ -212,7 +221,43 @@ export async function openPreview(opts) {
     catch (e) { toast(e.message, "err"); }
   };
   actions.append(act("external", "Ouvrir avec l'application", () => openWith(false)), act("folder", "Afficher dans le dossier", () => openWith(true)));
-  let blob = null, stamp = "", where = path, remote = false, first = true, busy = false;
+  let blob = null, stamp = "", where = path, remote = false, first = true, busy = false, focus = opts.focus || null;
+  const pdfUrl = (url) => url + (focus?.page ? `#page=${focus.page}` : "");
+  // the place Claude (or a search) points at: the passage marked, and scrolled to when asked
+  const point = (scroll) => {
+    finder.hidden = true;
+    const root = body.querySelector(".pv-pre, .pv-text");
+    if (!focus || !root || !(focus.text || focus.words?.length)) return;
+    const marks = highlight(root, focus);
+    if (!marks.length) {
+      if (scroll && focus.text) { finder.replaceChildren(h("span", {}, "Passage introuvable dans l'aperçu : le fichier a peut-être changé.")); finder.hidden = false; }
+      return;
+    }
+    let i = 0;
+    const count = h("span", {});
+    const cur = (on) => marks[i].forEach((m) => m.classList.toggle("cur", on));
+    const go = (k) => {
+      cur(false);
+      i = (k + marks.length) % marks.length;
+      cur(true);
+      marks[i][0].scrollIntoView({ block: "center" });
+      count.textContent = marks.length > 1 ? `${i + 1} / ${marks.length}` : "";
+    };
+    cur(true);
+    if (scroll) go(0);
+    if (marks.length > 1) {
+      count.textContent = `${i + 1} / ${marks.length}`;
+      finder.replaceChildren(h("span", {}, "Mots surlignés"), count,
+        btn("Précédent", () => go(i - 1)), btn("Suivant", () => go(i + 1)));
+      finder.hidden = false;
+    }
+  };
+  aimers.set(id, (f) => {
+    focus = f;
+    const frame = kind === "pdf" && body.querySelector("iframe");
+    if (frame && urls[0]) frame.src = pdfUrl(urls[0]);
+    else point(true);
+  });
   actions.append(act("retry", "Recharger", () => check(true)), act("download", "Télécharger", () => blob && downloadBlob(blob, baseName(path))));
   const gone = h("div", { class: "pv-note pv-gone" });
   const draw = async (b) => {
@@ -226,7 +271,7 @@ export async function openPreview(opts) {
       node.addEventListener("click", () => node.classList.toggle("full"));
       if (first) fitImage(node);
     } else if (kind === "pdf") {
-      node = h("iframe", { class: "pv-frame", src: url, title: baseName(path) });
+      node = h("iframe", { class: "pv-frame", src: pdfUrl(url), title: baseName(path) });
     } else if (kind === "html") {
       // local HTML, with its styles and the images next to it, from the preview origin; never its scripts
       node = htmlFrame((r) => { remote ||= r; return api(src.frame(path, r)); }, baseName(path), remote);
@@ -250,6 +295,7 @@ export async function openPreview(opts) {
     }
     body.replaceChildren(node);
     body.scrollTop = top; body.scrollLeft = left;
+    point(first);
     old.forEach((u) => URL.revokeObjectURL(u));
   };
   const load = async () => {

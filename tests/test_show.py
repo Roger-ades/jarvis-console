@@ -76,6 +76,23 @@ def test_the_pages_of_the_mcp_servers_applications_open_without_asking(engine, t
     assert "Affiché dans la console JARVIS : https://erp.example.com/odoo/sale.order/42" in task["result"]
 
 
+def test_a_file_opens_at_the_passage_or_the_page_claude_points_at(engine, tmp_path):
+    import time
+    (tmp_path / "contrat.pdf").write_bytes(b"%PDF-1.4")
+    tid = engine.create_task("x", profile="work", preset="lecture", workdir=str(tmp_path), not_before=time.time() + 3600)["id"]
+
+    def call(args):
+        out = engine._console_mcp(tid, CONSOLE_MCP, {"id": 1, "method": "tools/call", "params": {"name": "afficher", "arguments": args}})
+        return out["result"]["content"][0]["text"]
+
+    text = call({"fichiers": ["contrat.pdf"], "passage": "  Clause de\n résiliation ", "page": 3})
+    shown = [e["data"] for e in engine.store.events(tid) if e["kind"] == "show"]
+    assert shown[-1]["focus"] == {"text": "Clause de résiliation", "page": 3}
+    assert "(page 3, passage surligné s'il est trouvé)" in text
+    call({"fichiers": ["contrat.pdf"], "page": "deux"})
+    assert "focus" not in [e["data"] for e in engine.store.events(tid) if e["kind"] == "show"][-1]
+
+
 def test_the_console_writes_the_address_of_an_odoo_record(engine):
     """The model guessed /odoo/sale/1538 (an action that does not exist) for /odoo/sales/1538: it now names the
     record, and the console writes its address."""
@@ -120,5 +137,5 @@ def test_the_console_writes_the_address_of_an_odoo_record(engine):
 
 def test_the_records_parameter_is_described_to_claude():
     props = SHOW_SPEC["inputSchema"]["properties"]
-    assert "required" not in SHOW_SPEC["inputSchema"] and set(props) == {"fichiers", "enregistrements"}
+    assert "required" not in SHOW_SPEC["inputSchema"] and set(props) == {"fichiers", "enregistrements", "passage", "page"}
     assert props["enregistrements"]["items"]["required"] == ["modele", "id"]
