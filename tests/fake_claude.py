@@ -18,6 +18,7 @@ The user message drives the scenario, one directive per line:
   RESULT <json arguments>    call the console's "afficher_resultat" tool
   PRESENT <json arguments>   call the console's "presenter" tool (a display made of blocks)
   PROPOSE <json arguments>   call the console's "proposer" tool (an action or a routine for the project)
+  FIND <query>               call the console's "chercher_documents" tool (the local document index)
   VITRINE [ou]               a display with every kind of block (images, results, table, chart…)
   CTX <tokens>               the session's context now weighs that much (usage of the next calls)
   /compact                   compact the context, as Claude Code does
@@ -583,6 +584,8 @@ def turn(text: str):
             lines.append(console_tool("presenter", json.loads(raw.strip()[7:].strip() or "{}")))
         elif cmd == "PROPOSE":
             lines.append(console_tool("proposer", json.loads(raw.strip()[7:].strip() or "{}")))
+        elif cmd == "FIND":
+            lines.append(console_tool("chercher_documents", {"requete": raw.strip()[4:].strip()}))
         elif cmd == "VITRINE":
             lines.append(showcase(parts[1] if len(parts) > 1 else "conversation"))
         elif cmd == "RESULT":

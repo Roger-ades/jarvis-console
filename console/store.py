@@ -165,7 +165,7 @@ class Store:
 
     def list_notes(self) -> list[dict]:
         with self._lock:
-            rows = self.db.execute("SELECT data FROM notes ORDER BY updated DESC").fetchall()
+            rows = self.db.execute("SELECT data FROM notes ORDER BY updated DESC, rowid DESC").fetchall()
         return [json.loads(r["data"]) for r in rows]
 
     def delete_note(self, note_id: str) -> bool:

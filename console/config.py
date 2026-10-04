@@ -481,6 +481,22 @@ class History(BaseModel):
     retention_days: int = Field(90, ge=1, le=3650)
 
 
+class DocFolder(BaseModel):
+    """A folder of documents indexed by the console. A discussion searches the folders it works in; a shared
+    folder is searched by every discussion of its accounts."""
+    path: str = Field(min_length=1, max_length=400)
+    shared: bool = False
+    profiles: list[str] = Field(default_factory=list)  # [] = every account
+
+
+class Documents(BaseModel):
+    """The local index of the user's documents (console/documents.py): off until the user turns it on."""
+    enabled: bool = False
+    projects: bool = True   # the projects' folders, besides the folders listed
+    folders: list[DocFolder] = Field(default_factory=list, max_length=50)
+    max_mb: int = Field(30, ge=1, le=500)  # bigger files are not read
+
+
 DEFAULT_TEAM_PROMPT = """Règles du mode équipe :
 1. Planifie, arbitre et rédige toi-même la réponse finale.
 2. Chacune de tes actions relit tout ton contexte : c'est la plus chère de l'équipe. N'explore pas le code toi-même (lectures en série, sed, grep, cat) : confie l'exploration à l'éclaireur, et les modifications, compilations et tests à l'exécutant. Garde pour toi les vérifications ciblées.
@@ -534,6 +550,7 @@ class Config(BaseModel):
     ui: UISettings = Field(default_factory=UISettings)
     history: History = Field(default_factory=History)
     team: TeamSettings = Field(default_factory=TeamSettings)
+    documents: Documents = Field(default_factory=Documents)
 
     @model_validator(mode="after")
     def _consistency(self):

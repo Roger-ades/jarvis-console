@@ -63,7 +63,9 @@ partout. *En place : [boite-de-reception.md](boite-de-reception.md).*
 
 - **Différences et annulation des modifications de Claude**. *En place, voir plus bas.*
 - Éditeur intégré pour texte, Markdown et CSV.
-- Aperçu de Word et Excel (dépendances facultatives : mammoth, openpyxl).
+- Aperçu de Word, Excel, PowerPoint, OpenDocument et des mails `.eml`. *En place : le texte seul
+  (un tableau par feuille pour Excel), lu par la console sans dépendance, avec « Ouvrir avec
+  l'application » pour la mise en forme.*
 - Skills docx, xlsx et pdf installées dans chaque profil, pour que Claude produise de vrais fichiers
   Office.
 
@@ -94,7 +96,9 @@ mode navigateur reste disponible.
 ### 7. Mémoire et connaissance
 
 - Index des documents (PDF, Word, mails) sur le modèle de CodeGraph pour le code : l'activité est
-  surtout documentaire.
+  surtout documentaire. *En place, voir « Index des documents » plus bas.*
+- À suivre : les mails d'Outlook (aujourd'hui seulement les `.eml` d'un dossier), la recherche par le
+  sens (embeddings locaux) en plus des mots, les pièces jointes des mails.
 - Propositions de notes de projet (voir l'axe 1).
 
 ### 8. Garder la consommation en main
@@ -119,7 +123,7 @@ mode navigateur reste disponible.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne.
 6. Brief de projet ([ihm.md](ihm.md)), puis `lancer_discussion`. Le bloc `formulaire` est en place, ainsi que les cartes du rapport (ouvrir, retenir, tâche terminée, routine, consigne). Une discussion de projet répond à « où j'en suis » à partir de `BRIEF.md`, des critères de mails et des sources du brief ; ajouter ou corriger une consigne, une routine ou une tâche passe par une carte d'approbation.
-7. Aperçu Office, index des documents.
+7. Aperçu Office, index des documents. *Fait (voir plus bas).*
 8. Hub d'équipe ([equipe.md](equipe.md)).
 
 ## Ce qui est en place (étape 1)
@@ -161,6 +165,28 @@ enregistrée si le fichier a bien changé. Dans la fenêtre de la discussion :
 Limites : une commande (`Bash`, PowerShell) qui écrit un fichier n'est pas suivie ; les fichiers de
 plus de 2 Mo non plus. Les copies suivent la tâche : elles partent quand elle est supprimée ou purgée.
 Code : `console/changes.py`, `Engine.file_changes`.
+
+## Index des documents (étape 7)
+
+Configuration → Documents. La console lit le texte des dossiers des projets et des dossiers ajoutés
+(PDF, Word, Excel, PowerPoint, OpenDocument, mails `.eml`, textes, pages HTML) et le range dans un
+index plein texte sur le poste (`data/documents.db`, SQLite FTS5, sans accents ni majuscules). Aucun
+modèle ne lit les fichiers pour les indexer, rien ne quitte l'ordinateur. Une passe tourne au
+démarrage puis toutes les 15 minutes, et seuls les fichiers modifiés sont relus. Un fichier OneDrive
+« en ligne seulement » n'est pas téléchargé : seul son nom est indexé. Les PDF sont lus par `pypdf`
+(dans `requirements.txt`).
+
+- **Claude** cherche avec l'outil `chercher_documents` (serveur `jarvis`, proposé seulement quand
+  l'index est activé). Il obtient les passages trouvés et leur chemin, puis peut lire le fichier ou
+  l'`afficher`. Une discussion cherche dans ses propres dossiers (dossier de travail, dossiers
+  ajoutés, pièces jointes) et dans les dossiers partagés pour son compte. Chaque résultat repasse par
+  les autorisations de la discussion, comme une lecture : un preset qui ne lit pas ne trouve rien, et
+  un chemin interdit (Sécurité) n'est jamais indexé. Les passages sont présentés comme des données.
+  Chaque recherche est inscrite au journal d'audit.
+- **L'utilisateur** cherche avec Ctrl+K (groupe « Documents », mots surlignés) ; un résultat s'ouvre
+  en aperçu, et la puce « Regard » le joint à la demande suivante.
+
+Code : `console/documents.py`, `Engine.search_documents`, `Engine.find_documents`.
 
 ## Garde-fous, pour chaque nouvelle piste
 

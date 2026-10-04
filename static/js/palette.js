@@ -2,9 +2,17 @@
 // and to act on it, with the keyboard.
 import { api } from "./api.js";
 import { fmtDate, h, modalHost, reveal, statusLabel } from "./util.js";
+import { openPreview } from "./viewer.js";
 
 let open = null;
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
+const KIND = { pdf: "PDF", word: "Word", excel: "Excel", powerpoint: "PowerPoint", mail: "Mail", page: "Page HTML", texte: "Texte" };
+const parentName = (p) => baseName(String(p || "").replace(/[\\/][^\\/]*$/, ""));
+
+/** A passage of a document, the words found between \x02 and \x03 (by the server): text nodes only. */
+function serverMarked(text) {
+  return String(text || "").split(/(\x02[^\x03]*\x03)/).map((s) => (s.startsWith("\x02") ? h("mark", {}, s.slice(1, -1)) : s));
+}
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const fold = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
@@ -19,7 +27,7 @@ function marked(text, q) {
 /** ctx: actions(), projects(), tasks(), openTask(id), useProject(p), openSession(pid, sid), projectName(folder). */
 export function openPalette(ctx) {
   if (open) { reveal(open.input.ownerDocument); open.input.focus(); return; }
-  const input = h("input", { type: "text", class: "pal-input", placeholder: "Rechercher une discussion, une session, un projet ou une action…",
+  const input = h("input", { type: "text", class: "pal-input", placeholder: "Rechercher une discussion, un document, un projet ou une action…",
     spellcheck: "false", "aria-label": "Rechercher" });
   const list = h("div", { class: "pal-list", role: "listbox" });
   const box = h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Recherche" },
@@ -28,7 +36,7 @@ export function openPalette(ctx) {
       h("span", { class: "grow" }), h("span", { class: "muted" }, "Recherche aussi dans le contenu des discussions")));
   const overlay = h("div", { class: "overlay pal-overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
   const { root, doc } = modalHost("palette");
-  let items = [], index = 0, server = { tasks: [], sessions: [] }, timer = null, seq = 0, loading = false;
+  let items = [], index = 0, server = { tasks: [], sessions: [], documents: [] }, timer = null, seq = 0, loading = false;
 
   function close() {
     overlay.remove();
@@ -57,6 +65,10 @@ export function openPalette(ctx) {
       icon: "retry", color: s.color, title: s.title, snippet: s.snippet,
       sub: [s.profile_name, ORIGIN[s.origin] || s.origin, baseName(s.cwd), fmtDate(s.updated)].filter(Boolean).join(" · "),
       run: () => ctx.openSession(s.profile, s.id) }))]);
+    if (server.documents?.length) groups.push(["Documents", server.documents.slice(0, 10).map((d) => ({
+      icon: "file", title: baseName(d.path), snippet: d.snippet, serverMarks: true,
+      sub: [KIND[d.kind] || d.kind, d.title && d.title !== baseName(d.path).replace(/\.[^.]+$/, "") ? d.title : "", parentName(d.path), fmtDate(d.mtime)].filter(Boolean).join(" · "),
+      run: () => openPreview({ doc: true, path: d.path }) }))]);
     if (acts.length) groups.push(["Actions", acts.slice(0, q ? 8 : 10).map((a) => ({ icon: a.icon || "sparkle", title: a.label, sub: a.hint || "", run: a.run }))]);
     items = groups.flatMap(([, xs]) => xs);
     index = Math.min(index, Math.max(0, items.length - 1));
@@ -67,7 +79,8 @@ export function openPalette(ctx) {
         const el = h("button", { type: "button", role: "option", class: `pal-item${i === index ? " on" : ""}`, "aria-selected": String(i === index),
           style: it.color ? { "--pc": it.color } : undefined, on: { click: () => { close(); it.run(); }, mousemove: () => { if (index !== i) { index = i; highlight(); } } } },
           h("span", { class: "i", svg: it.icon }),
-          h("span", { class: "pal-t" }, h("b", {}, marked(it.title, q)), it.snippet ? h("span", { class: "pal-snip" }, marked(it.snippet, q)) : null,
+          h("span", { class: "pal-t" }, h("b", {}, marked(it.title, q)),
+            it.snippet ? h("span", { class: "pal-snip" }, it.serverMarks ? serverMarked(it.snippet) : marked(it.snippet, q)) : null,
             it.sub ? h("small", {}, it.sub) : null));
         it.el = el;
         return el;
@@ -90,7 +103,7 @@ export function openPalette(ctx) {
 
   input.addEventListener("input", () => {
     index = 0;
-    server = { tasks: [], sessions: [] };
+    server = { tasks: [], sessions: [], documents: [] };
     const q = input.value.trim();
     clearTimeout(timer);
     loading = q.length >= 2;

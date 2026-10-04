@@ -62,6 +62,13 @@ CODE_INDEX = ("- Le code de ce dossier est indexé par CodeGraph (index : {root}
               "la même consigne à chaque sous-agent.")
 
 
+DOCUMENTS = ("- Les documents de l'utilisateur (PDF, Word, Excel, PowerPoint, mails enregistrés, textes) sont indexés "
+             "par la console. Pour retrouver un document ou une information qu'il contient, appelle d'abord "
+             "chercher_documents (serveur jarvis) avec quelques mots-clés, avant de parcourir les dossiers avec Glob, "
+             "Grep ou Read ; cite ensuite le chemin du document, ouvre-le avec afficher s'il veut le voir, et lis-le en "
+             "entier avec Read seulement si les passages ne suffisent pas.")
+
+
 def code_index(folder: str) -> str:
     """The folder holding the CodeGraph index of this folder or of one above, or "". The home folder's
     ~/.codegraph holds CodeGraph's own settings, not an index: only a .codegraph/codegraph.db counts."""
@@ -79,10 +86,11 @@ def code_index(folder: str) -> str:
 
 def prompt(t: dict, prof: Profile, pre: Preset, project: str = "", ask_user: bool = True,
            actions: list[dict] | None = None, routines: list[dict] | None = None,
-           apps: list[dict] | None = None, facts: list[str] | None = None) -> str:
+           apps: list[dict] | None = None, facts: list[str] | None = None, documents: bool = False) -> str:
     """The block for one discussion: the console (the same for every discussion), then this one.
 
     apps: the web applications behind the MCP servers (mcp.web_apps), whose pages afficher opens.
+    documents: the user's documents are indexed (tool chercher_documents).
     In a project, its validated actions, its routines, its mail criteria and the sources of its
     brief follow: they only change when the user changes them (no clock, no next run), so the
     prompt cache holds between turns."""
@@ -98,6 +106,8 @@ def prompt(t: dict, prof: Profile, pre: Preset, project: str = "", ask_user: boo
     root = code_index(wd)
     if root:
         lines.append(CODE_INDEX.format(root=root))
+    if documents:
+        lines.append(DOCUMENTS)
     if apps:
         lines.append(APPS.format(apps=" ; ".join(f"{a['name']} : {a['url']}" for a in apps))
                      + (ODOO if any(a.get("kind") == "odoo" for a in apps) else ""))

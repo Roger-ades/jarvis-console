@@ -2,14 +2,17 @@
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
 import { accountActionRows } from "./accountactions.js";
+import { pickFolder } from "./folderpicker.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
 import { confirmDialog, createLauncher, fmtDate, h, modalHost, reveal, toast } from "./util.js";
 
 const TABS = [
   ["general", "Général"], ["profiles", "Profils"], ["permissions", "Autorisations"],
-  ["integrations", "Intégrations"], ["models", "Modèles et consignes"], ["security", "Sécurité"],
+  ["integrations", "Intégrations"], ["documents", "Documents"], ["models", "Modèles et consignes"], ["security", "Sécurité"],
   ["interface", "Interface"], ["history", "Historique"],
 ];
+const DOC_KINDS = { pdf: ["PDF", "PDF"], word: ["Word", "Word"], excel: ["Excel", "Excel"], powerpoint: ["PowerPoint", "PowerPoint"],
+  mail: ["mail", "mails"], page: ["page HTML", "pages HTML"], texte: ["texte", "textes"] };
 const EFFORTS = [["", "défaut du profil"], ["low", "faible"], ["medium", "moyen"], ["high", "élevé"], ["xhigh", "très élevé"], ["max", "max"]];
 
 let draft = null, meta = null, probes = {}, tab = "general", dirty = false, ctx = null;
@@ -603,6 +606,94 @@ function tabInterface() {
   ];
 }
 
+// ------------------------------------------------------------ documents (console/documents.py)
+let docTimer = null;
+
+function docFolderRow(f, i) {
+  const path = h("input", { type: "text", value: f.path, placeholder: "C:\\Users\\…\\Documents", spellcheck: "false" });
+  path.addEventListener("input", () => { f.path = path.value.trim(); markDirty(); });
+  const choose = h("button", { type: "button", class: "btn small", on: { click: async () => {
+    const p = await pickFolder({ title: "Dossier de documents à indexer", start: f.path });
+    if (p) { f.path = p; path.value = p; markDirty(); }
+  } } }, "Choisir…");
+  const shared = h("input", { type: "checkbox" });
+  shared.checked = !!f.shared;
+  const who = h("select", { disabled: !f.shared }, h("option", { value: "" }, "tous les comptes"),
+    ...draft.profiles.map((p) => h("option", { value: p.id }, `le compte ${p.name}`)));
+  who.value = f.profiles?.[0] || "";
+  shared.addEventListener("change", () => { f.shared = shared.checked; who.disabled = !f.shared; markDirty(); });
+  who.addEventListener("change", () => { f.profiles = who.value ? [who.value] : []; markDirty(); });
+  const remove = h("button", { type: "button", class: "btn small danger", on: { click: () => { draft.documents.folders.splice(i, 1); markDirty(); render(); } } }, "Retirer");
+  return h("div", { class: "doc-folder" },
+    h("div", { class: "row" }, path, choose, remove),
+    h("div", { class: "row" }, h("label", { class: "check" }, shared, h("span", {}, "Toutes les discussions peuvent y chercher, pour")), who));
+}
+
+function docStatus(box) {
+  const show = (st) => {
+    const p = st.progress || {};
+    const parts = [];
+    if (!st.enabled) parts.push(h("p", { class: "muted" }, "Index désactivé : rien n'est lu. Coche « Indexer mes documents », puis enregistre."));
+    if (st.error) parts.push(h("div", { class: "line err" }, `Dernière indexation interrompue : ${st.error}`));
+    if (!st.pdf) parts.push(h("div", { class: "line warn" }, "Lecture des PDF indisponible (module pypdf absent) : relance start.bat pour l'installer."));
+    const kinds = Object.entries(st.kinds || {}).map(([k, n]) => `${n} ${(DOC_KINDS[k] || [k, k])[n > 1 ? 1 : 0]}`).join(", ");
+    parts.push(h("p", {}, h("b", {}, `${st.total.toLocaleString("fr-FR")} document${st.total > 1 ? "s" : ""} indexé${st.total > 1 ? "s" : ""}`),
+      kinds ? ` : ${kinds}` : "",
+      p.running ? h("span", { class: "muted" }, ` · indexation en cours (${p.done} lu${p.done > 1 ? "s" : ""})…`) : p.ended ? h("span", { class: "muted" }, ` · dernière passe ${fmtDate(p.ended)}`) : ""));
+    if (p.running && p.current) parts.push(h("small", { class: "muted doc-current" }, p.current));
+    if (st.sources.length) parts.push(h("table", { class: "tbl" }, h("tbody", {}, st.sources.map((s) => h("tr", {},
+      h("td", {}, h("b", {}, s.label), h("br"), h("small", { class: "muted" }, s.path)),
+      h("td", {}, s.project ? "projet" : "dossier", s.shared ? h("small", { class: "muted" }, " · partagé") : ""),
+      h("td", {}, !s.exists ? h("span", { class: "err" }, "introuvable")
+        : s.within ? h("small", { class: "muted" }, `compris dans ${s.within}`)
+        : [`${(s.documents || 0).toLocaleString("fr-FR")} doc.`, s.unread ? h("small", { class: "muted", title: (s.unread_files || []).map((u) => `${u.path} : ${u.note}`).join("\n") },
+          ` · ${s.unread} sans texte lisible`) : ""]))))));
+    box.replaceChildren(...parts);
+    clearTimeout(docTimer);
+    if (p.running && box.isConnected) docTimer = setTimeout(load, 2000);
+  };
+  const load = () => api("/api/documents").then(show).catch((e) => box.replaceChildren(h("div", { class: "line err" }, e.message)));
+  load();
+  return load;
+}
+
+function tabDocuments() {
+  if (!draft.documents) draft.documents = { enabled: false, projects: true, folders: [], max_mb: 30 };
+  const d = draft.documents;
+  const box = h("div", { class: "doc-status" }, h("div", { class: "muted" }, "…"));
+  const reload = docStatus(box);
+  const act = async (url, label) => {
+    if (dirty) return toast("Enregistre d'abord la configuration.", "warn");
+    try { await api(url, { method: "POST" }); toast(label, "ok"); setTimeout(reload, 600); } catch (e) { toast(e.message, "err"); }
+  };
+  return [
+    section("Index des documents", "La console lit le texte des documents des dossiers choisis (PDF, Word, Excel, PowerPoint, OpenDocument, mails .eml, "
+      + "textes, pages HTML) et le range dans un index sur ce poste (data/documents.db). Rien ne quitte l'ordinateur et aucun modèle ne lit les fichiers "
+      + "pour les indexer. Claude y cherche avec l'outil chercher_documents, toi avec Ctrl+K.",
+      grid(check("Indexer mes documents", "documents.enabled", { help: "Les fichiers modifiés sont relus toutes les 15 minutes ; un fichier OneDrive « en ligne seulement » n'est pas téléchargé : seul son nom est indexé." }),
+        check("Les dossiers des projets", "documents.projects", { help: "Chaque discussion d'un projet cherche dans son dossier." }),
+        num("Taille maximale d'un fichier (Mo)", "documents.max_mb", { min: 1, max: 500, help: "Les fichiers plus gros ne sont pas lus." }))),
+    section("Autres dossiers", "Une discussion cherche dans ses propres dossiers. Un dossier partagé est cherché par toutes les discussions du compte choisi, "
+      + "avec ce que leur preset permet de lire. Les chemins interdits (Sécurité) ne sont jamais lus.",
+      ...d.folders.map(docFolderRow),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: async () => {
+        const p = await pickFolder({ title: "Dossier de documents à indexer" });
+        if (!p) return;
+        d.folders.push({ path: p, shared: false, profiles: [] });
+        markDirty();
+        render();
+      } } }, "Ajouter un dossier"))),
+    section("État", null, box,
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn small", on: { click: () => act("/api/documents/sync", "Indexation lancée.") } }, "Réindexer maintenant"),
+        h("button", { type: "button", class: "btn small", on: { click: reload } }, "Actualiser"),
+        h("button", { type: "button", class: "btn small danger", on: { click: async () => {
+          if (!(await confirmDialog("Vider l'index ?", "Les documents ne sont pas touchés : seul leur index est effacé, puis refait si l'index est activé.", "Vider", "danger"))) return;
+          act("/api/documents/clear", "Index vidé.");
+        } } }, "Vider l'index"))),
+  ];
+}
+
 function tabHistory() {
   return [
     section("Historique des tâches", "Tâches, flux et journal d'audit sont conservés sur ce poste (data/console.db).", grid(
@@ -824,7 +915,7 @@ function render() {
   navEl.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   const scroll = bodyEl.scrollTop;
   const content = { general: tabGeneral, profiles: tabProfiles, permissions: tabPermissions, integrations: tabIntegrations,
-    models: tabModels, security: () => tabSecurity(ctx.state), interface: tabInterface, history: tabHistory }[tab]();
+    documents: tabDocuments, models: tabModels, security: () => tabSecurity(ctx.state), interface: tabInterface, history: tabHistory }[tab]();
   bodyEl.replaceChildren(...content);
   bodyEl.scrollTop = scroll;
 }

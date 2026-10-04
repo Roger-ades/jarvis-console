@@ -38,4 +38,4 @@ def test_finds_sessions_by_content(engine):
 def test_search_api(client):  # noqa: F811
     assert client.get("/api/search", params={"q": "devis"}).status_code == 401
     r = client.get("/api/search", params={"q": "devis"}, headers={"X-Console-Token": client.token})
-    assert r.status_code == 200 and r.json() == {"tasks": [], "sessions": []}
+    assert r.status_code == 200 and r.json() == {"tasks": [], "sessions": [], "documents": []}

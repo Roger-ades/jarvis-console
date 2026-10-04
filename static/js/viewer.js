@@ -10,6 +10,7 @@ import * as wm from "./wm.js";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 const TEXT = /\.(txt|md|csv|tsv|json|log|xml)$/i;
+const OFFICE = /\.(docx|docm|odt|xlsx|xlsm|ods|pptx|odp|eml)$/i;
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
 export function kindOf(name) {
@@ -17,20 +18,43 @@ export function kindOf(name) {
   if (/\.pdf$/i.test(name)) return "pdf";
   if (/\.html?$/i.test(name)) return "html";
   if (TEXT.test(name)) return "text";
+  if (OFFICE.test(name)) return "office";
   return "other";
 }
 
-/** Where a file comes from: a task (its folders, what it cited) or a project folder. frame: the
- * address of an HTML file on the preview origin (another origin than the console's, see content.py). */
+/** Where a file comes from: a task (its folders, what it cited), a project folder, or the documents'
+ * index (doc). frame: the address of an HTML file on the preview origin (another origin than the
+ * console's, see content.py); text: the text of an Office document, read by the console. */
 function source(opts) {
+  const p = (path) => `path=${encodeURIComponent(path)}`;
+  if (opts.doc) {
+    return { get: (path) => `/api/documents/file?${p(path)}`, open: "/api/documents/file/open",
+      frame: (path, remote) => `/api/documents/frame?${p(path)}&remote=${remote}`, text: (path) => `/api/documents/text?${p(path)}`, extra: {} };
+  }
   if (opts.folder) {
     const q = `profile=${encodeURIComponent(opts.profile || "")}&folder=${encodeURIComponent(opts.folder)}`;
-    return { get: (path) => `/api/workspace/file?${q}&path=${encodeURIComponent(path)}`, open: "/api/workspace/file/open",
-      frame: (path, remote) => `/api/workspace/frame?${q}&path=${encodeURIComponent(path)}&remote=${remote}`,
+    return { get: (path) => `/api/workspace/file?${q}&${p(path)}`, open: "/api/workspace/file/open",
+      frame: (path, remote) => `/api/workspace/frame?${q}&${p(path)}&remote=${remote}`, text: (path) => `/api/workspace/text?${q}&${p(path)}`,
       extra: { profile: opts.profile, folder: opts.folder } };
   }
-  return { get: (path) => `/api/tasks/${opts.taskId}/file?path=${encodeURIComponent(path)}`, open: `/api/tasks/${opts.taskId}/file/open`,
-    frame: (path, remote) => `/api/tasks/${opts.taskId}/frame?path=${encodeURIComponent(path)}&remote=${remote}`, extra: {} };
+  return { get: (path) => `/api/tasks/${opts.taskId}/file?${p(path)}`, open: `/api/tasks/${opts.taskId}/file/open`,
+    frame: (path, remote) => `/api/tasks/${opts.taskId}/frame?${p(path)}&remote=${remote}`, text: (path) => `/api/tasks/${opts.taskId}/text?${p(path)}`, extra: {} };
+}
+
+/** An Office document or a saved mail: its text, read by the console (the layout is not kept). */
+async function officeText(src, path, openWith) {
+  const r = await api(src.text(path));
+  const note = h("div", { class: "pv-note" }, h("span", {}, r.note ? `Texte illisible : ${r.note}.` : "Aperçu du texte seul : la mise en forme n'est pas reproduite."),
+    h("button", { type: "button", class: "btn small", on: { click: () => openWith(false) } }, "Ouvrir avec l'application"));
+  if (!r.text) return h("div", {}, note);
+  const tabular = r.kind === "excel" && /\t/.test(r.text);
+  const body = tabular
+    ? h("div", { class: "pv-text" }, ...r.text.split(/\n\n(?=Feuille « )/).map((sheet) => {
+      const [head, ...rows] = sheet.split("\n");
+      return h("div", { class: "pv-sheet" }, h("h4", {}, head), csvTable(rows.join("\n")));
+    }))
+    : h("pre", { class: "pv-pre" }, r.text);
+  return h("div", {}, note, body);
 }
 
 /** An HTML page (file, mail) from the preview origin: its styles kept, no script, nothing from the web
@@ -97,7 +121,7 @@ function csvTable(text) {
 
 // Previews open as windows of the desktop (move, resize, enlarge, several side by side).
 const SIZES = { image: { w: 720, h: 560 }, pdf: { w: 780, h: 900 }, html: { w: 980, h: 760 }, web: { w: 1040, h: 780 },
-  text: { w: 760, h: 640 }, other: { w: 480, h: 300 } };
+  text: { w: 760, h: 640 }, office: { w: 820, h: 760 }, other: { w: 480, h: 300 } };
 const open = new Map();   // what is shown -> window id
 const closers = new Map(); // window id -> close()
 const live = new Map();    // window id -> check(): reloads a file preview when the file changed
@@ -131,7 +155,7 @@ export async function openPreview(opts) {
   if (opts.result) return openResult(opts);
   // desktop app: a web page opens in a window of its own, signed in with the site's own session
   if (opts.url && opts.kind !== "image" && window.jarvis?.openSite) { window.jarvis.openSite(opts.url); return; }
-  const key = opts.url ? `url:${opts.url}` : `${opts.folder ? `dir:${opts.folder}` : `task:${opts.taskId}`}:${opts.path}`;
+  const key = opts.url ? `url:${opts.url}` : `${opts.doc ? "doc" : opts.folder ? `dir:${opts.folder}` : `task:${opts.taskId}`}:${opts.path}`;
   const shown = open.get(key);
   if (shown && wm.has(shown)) { if (wm.isMinimized(shown)) wm.restore(shown); else wm.focus(shown); live.get(shown)?.(); return; }
   const id = `pv-${++seq}`;
@@ -215,6 +239,9 @@ export async function openPreview(opts) {
         try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep raw */ }
         node = h("pre", { class: "pv-pre" }, pretty);
       } else node = h("pre", { class: "pv-pre" }, text);
+    } else if (kind === "office") {
+      try { node = await officeText(src, path, openWith); }
+      catch (e) { node = h("div", { class: "line err pv-err" }, e.message); }
     } else {
       node = h("div", { class: "pv-other" },
         h("p", {}, "Pas d'aperçu intégré pour ce type de fichier."),

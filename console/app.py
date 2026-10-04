@@ -677,6 +677,40 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def workspace_frame(path: str, profile: str | None = None, folder: str | None = None, remote: bool = False):
         return engine.workspace_frame(profile, folder, path, remote)
 
+    @app.get("/api/workspace/text")
+    def workspace_text(path: str, profile: str | None = None, folder: str | None = None):
+        return engine.file_text(engine.workspace_file(profile, folder, path))
+
+    # -------------------------------------------------------- the documents' index (console/documents.py)
+    @app.get("/api/documents")
+    def documents():
+        return engine.documents_status()
+
+    @app.post("/api/documents/sync")
+    def documents_sync():
+        return engine.documents_sync()
+
+    @app.post("/api/documents/clear")
+    def documents_clear():
+        return engine.documents_clear()
+
+    @app.get("/api/documents/file")
+    def document_file(path: str, stat: bool = False):
+        return preview_response(engine.document_file(path), stat)
+
+    @app.get("/api/documents/frame")
+    def document_frame(path: str, remote: bool = False):
+        return engine.document_frame(path, remote)
+
+    @app.get("/api/documents/text")
+    def document_text(path: str):
+        return engine.file_text(engine.document_file(path))
+
+    @app.post("/api/documents/file/open")
+    def document_open(body: dict = Body(...)):
+        engine.open_document_file(str(body.get("path") or ""), reveal=bool(body.get("reveal")))
+        return {"ok": True}
+
     @app.get("/api/limits")
     def limits():
         return {"limits": engine.limits, "busy": sorted(engine._limits_busy)}
@@ -735,6 +769,10 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.get("/api/tasks/{tid}/frame")
     def task_frame(tid: str, path: str, remote: bool = False):
         return engine.task_frame(tid, path, remote)
+
+    @app.get("/api/tasks/{tid}/text")
+    def task_file_text(tid: str, path: str):
+        return engine.file_text(engine.task_file(tid, path))
 
     @app.get("/api/tasks/{tid}/result")
     def task_result(tid: str, id: str, contient: str = "", remote: bool = False):

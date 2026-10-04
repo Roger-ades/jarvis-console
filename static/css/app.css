@@ -1214,6 +1214,16 @@ table.tbl td.narrow { width: 1%; white-space: nowrap; }
 .upd-list { margin: 8px 0; padding-left: 18px; max-height: 200px; overflow: auto; font-size: 12.5px; }
 .upd-row { margin-top: 10px; }
 
+/* Configuration → Documents, and the text preview of Office documents */
+.doc-folder { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.doc-folder input[type="text"] { flex: 1; min-width: 0; font: 12px var(--mono); }
+.doc-status { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.doc-status p { margin: 0; }
+.doc-current { overflow-wrap: anywhere; font: 11px var(--mono); }
+.pv-note .btn { margin-left: 10px; }
+.pv-sheet h4 { margin: 14px 0 6px; font-size: 13px; }
+.pv-sheet:first-child h4 { margin-top: 0; }
+
 /* Claude showed files in preview windows */
 .line.shown svg { color: var(--accent); }
 .line.shown a { font-weight: 600; }
