@@ -54,6 +54,14 @@ directement.
   comment montrer un passage. Depuis Ctrl+K, le document s'ouvre au passage trouvé avec les mots
   cherchés surlignés (Précédent / Suivant quand il y en a plusieurs). Le lien « Affiché : » de la
   discussion rouvre le même endroit.
+- **Désigner un élément** (`pickOf` dans [static/js/regard.js](../static/js/regard.js)) : un clic
+  droit sur une ligne de tableau (affichage, aperçu Excel ou CSV, réponse de Claude), une barre, un
+  point de courbe ou une part de graphique, une carte, un chiffre clé, un champ de fiche, une étape,
+  un résultat ou une image propose « Demander à Claude à propos de ceci ». L'élément est entouré, la
+  puce « Regard » le nomme (« point « T3 » · affichage … ») et sa description (en-têtes et valeurs,
+  séries du graphique) part avec le message, citée comme une donnée. Un affichage marque ce qui se
+  désigne avec `data-pick` (la description) et `data-pick-label` ; une ligne de tableau se décrit
+  seule à partir des en-têtes. Maj + clic droit garde le menu du navigateur.
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du

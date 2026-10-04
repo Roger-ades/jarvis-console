@@ -141,14 +141,20 @@ const webLink = (m, lien, label, cls = "dsp-link") => h("a", { href: lien.url, c
 const browserBtn = (url) => h("button", { type: "button", class: "icon-btn", title: "Ouvrir dans le navigateur", "aria-label": "Ouvrir dans le navigateur",
   svg: "external", on: { click: () => window.open(url, "_blank", "noopener,noreferrer") } });
 
+// What the user can point at with a right click (regard.js): a label for the chip, a description for Claude.
+const pickable = (label, ...lines) => ({ "data-pick-label": label, "data-pick": lines.filter(Boolean).join("\n") });
+
 // ---------------------------------------------------------------- blocks
 const BLOCKS = {
   texte: (b) => mdElement(b.texte),
 
   images: (b, e, m) => h("div", { class: `dsp-gallery${b.images.length === 1 ? " one" : ""}` },
-    ...b.images.map((ref) => h("figure", {}, picture(e, m, ref, "dsp-img", ref.legende), ref.legende ? h("figcaption", {}, ref.legende) : null))),
+    ...b.images.map((ref) => h("figure", pickable(`image « ${ref.legende || baseName(ref.path || ref.web)} »`,
+      `Image : ${ref.path || ref.web}`, ref.legende ? `Légende : ${ref.legende}` : ""),
+    picture(e, m, ref, "dsp-img", ref.legende), ref.legende ? h("figcaption", {}, ref.legende) : null))),
 
-  resultats: (b, e, m) => h("ol", { class: "dsp-results" }, ...b.elements.map((r) => h("li", {},
+  resultats: (b, e, m) => h("ol", { class: "dsp-results" }, ...b.elements.map((r) => h("li",
+    pickable(`résultat « ${r.titre} »`, `Résultat « ${r.titre} »`, r.lien?.url, r.source ? `Source : ${r.source}` : "", r.extrait),
     r.image ? picture(e, m, r.image, "dsp-rimg", r.titre) : null,
     h("div", { class: "dsp-rbody" },
       h("div", { class: "dsp-rsrc" }, r.lien ? h("span", { class: "dsp-host" }, r.lien.host) : null, r.source && r.source !== r.lien?.host ? ` · ${r.source}` : ""),
@@ -161,14 +167,19 @@ const BLOCKS = {
 
   fiche: (b, e, m) => h("div", { class: "dsp-card" },
     b.image ? picture(e, m, b.image, "dsp-cimg") : null,
-    h("dl", {}, ...b.champs.flatMap((f) => [h("dt", {}, f.libelle), h("dd", {}, f.valeur)])),
+    h("dl", {}, ...b.champs.flatMap((f) => {
+      const at = pickable(`champ « ${f.libelle} »`, `${b.titre ? `Fiche « ${b.titre} », champ ` : "Champ "}${f.libelle} : ${f.valeur}`);
+      return [h("dt", at, f.libelle), h("dd", at, f.valeur)];
+    })),
     b.lien ? h("div", { class: "dsp-card-act" }, h("button", { type: "button", class: "btn small", on: { click: () => openWeb(m, b.lien.url) } },
       icon("globe"), `Ouvrir (${b.lien.host})`), browserBtn(b.lien.url)) : null),
 
-  chronologie: (b) => h("ol", { class: "dsp-timeline" }, ...b.elements.map((x) => h("li", {},
+  chronologie: (b) => h("ol", { class: "dsp-timeline" }, ...b.elements.map((x) => h("li",
+    pickable(`étape « ${x.titre || when(x.quand)} »`, `Étape : ${when(x.quand)}${x.titre ? ` · ${x.titre}` : ""}`, x.texte),
     h("time", {}, when(x.quand)), h("div", {}, x.titre ? h("strong", {}, x.titre) : null, x.texte ? h("p", {}, x.texte) : null)))),
 
-  chiffres: (b) => h("div", { class: "dsp-kpis" }, ...b.elements.map((k) => h("div", { class: "dsp-kpi" },
+  chiffres: (b) => h("div", { class: "dsp-kpis" }, ...b.elements.map((k) => h("div", { class: "dsp-kpi",
+    ...pickable(`chiffre « ${k.libelle} »`, `Chiffre clé ${k.libelle} : ${k.valeur}`, k.evolution ? `Évolution : ${k.evolution}` : "", k.detail) },
     h("span", { class: "dsp-kl" }, k.libelle), h("strong", {}, k.valeur),
     k.evolution ? h("span", { class: "dsp-ke" }, /^[-−–]/.test(k.evolution) ? "▼ " : /^\+/.test(k.evolution) ? "▲ " : "", k.evolution) : null,
     k.detail ? h("small", {}, k.detail) : null))),
@@ -324,7 +335,8 @@ async function act(e, i, carte, bouton) {
 
 function cards(b, e, m, i) {
   const done = new Set(e.answers.get(i) || []);
-  return h("div", { class: "dsp-cards" }, ...b.elements.map((card, c) => h("article", { class: "dsp-card" },
+  return h("div", { class: "dsp-cards" }, ...b.elements.map((card, c) => h("article", { class: "dsp-card",
+    ...pickable(`carte « ${card.titre} »`, `Carte « ${card.titre} »`, card.texte) },
     h("h3", {}, card.titre),
     card.texte ? h("p", {}, card.texte) : null,
     h("div", { class: "dsp-actions" }, ...card.boutons.map((x, j) => {
@@ -534,6 +546,8 @@ function drawXY(b, W, tip) {
   const marks = el("g");
   const plot = () => tip.parentElement;
   const rowsAt = (i) => b.series.map((s, k) => ({ k, name: s.nom || `Série ${k + 1}`, value: fmt(s.valeurs[i], b.unite) }));
+  const pickAt = (i) => pickable(`point « ${b.etiquettes[i]} »`, `${b.titre ? `Graphique « ${b.titre} »` : "Graphique"}, ${b.etiquettes[i]} :`,
+    ...rowsAt(i).map((r) => `${r.name} = ${r.value}`));
 
   if (b.forme === "barres") {
     svg.append(hover);
@@ -556,7 +570,7 @@ function drawXY(b, W, tip) {
     svg.append(marks);
     const hits = el("g");
     b.etiquettes.forEach((lab, i) => {
-      const r = el("rect", { x: L + band * i, y: T, width: band, height: ph, class: "hit" });
+      const r = el("rect", { x: L + band * i, y: T, width: band, height: ph, class: "hit", ...pickAt(i) });
       r.addEventListener("mouseenter", () => {
         hover.setAttribute("x", L + band * i + band * 0.08); hover.setAttribute("width", band * 0.84); hover.classList.add("on");
       });
@@ -592,6 +606,7 @@ function drawXY(b, W, tip) {
     const i = Math.max(0, Math.min(n - 1, Math.floor((sx - L) / band)));
     cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.classList.add("on");
     focus.replaceChildren(...b.series.flatMap((s, k) => (s.valeurs[i] == null ? [] : [el("circle", { cx: X(i), cy: Y(s.valeurs[i]), r: 5, class: `pt on s${k + 1}` })])));
+    for (const [k, v] of Object.entries(pickAt(i))) area.setAttribute(k, v); // what a right click points at
     showTip(tip, plot(), ev.clientX - p.left, ev.clientY - p.top, b.etiquettes[i], rowsAt(i));
   });
   area.addEventListener("mouseleave", () => { cross.classList.remove("on"); focus.replaceChildren(); hideTip(tip); });
@@ -619,7 +634,8 @@ function drawPie(b, W, tip) {
     const d = sweep >= Math.PI * 2 - 1e-6
       ? `M${pt(R, a)}A${R},${R} 0 1 1 ${pt(R, a + Math.PI)}A${R},${R} 0 1 1 ${pt(R, a)}M${pt(r0, a)}A${r0},${r0} 0 1 0 ${pt(r0, a + Math.PI)}A${r0},${r0} 0 1 0 ${pt(r0, a)}Z`
       : `M${pt(R, a)}A${R},${R} 0 ${big} 1 ${pt(R, a2)}L${pt(r0, a2)}A${r0},${r0} 0 ${big} 0 ${pt(r0, a)}Z`;
-    const p = el("path", { d, class: `arc s${row.k + 1}`, "fill-rule": "evenodd" });
+    const p = el("path", { d, class: `arc s${row.k + 1}`, "fill-rule": "evenodd",
+      ...pickable(`part « ${row.label} »`, `${b.titre ? `Graphique « ${b.titre} »` : "Graphique"}, ${row.label} : ${fmt(row.v, b.unite)} (${num.format(Math.round(row.pct * 10) / 10)} % du total)`) });
     p.addEventListener("mousemove", (ev) => {
       const box = tip.parentElement.getBoundingClientRect();
       showTip(tip, tip.parentElement, ev.clientX - box.left, ev.clientY - box.top, row.label,

@@ -39,6 +39,45 @@ def test_the_block_names_the_file_and_quotes_the_selection_as_data():
     assert "Ton affichage « Ventes » (id ventes)" in own
 
 
+def test_an_element_pointed_at_is_named_and_quoted_as_data():
+    detail = "Tableau « Ventes », une ligne :\nClient : Dupont\nMontant : 1200"
+    r = regard.clean({"type": "affichage", "task": "abcd1234", "key": "ventes", "title": "Ventes",
+                      "element": {"label": "  ligne « Dupont »\n", "detail": detail + "\x07"}})
+    assert r["element"] == {"label": "ligne « Dupont »", "detail": detail}
+    assert regard.label(r) == "ligne « Dupont » · affichage « Ventes »"
+    b = regard.block(r, here="abcd1234")
+    assert "Ton affichage « Ventes » (id ventes)" in b
+    assert "- Élément qu'il désigne (ligne « Dupont ») :\n> Tableau « Ventes », une ligne :\n> Client : Dupont" in b
+    assert regard.public(r)["selection"].startswith("Tableau « Ventes »")
+    # an element alone is enough; without a detail it is nothing; it is bounded
+    alone = regard.clean({"type": "texte", "element": {"detail": "Carte « Lyon »"}})
+    assert alone == {"type": "texte", "element": {"label": "élément", "detail": "Carte « Lyon »"}}
+    assert regard.label(alone) == "élément"
+    assert regard.clean({"type": "texte", "element": {"label": "x"}}) is None
+    assert regard.clean({"type": "texte", "element": "pas un objet"}) is None
+    big = regard.clean({"type": "texte", "element": {"detail": "a" * 9000}})
+    assert len(big["element"]["detail"]) < regard.MAX_ELEMENT + 10
+    # with a selection too, both go
+    both = regard.block(regard.clean({"type": "texte", "selection": "1200", "element": {"label": "ligne", "detail": "Client : Dupont"}}))
+    assert "> Client : Dupont" in both and "> 1200" in both
+
+
+def test_a_follow_up_carries_the_row_the_user_points_at(engine, tmp_path):
+    wd = tmp_path / "projet"
+    wd.mkdir()
+    blocs = [{"type": "tableau", "colonnes": ["Client", "Montant"], "lignes": [["Dupont", 1200]]}]
+    a = engine.create_task(f"PRESENT {json.dumps({'id': 'ventes', 'titre': 'Ventes T3', 'blocs': blocs})}",
+                           profile="work", preset="lecture", workdir=str(wd))
+    finish(engine, a["id"])
+    engine.followup(a["id"], "Pourquoi ce montant ?", regard={
+        "type": "affichage", "task": a["id"], "key": "ventes", "title": "Ventes T3",
+        "element": {"label": "ligne « Dupont »", "detail": "Client : Dupont\nMontant : 1200"}})
+    got = echoed(finish(engine, a["id"]))
+    assert "Élément qu'il désigne (ligne « Dupont »)" in got and "> Montant : 1200" in got
+    user = [e["data"] for e in engine.store.events(a["id"]) if e["kind"] == "user"][-1]
+    assert user["regard"]["label"] == "ligne « Dupont » · affichage « Ventes T3 »"
+
+
 def test_a_request_carries_what_the_user_looks_at(engine, tmp_path):
     wd = tmp_path / "projet"
     wd.mkdir()

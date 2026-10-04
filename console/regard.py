@@ -23,6 +23,7 @@ TYPES = {
     "texte": "Texte sélectionné",
 }
 MAX_SELECTION = 4000
+MAX_ELEMENT = 2000
 MAX_EXCERPT = 6000
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _TASK = re.compile(r"^[0-9a-f]{8}$")
@@ -52,6 +53,11 @@ def clean(raw) -> dict | None:
     title = _s(raw.get("title"), 200)
     if title:
         r["title"] = title
+    # an element the user pointed at (right click): a row of a table, a point of a chart, a card…
+    el = raw.get("element") if isinstance(raw.get("element"), dict) else {}
+    detail, what = _s(el.get("detail"), MAX_ELEMENT, multiline=True), _s(el.get("label"), 120)
+    if detail:
+        r["element"] = {"label": what or "élément", "detail": detail}
     task = raw.get("task") if isinstance(raw.get("task"), str) and _TASK.match(raw["task"]) else ""
     if task:
         r["task"] = task
@@ -79,7 +85,7 @@ def clean(raw) -> dict | None:
                 r["contient"] = needle
     has_target = any(k in r for k in ("path", "url", "key", "call")) or (kind == "discussion" and task)
     if not has_target:
-        if not sel:
+        if not sel and "element" not in r:
             return None
         r["type"] = "discussion" if kind == "discussion" else "texte"
     return r
@@ -91,6 +97,13 @@ def _name(path: str) -> str:
 
 def label(r: dict) -> str:
     """A few words for the user's bubble and the audit log."""
+    what = _label(r)
+    if not r.get("element"):
+        return what
+    return r["element"]["label"] if what == "élément désigné" else f"{r['element']['label']} · {what}"
+
+
+def _label(r: dict) -> str:
     kind = r["type"]
     if kind == "fichier" and r.get("path"):
         return _name(r["path"])
@@ -102,7 +115,7 @@ def label(r: dict) -> str:
         return f"résultat « {r.get('title') or r.get('tool') or 'outil'} »"
     if kind == "discussion":
         return f"passage de « {r['title']} »" if r.get("title") else "passage d'une discussion"
-    return "texte sélectionné"
+    return "élément désigné" if r.get("element") and not r.get("selection") else "texte sélectionné"
 
 
 def public(r: dict) -> dict:
@@ -113,6 +126,9 @@ def public(r: dict) -> dict:
             out[k] = r[k]
     if r.get("selection"):
         s = r["selection"]
+        out["selection"] = s if len(s) <= 280 else s[:280].rstrip() + "…"
+    elif r.get("element"):
+        s = r["element"]["detail"]
         out["selection"] = s if len(s) <= 280 else s[:280].rstrip() + "…"
     return out
 
@@ -158,6 +174,8 @@ def block(r: dict, here: str = "", excerpt: str = "") -> str:
     if excerpt and not own:
         excerpt = excerpt if len(excerpt) <= MAX_EXCERPT else excerpt[:MAX_EXCERPT].rstrip() + " […]"
         lines.append("- Son contenu :\n" + quote(excerpt))
+    if r.get("element"):
+        lines.append(f"- Élément qu'il désigne ({r['element']['label']}) :\n" + quote(r["element"]["detail"]))
     if r.get("selection"):
         lines.append("- Texte sélectionné :\n" + quote(r["selection"]))
     return "\n".join(lines) if len(lines) > 1 else ""
