@@ -378,6 +378,24 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
   border-bottom: 1px solid var(--border); overflow: hidden; white-space: nowrap;
   mask-image: linear-gradient(90deg, #000 92%, transparent);
 }
+.win-plan { flex: none; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.win-plan[hidden] { display: none; }
+.plan-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 12px 6px 14px; min-width: 0;
+  background: none; border: 0; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; text-align: left;
+}
+.plan-head:hover { color: var(--text); }
+.plan-head .i svg { width: 13px; height: 13px; color: var(--accent); }
+.plan-head b { font-weight: 600; color: var(--text); }
+.plan-n { font-variant-numeric: tabular-nums; color: var(--text-3); }
+.plan-bar { flex: none; width: 64px; height: 4px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.plan-bar i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+.win-plan.done .plan-bar i { background: var(--ok); }
+.plan-cur { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-chev { display: inline-flex; margin-left: auto; transition: transform .15s; }
+.plan-chev svg { width: 12px; height: 12px; }
+.win-plan.open .plan-chev { transform: rotate(90deg); }
+.plan-list { padding: 0 14px 8px 36px; max-height: 32vh; overflow: auto; font-size: 12.5px; }
 .meta-chip {
   display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 6px; flex: none;
   font-size: 11px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--border); max-width: 260px;

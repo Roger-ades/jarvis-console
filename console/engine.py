@@ -2496,10 +2496,12 @@ class Engine:
                 self._event(tid, "tool", {"id": block.get("id"), "name": name, "parent": parent,
                                           "target": _clip(summarize_target(name, inp), 400),
                                           "input": _clip_json(inp, 8000)})
-                if name == "TodoWrite" and isinstance(inp.get("todos"), list):
+                if name == "TodoWrite" and isinstance(inp.get("todos"), list) and not parent:
+                    # the lead's plan only: a sub-agent's list would replace it
                     with self._lock:
-                        t["todos"] = [{"content": str(x.get("content", ""))[:300], "status": x.get("status")}
-                                      for x in inp["todos"] if isinstance(x, dict)]
+                        t["todos"] = [{"content": str(x.get("content", ""))[:300], "status": x.get("status"),
+                                       "active": str(x.get("activeForm") or "")[:300]}
+                                      for x in inp["todos"][:50] if isinstance(x, dict)]
                         self._save(t)
 
     def _on_user(self, tid: str, msg: dict):

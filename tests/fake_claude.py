@@ -19,6 +19,7 @@ The user message drives the scenario, one directive per line:
   PRESENT <json arguments>   call the console's "presenter" tool (a display made of blocks)
   PROPOSE <json arguments>   call the console's "proposer" tool (an action or a routine for the project)
   FIND <query>               call the console's "chercher_documents" tool (the local document index)
+  PLAN                       the lead writes a plan (TodoWrite), then a sub-agent writes its own list
   VITRINE [ou]               a display with every kind of block (images, results, table, chart…)
   CTX <tokens>               the session's context now weighs that much (usage of the next calls)
   /compact                   compact the context, as Claude Code does
@@ -264,9 +265,19 @@ def images():
     return "J'ai généré deux images dans ton projet :\n\n- **logo-jarvis.png** (192 × 192)\n- `banniere.png` (512 × 512)"
 
 
+def demo_plan():
+    """The lead's plan, then a sub-agent's own list (which must not replace it)."""
+    _call("TodoWrite", {"todos": [{"content": "Lire le mail", "status": "completed", "activeForm": "Lecture du mail"},
+                                  {"content": "Chiffrer", "status": "in_progress", "activeForm": "Chiffrage en cours"},
+                                  {"content": "Faire valider", "status": "pending", "activeForm": "Validation"}]})
+    a = _agent_start("general-purpose", "Vérifier les tarifs")
+    _call("TodoWrite", {"todos": [{"content": "Étape du sous-agent", "status": "in_progress"}]}, a)
+    _agent_end(a, "Tarifs à jour.")
+
+
 def demo():
     todo = {"todos": [{"content": "Lire le mail client", "status": "completed"},
-                      {"content": "Préparer le devis", "status": "in_progress"},
+                      {"content": "Préparer le devis", "status": "in_progress", "activeForm": "Préparation du devis"},
                       {"content": "Faire valider", "status": "pending"}]}
     out({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
         {"type": "thinking", "thinking": "Je relis le mail, puis je cherche le client et ses devis dans Odoo."}]}})
@@ -593,6 +604,9 @@ def turn(text: str):
         elif cmd == "DEMO":
             demo()
             lines.append(DEMO_TEXT)
+        elif cmd == "PLAN":
+            demo_plan()
+            lines.append("plan suivi")
         elif raw.strip():
             lines.append("écho:" + raw.strip())
     result = "\n".join(lines) or "rien"

@@ -25,6 +25,14 @@ def test_task_runs_and_streams(engine):
     assert task["session_started"] and task["mcp"][0]["name"] == "odoo"
 
 
+def test_the_plan_is_the_leads_with_its_current_step(engine):
+    t = engine.create_task("PLAN", profile="work", preset="lecture")
+    done(engine, t["id"])
+    todos = engine.tasks[t["id"]]["todos"]
+    assert [x["content"] for x in todos] == ["Lire le mail", "Chiffrer", "Faire valider"]
+    assert todos[1] == {"content": "Chiffrer", "status": "in_progress", "active": "Chiffrage en cours"}
+
+
 def test_profile_isolation_and_clean_env(engine, monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
     a = engine.create_task("ENV", profile="work")

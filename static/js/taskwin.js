@@ -3,7 +3,7 @@ import { api } from "./api.js";
 import { Attacher } from "./attach.js";
 import { mdElement } from "./md.js";
 import {
-  ACTIVE, STATUS, confirmDialog, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, modelName, toast, toolIcon, toolLabel,
+  ACTIVE, STATUS, confirmDialog, planProgress, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, modelName, toast, toolIcon, toolLabel,
 } from "./util.js";
 import { changesUpdated, counts, openChanges, openDiff } from "./changes.js";
 import { openDisplayModal, openDisplayWindow, renderDisplay, setAnswer, setDoc } from "./display.js";
@@ -153,7 +153,7 @@ export class TaskWindow {
     this.statusEl = h("span", { class: "status" });
     this.metaEl = h("span", { class: "win-meta" });
     this.stopBtn = iconBtn("stop", "Annuler la tâche", () => this.cancel(), "danger");
-    this.inspBtn = iconBtn("panel", "Panneau agents, plan et activité", () => this.toggleInspector());
+    this.inspBtn = iconBtn("panel", "Panneau agents et activité", () => this.toggleInspector());
     this.pinBtn = iconBtn("pin", "Épingler au premier plan", () => this.pin());
     this.head = h("header", { class: "win-head" },
       h("span", { class: "who" }, h("span", { class: "sw" }), this.whoName), h("span", { class: "slash" }, "/"),
@@ -162,6 +162,7 @@ export class TaskWindow {
         iconBtn("more", "Actions", (e) => this.menu(e.currentTarget)), this.pinBtn,
         iconBtn("min", "Réduire", () => wm.minimize(this.id)), iconBtn("close", "Fermer la fenêtre", () => this.close())));
     this.sub = h("div", { class: "win-sub" });
+    this.plan = h("div", { class: "win-plan", hidden: true });
     this.body = h("div", { class: "win-body" });
     this.insp = h("aside", { class: "insp", "aria-label": "Inspecteur" });
     this.main = h("div", { class: "win-main" }, this.body, this.insp);
@@ -181,7 +182,7 @@ export class TaskWindow {
     this.foot = h("footer", { class: "win-foot" }, this.input, this.att.button("icon-btn"),
       h("button", { type: "button", class: "send-mini", title: "Envoyer (Entrée)", "aria-label": "Envoyer", svg: "send",
         on: { click: () => this.sendFollowup() } }));
-    this.el.append(this.head, this.sub, this.main, this.approvals, this.regardList, this.attList, this.foot);
+    this.el.append(this.head, this.sub, this.plan, this.main, this.approvals, this.regardList, this.attList, this.foot);
     this.timer = setInterval(() => this.tick(), 1000);
     // What the session does, from its transcripts: every agent's tools, background sub-agents included
     this.activity = null;
@@ -222,6 +223,7 @@ export class TaskWindow {
     let open = wm.flag(this.id, "insp");
     if (open === undefined) open = wm.width(this.id) >= 720;
     this.setInspector(open, false);
+    this.renderPlan();
   }
 
   destroy() {
@@ -380,14 +382,16 @@ export class TaskWindow {
     this.pinBtn.classList.toggle("on", !!t.pinned);
     this.tick();
     this.renderSub();
+    this.renderPlan();
     this.renderApprovals(t.pending || []);
     if (this.inspOpen) this.renderInspector();
   }
 
   /** The native window's title (taskbar, Alt+Tab): the status first when it calls for the user. */
   windowTitle() {
-    const t = this.task;
-    return `${t.status === "awaiting" ? "À valider · " : ""}${t.title} — ${t.profile_name || "JARVIS"}`;
+    const t = this.task, p = planProgress(t);
+    const step = t.status === "running" && p.total ? `${p.done}/${p.total} · ` : "";
+    return `${t.status === "awaiting" ? "À valider · " : step}${t.title} — ${t.profile_name || "JARVIS"}`;
   }
 
   renderSub() {
@@ -424,6 +428,29 @@ export class TaskWindow {
     const ctxChip = this.contextChip();
     if (ctxChip) bits.push(ctxChip);
     this.sub.replaceChildren(...bits);
+  }
+
+  /** Claude's plan above the conversation: progress and the step under way; a click shows every step. */
+  renderPlan() {
+    const t = this.task, p = planProgress(t);
+    this.plan.hidden = !p.total;
+    if (!p.total) return;
+    const open = !!wm.flag(this.id, "plan");
+    const finished = p.done === p.total;
+    const running = ACTIVE.has(t.status) && !finished;
+    const head = h("button", { type: "button", class: "plan-head", "aria-expanded": String(open),
+      title: open ? "Replier le plan" : "Voir toutes les étapes du plan de Claude",
+      on: { click: () => { wm.flag(this.id, "plan", !open); this.renderPlan(); } } },
+    svg("list"), h("b", {}, "Plan"), h("span", { class: "plan-n" }, `${p.done}/${p.total}`),
+    h("span", { class: "plan-bar" }, h("i", { style: { width: `${Math.round((p.done / p.total) * 100)}%` } })),
+    h("span", { class: "plan-cur" }, finished ? "Toutes les étapes sont faites" : p.current),
+    running ? h("span", { class: "spin" }) : null, svg("chev", "plan-chev"));
+    const list = open ? h("div", { class: "plan-list" }, ...p.todos.map((x) => h("div", { class: `todo ${x.status}` },
+      h("span", { class: "b", svg: x.status === "completed" ? "check" : "" }),
+      h("span", {}, x.status === "in_progress" && x.active ? x.active : x.content)))) : null;
+    this.plan.classList.toggle("done", finished);
+    this.plan.classList.toggle("open", open);
+    this.plan.replaceChildren(...[head, list].filter(Boolean));
   }
 
   mcpPopover(anchor) {
@@ -467,13 +494,6 @@ export class TaskWindow {
           h("span", { class: "st" }, stIcon(rootStatus))),
         top.length ? h("ul", {}, ...top.map(node)) : null)),
       this.agents.size ? null : h("div", { class: "note" }, "Les sous-agents lancés par Claude apparaîtront ici.")));
-    // Plan
-    if (t.todos?.length) {
-      const doneN = t.todos.filter((x) => x.status === "completed").length;
-      secs.push(h("section", { class: "insp-sec" }, h("h4", {}, "Plan", h("span", { class: "n" }, `${doneN}/${t.todos.length}`)),
-        ...t.todos.map((x) => h("div", { class: `todo ${x.status}` },
-          h("span", { class: "b", svg: x.status === "completed" ? "check" : "" }), h("span", {}, x.content)))));
-    }
     if (act) secs.push(this.mcpSection(act));
     // Activity (all agents when the transcripts are readable, else what the stream brought)
     const counts = new Map(this.toolCounts);

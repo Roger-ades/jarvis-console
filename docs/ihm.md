@@ -40,6 +40,12 @@ directement.
   fichiers (hook `PreToolUse`, reprise à la validation), enregistrée au résultat si le fichier a
   changé. Bouton « +n −m » sur l'action, menu ⋯ → Fichiers modifiés, Annuler / Rétablir avec contrôle
   que le fichier n'a pas changé depuis ; Claude l'apprend au message suivant.
+- **Le plan de Claude** (`renderPlan` dans [static/js/taskwin.js](../static/js/taskwin.js)) : quand
+  l'agent principal écrit un plan (`TodoWrite`), une bande « Plan » sous l'en-tête de la fenêtre
+  montre l'avancement (3/7), une barre et l'étape en cours (son intitulé « en cours » quand Claude
+  le donne) ; un clic déplie toutes les étapes. Le statut d'une discussion active porte le compteur
+  (« En cours · 3/7 ») partout où il s'affiche, et le titre de la fenêtre native aussi. La liste
+  d'un sous-agent ne remplace pas celle de l'agent principal.
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du

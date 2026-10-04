@@ -292,12 +292,22 @@ export const STATUS = {
 };
 export const ACTIVE = new Set(["queued", "running", "awaiting"]);
 
-/** Status label, "Programmée · 15:01" for a task waiting for its start time. */
+/** Claude's plan (TodoWrite): steps done, total, and the step under way (or the next one). */
+export function planProgress(t) {
+  const todos = t.todos || [];
+  const done = todos.filter((x) => x.status === "completed").length;
+  const cur = todos.find((x) => x.status === "in_progress") || todos.find((x) => x.status !== "completed");
+  return { todos, done, total: todos.length, current: cur ? (cur.status === "in_progress" && cur.active) || cur.content : "" };
+}
+
+/** Status label, "Programmée · 15:01" for a task waiting for its start time, "En cours · 3/7" with a plan. */
 export function statusLabel(t) {
   if (t.status === "queued" && t.not_before && t.not_before * 1000 > Date.now()) {
     const d = new Date(t.not_before * 1000);
     const same = d.toDateString() === new Date().toDateString();
     return `Programmée · ${same ? "" : `${d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" })} `}${d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`;
   }
-  return STATUS[t.status] || t.status;
+  const p = planProgress(t);
+  const label = STATUS[t.status] || t.status;
+  return (t.status === "running" || t.status === "awaiting") && p.total ? `${label} · ${p.done}/${p.total}` : label;
 }
