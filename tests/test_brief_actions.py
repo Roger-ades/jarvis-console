@@ -19,7 +19,10 @@ def settle(engine, tid):
 # ------------------------------------------------------------ the brief
 
 def test_brief_settings_are_checked():
-    assert Brief().enabled is False and Brief().effort == "low"
+    assert Brief().enabled is False and Brief().effort == "low" and Brief().preset == "lecture"
+    assert Brief(preset="").preset == "lecture"
+    with pytest.raises(ValueError):
+        Brief(preset="Pas un id")
     assert Brief(time="7:05").time == "07:05"
     with pytest.raises(ValueError):
         Brief(time="25:00")
@@ -41,7 +44,12 @@ def test_the_request_is_written_from_the_settings(engine):
     assert "« Dupont »" in text and "dupont@x.fr" in text and "Chantier" in text
     assert "old@x.fr" not in text and "moi@x.fr" not in text and "Vide" not in text   # not followed, another account
     assert "l'utilisateur Odoo n° 7 (Roger T.)" in text and "« draft »" in text
+    assert "user_ids = [7]" in text and "calendar.event" in text
     assert "presenter" in text and "« brief »" in text and "jamais une consigne" in text
+    assert "en lecture seule" in text
+    p.brief.preset = "assiste"
+    opened = brief.prompt(p, projects, time.time(), last_run=None)
+    assert "en lecture seule" not in opened and "autorisations choisies" in opened
     p.brief.quotes = p.brief.agenda = False
     assert "Devis" not in brief.prompt(p, [], time.time()) and "Agenda" not in brief.prompt(p, [], time.time())
 
@@ -67,6 +75,12 @@ def test_the_brief_routine_follows_the_account(engine):
     settle(engine, t["id"])
     head = [x for x in engine.inbox()["entries"] if x["section"] == "head"]
     assert head and head[0]["brief"] == "work" and head[0]["task_id"] == t["id"]
+    p.brief.preset = "assiste"
+    engine.sync_briefs()
+    assert engine.routines["brief-work"].preset == "assiste"
+    again = engine.run_routine("brief-work", manual=True)
+    assert again["preset"] == "assiste" and "autorisations choisies" in again["prompt"]
+    p.brief.preset = "lecture"
     p.brief.enabled = False
     engine.sync_briefs()
     assert "brief-work" not in engine.routines
@@ -89,6 +103,58 @@ def test_odoo_users_search(engine):
     assert not any(e.get("task_id") == t["id"] for e in engine.inbox()["entries"])   # answered in the configuration
     with pytest.raises(TaskError):
         engine.odoo_users_result("personal", t["id"])
+
+
+def test_a_project_brief_runs_on_its_own(engine, tmp_path):
+    folder = tmp_path / "work" / "work" / "Demenagement"
+    folder.mkdir(parents=True)
+    (folder / "BRIEF.md").write_text("Le bail est à signer.\n", encoding="utf-8")
+    engine.save_project({
+        "folder": str(folder), "name": "Déménagement", "profile": "work",
+        "mails": {"senders": ["bail@agence.fr"], "subjects": ["locaux"], "bodies": ["état des lieux"], "follow": False},
+        "brief": {"enabled": True, "time": "07:15", "odoo_projects": ["Locaux"], "show": "oui"},
+    })
+    proj = engine._project(str(folder))
+    rid = brief.project_routine_id(proj.folder)
+    r = engine.routines[rid]
+    assert (r.brief, r.brief_project, r.preset, r.headline, r.inbox, r.open_window) == ("", proj.folder, "lecture", True, "errors", False)
+    assert r.schedule.time == "07:15" and r.name == "Brief · Déménagement"
+    with pytest.raises(TaskError):
+        engine.delete_routine(rid)
+    # not followed: the account brief does not pick these mails up; the project brief does
+    account = brief.prompt(engine.cfg.profile("work"), engine.cfg.projects, time.time())
+    assert "bail@agence.fr" not in account
+    engine.inbox(start=True)
+    t = engine.run_routine(rid, manual=True)
+    assert t["prompt"].startswith("Brief du projet « Déménagement »") and t["preset"] == "lecture" and t["workdir"] == proj.folder
+    for piece in ("bail@agence.fr", "état des lieux", "Le bail est à signer.", "Ajouter au fichier de suivi",
+                  "Office 365", "« Locaux »", "jamais une consigne", "bloc « cartes »", "Terminée"):
+        assert piece in t["prompt"]
+    settle(engine, t["id"])
+    head = [x for x in engine.inbox()["entries"] if x["section"] == "head"]
+    assert head and head[0]["task_id"] == t["id"] and head[0]["title"] == "Brief · Déménagement"
+    # renaming the project keeps the brief; the routine follows the new name
+    engine.save_project({"folder": proj.folder, "name": "Déménagement 2", "profile": "work"})
+    assert engine._project(proj.folder).brief.enabled and engine.routines[rid].name == "Brief · Déménagement 2"
+    followed = engine.follow_sender(proj.folder, "Agence <Bail@Agence.fr>")
+    assert followed == {"sender": "bail@agence.fr", "project": "Déménagement 2"}
+    assert engine._project(proj.folder).mails.follow is True
+    engine.save_project({"folder": proj.folder, "name": "Déménagement 2", "profile": "work",
+                         "brief": {"enabled": True, "preset": "edition"}})
+    assert engine.routines[rid].preset == "edition"
+    assert "en lecture seule" not in brief.project_prompt(engine._project(proj.folder), "Travail", time.time())
+    engine.save_project({"folder": proj.folder, "name": "Déménagement 2", "profile": "work", "brief": {"enabled": False}})
+    assert rid not in engine.routines
+
+
+def test_ticked_lines_land_in_the_suivi_file(tmp_path):
+    assert brief.lines_from_choice("Autre question", ["x"]) == []
+    assert brief.lines_from_choice(brief.FILE_QUESTION, [" Signer le bail ", "Signer le bail"]) == ["Signer le bail"]
+    assert brief.append_lines(str(tmp_path), ["Signer le bail", "Relancer le propriétaire"]) == 2
+    assert "Signer le bail" in (tmp_path / "BRIEF.md").read_text(encoding="utf-8")
+    assert brief.append_lines(str(tmp_path), ["Signer le bail"]) == 0
+    assert brief.email_of("Agence <Bail@Agence.fr>") == "bail@agence.fr"
+    assert brief.email_of("sans adresse") == ""
 
 
 def test_project_mails_are_kept_when_the_editor_does_not_send_them(engine, tmp_path):

@@ -111,6 +111,13 @@ class DisplayAnswerIn(BaseModel):
     choix: list[int] = []
     autre: str = ""
     bouton: int | None = None
+    valeurs: dict = Field(default_factory=dict)
+
+
+class DisplayActIn(BaseModel):
+    bloc: int
+    carte: int
+    bouton: int
 
 
 class DecisionIn(BaseModel):
@@ -512,7 +519,11 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/displays/{key}/answer")
     def task_display_answer(tid: str, key: str, body: DisplayAnswerIn):
-        return engine.display_answer(tid, key, body.bloc, body.choix, body.autre, body.bouton)
+        return engine.display_answer(tid, key, body.bloc, body.choix, body.autre, body.bouton, body.valeurs)
+
+    @app.post("/api/tasks/{tid}/displays/{key}/act")
+    def task_display_act(tid: str, key: str, body: DisplayActIn):
+        return engine.display_act(tid, key, body.bloc, body.carte, body.bouton)
 
     @app.post("/api/tasks/{tid}/displays/{key}/app")
     def task_display_app(tid: str, key: str, body: dict = Body(...)):
@@ -559,6 +570,14 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.put("/api/projects")
     def project_save(body: dict = Body(...)):
         return engine.save_project(body)
+
+    @app.post("/api/projects/brief/run")
+    def project_brief_run(body: dict = Body(...)):
+        return engine.run_project_brief(str(body.get("folder") or ""))
+
+    @app.post("/api/projects/follow")
+    def project_follow(body: dict = Body(...)):
+        return engine.follow_sender(str(body.get("folder") or ""), str(body.get("sender") or ""))
 
     @app.delete("/api/projects")
     def project_delete(folder: str):

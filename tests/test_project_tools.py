@@ -221,6 +221,50 @@ def test_a_proposed_routine_keeps_the_frame_of_the_discussion(engine, tmp_path):
     assert "désactivée" in engine.tasks[t["id"]]["result"]
 
 
+def test_a_proposed_consigne_is_written_only_on_a_click(engine, tmp_path):
+    folder = project(engine, tmp_path)
+    text = "Prévenir si pas de réponse sur les accès admin."
+    t = engine.create_task(propose({"quoi": "consigne", "nom": "etimia", "description": "Attente Etimia",
+                                    "consigne": text}),
+                           profile="work", preset="lecture", workdir=folder)
+    p = proposal(engine, t["id"])
+    assert engine._project(folder).mails.instructions == ""
+    engine.decide(t["id"], p["id"], "deny")
+    settle(engine, t["id"])
+    assert engine._project(folder).mails.instructions == ""
+    t = engine.create_task(propose({"quoi": "consigne", "nom": "etimia", "description": "Attente Etimia",
+                                    "consigne": text}),
+                           profile="work", preset="lecture", workdir=folder)
+    p = proposal(engine, t["id"])
+    engine.decide(t["id"], p["id"], "allow")
+    settle(engine, t["id"])
+    assert engine._project(folder).mails.instructions == text
+    assert "Consigne ajoutée" in engine.tasks[t["id"]]["result"]
+
+
+def test_replacing_a_consigne_waits_for_the_click_and_drops_the_old_text(engine, tmp_path):
+    folder = project(engine, tmp_path, name="Network")
+    engine.save_project({"folder": folder, "name": "Network", "preset": "lecture",
+                         "mails": {"instructions": "Ancienne attente."}})
+    new = "Prévenir seulement si Etimia n'a pas répondu sur les accès admin."
+    t = engine.create_task(propose({"quoi": "consigne", "description": "Correction demandée",
+                                    "consigne": new, "remplace": True}),
+                           profile="work", preset="lecture", workdir=folder)
+    p = proposal(engine, t["id"])
+    assert p["input"]["remplace"] is True and p["input"]["actuelle"] == "Ancienne attente."
+    assert "remplacer une consigne" in p["reason"]
+    engine.decide(t["id"], p["id"], "deny")
+    settle(engine, t["id"])
+    assert engine._project(folder).mails.instructions == "Ancienne attente."
+    t = engine.create_task(propose({"quoi": "consigne", "description": "Correction demandée",
+                                    "consigne": new, "remplace": True}),
+                           profile="work", preset="lecture", workdir=folder)
+    engine.decide(t["id"], proposal(engine, t["id"])["id"], "allow")
+    settle(engine, t["id"])
+    assert engine._project(folder).mails.instructions == new
+    assert "remplacée" in engine.tasks[t["id"]]["result"]
+
+
 def test_proposals_that_are_refused_at_once(engine, tmp_path):
     folder = project(engine, tmp_path, files={"skills/rapport/SKILL.md": "x"})
     cases = [({"quoi": "action", "nom": "Mauvais nom", "description": "d", "consigne": "c"}, "nom d'action invalide"),
@@ -228,7 +272,7 @@ def test_proposals_that_are_refused_at_once(engine, tmp_path):
              ({"quoi": "routine", "nom": "R", "description": "d", "action": "absente"}, "pas d'action « /absente »"),
              ({"quoi": "routine", "nom": "R", "description": "d", "consigne": "x", "planification": {"jours": ["jamais"]}},
               "planification invalide"),
-             ({"quoi": "autre", "nom": "R", "description": "d"}, "action ou routine")]
+             ({"quoi": "autre", "nom": "R", "description": "d"}, "action, routine ou consigne")]
     for args, why in cases:
         t = engine.create_task(propose(args), profile="work", preset="lecture", workdir=folder)
         settle(engine, t["id"])

@@ -29,8 +29,7 @@ def test_suggestions_are_narrow():
 
 
 @pytest.mark.parametrize("pattern, tool", [("Bash", "Bash"), ("Bash(*)", "Bash"), ("mcp__*__create_record", "mcp__odoo__create_record"),
-                                           ("mcp__odoo__delete_record", "mcp__odoo__delete_record"), ("Edit(**)", "Edit"),
-                                           ("Write(./**)", "Edit")])
+                                           ("Edit(**)", "Edit"), ("Write(./**)", "Edit")])
 def test_too_broad_rules_are_refused(pattern, tool):
     assert project_rule_problem(pattern, tool)
 
@@ -52,17 +51,17 @@ def test_remember_then_the_same_action_goes_through(engine):
     assert not any(e["kind"] == "approval" for e in engine.store.events(t["id"])[-6:])
 
 
-def test_the_constraints_still_apply(engine):
-    """A remembered create_record never lets through a confirmed sale order (constraint)."""
+def test_a_remembered_create_is_not_filtered_by_the_model(engine):
+    """Once create_record is remembered, a task is created the same way as a quote. Odoo accepts or refuses."""
     t = engine.create_task(call("mcp__odoo__create_record", CREATE), profile="work", preset="brouillons")
     wait_for(lambda: task_status(engine, t["id"]) == "awaiting")
     p = engine.tasks[t["id"]]["pending"][0]
     engine.decide(t["id"], p["id"], "allow", remember=["mcp__odoo__create_record"])
     done(engine, t["id"])
-    bad = {"model": "sale.order", "values": {"partner_id": 1, "state": "sale"}}
-    engine.followup(t["id"], call("mcp__odoo__create_record", bad))
+    task = {"model": "project.task", "values": {"name": "Relance"}}
+    engine.followup(t["id"], call("mcp__odoo__create_record", task))
     done(engine, t["id"])
-    assert "mcp__odoo__create_record:refus" in engine.tasks[t["id"]]["result"]
+    assert "mcp__odoo__create_record:ok" in engine.tasks[t["id"]]["result"]
 
 
 def test_rule_belongs_to_its_folder_only(engine, tmp_path):

@@ -85,11 +85,11 @@ def test_approval_flow_allow_and_deny(engine):
     assert {r["detail"]["décision"] for r in audit} == {"allow", "deny"}
 
 
-def test_delete_record_refused_whatever_the_request(engine):
-    t = engine.create_task('TOOL mcp__odoo__delete_record {"model": "sale.order", "record_id": 1}',
+def test_delete_record_waits_for_approval_in_assiste(engine):
+    t = engine.create_task('TOOL mcp__odoo__delete_record {"model": "project.task", "record_id": 1}',
                            profile="work", preset="assiste")
-    done(engine, t["id"])
-    assert "mcp__odoo__delete_record:refus" in engine.tasks[t["id"]]["result"]
+    wait_for(lambda: task_status(engine, t["id"]) == "awaiting")
+    assert engine.tasks[t["id"]]["pending"][0]["tool"] == "mcp__odoo__delete_record"
 
 
 def test_unlisted_tool_goes_to_permission_prompt(engine):

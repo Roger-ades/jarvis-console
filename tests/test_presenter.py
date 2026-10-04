@@ -125,9 +125,59 @@ def test_a_choice_is_sent_back_to_the_session(engine, tmp_path):
 def test_free_answer_and_multiple_choice():
     doc = {"titre": "T", "blocs": [{"type": "choix", "question": "", "options": ["a", "b", "c"], "multiple": True}]}
     assert display.answer_text(doc, 0, [2, 0, 2], "autre chose", None) == ("[Affichage « T »] → c ; a ; autre chose",
-                                                                         ["c", "a", "autre chose"])
+                                                                         ["c", "a", "autre chose"], None)
     with pytest.raises(ValueError):
         display.answer_text(doc, 0, [], "  ", None)
+
+
+def test_a_form_is_checked_then_sent_back(engine, tmp_path):
+    task, events = run(engine, present({"titre": "Devis", "blocs": [
+        {"type": "formulaire", "titre": "Devis Dupont", "texte": "Corrige avant d'envoyer.", "bouton": "Valider le devis",
+         "champs": [
+             {"id": "client", "libelle": "Client", "valeur": "Dupont", "requis": True},
+             {"libelle": "Corps", "type": "zone", "valeur": "Bonjour,\nvoici le devis."},
+             {"id": "montant", "libelle": "Montant", "type": "nombre", "valeur": "1 200,50"},
+             {"id": "echeance", "libelle": "Échéance", "type": "date", "valeur": "demain"},
+             {"id": "tva", "libelle": "TVA", "type": "liste", "options": ["20 %", "10 %"], "valeur": "autre"},
+             {"id": "tva", "libelle": "Doublon", "type": "liste"},
+             {"id": "urgent", "libelle": "Urgent", "type": "case", "valeur": True, "requis": True},
+         ]}]}), tmp_path)
+    doc = displays(events)[0]
+    fields = {f["id"]: f for f in doc["blocs"][0]["champs"]}
+    assert list(fields) == ["client", "corps", "montant", "echeance", "tva", "urgent"]
+    assert fields["client"]["requis"] is True and fields["corps"]["type"] == "zone"
+    assert fields["corps"]["valeur"] == "Bonjour,\nvoici le devis."
+    assert fields["montant"]["valeur"] == "1200.5" and fields["echeance"]["valeur"] == ""
+    assert fields["tva"]["valeur"] == "" and fields["urgent"]["valeur"] == "oui"
+    assert doc["blocs"][0]["bouton"] == "Valider le devis"
+    assert "validation habituelle" in task["result"] and "formulaire (6 champs)" in task["result"]
+    tid, key = task["id"], doc["key"]
+    assert any(d.get("key") == key for d in task.get("waiting_displays") or [])
+    with pytest.raises(TaskError) as e:
+        engine.display_answer(tid, key, 0, valeurs={"client": "  ", "urgent": "oui"})
+    assert e.value.status == 400 and "requis" in str(e.value)
+    with pytest.raises(TaskError) as e:
+        engine.display_answer(tid, key, 0, valeurs={"client": "Martin", "tva": "nope", "urgent": "oui"})
+    assert e.value.status == 400 and "invalide" in str(e.value)
+    with pytest.raises(TaskError) as e:
+        engine.display_answer(tid, key, 0, valeurs={"client": "Martin", "urgent": "non"})
+    assert e.value.status == 400 and "Urgent" in str(e.value)
+    engine.display_answer(tid, key, 0, valeurs={
+        "client": "Martin", "corps": "Bonjour Martin,\nle devis suit.", "montant": "99",
+        "echeance": "2026-11-02", "tva": "10 %", "urgent": "oui",
+    })
+    settle(engine, tid)
+    sent = next(ev["data"]["text"] for ev in reversed(engine.store.events(tid))
+                if ev["kind"] == "user" and ev["data"].get("text", "").startswith("[Affichage"))
+    assert sent.startswith("[Affichage « Devis »] Formulaire « Devis Dupont » :")
+    assert "Client : Martin" in sent and "Corps :\nBonjour Martin,\nle devis suit." in sent
+    assert "Montant : 99" in sent and "Échéance : 2026-11-02" in sent and "TVA : 10 %" in sent and "Urgent : oui" in sent
+    answers = [ev["data"] for ev in engine.store.events(tid) if ev["kind"] == "display_answer" and not ev["data"].get("annule")]
+    assert answers[-1]["valeurs"]["client"] == "Martin" and answers[-1]["valeurs"]["urgent"] == "oui"
+    with pytest.raises(TaskError) as e:
+        engine.display_answer(tid, key, 0, valeurs={"client": "Martin", "urgent": "oui"})
+    assert e.value.status == 409
+    assert not engine.tasks[tid].get("waiting_displays")
 
 
 def check(*blocks, trusted=()):
@@ -167,6 +217,60 @@ def test_size_limits():
     doc, problems, _ = check(*[{"type": "texte", "texte": "a"}] * 25)
     assert len(doc["blocs"]) == 20 and "au-delà de 20" in problems[0]
     assert display.key_of("  mon id / 2 ") == "mon-id-2" and display.key_of("").startswith("d-")
+
+
+def test_cards_run_without_another_turn(engine, tmp_path):
+    folder = tmp_path / "reseau"
+    folder.mkdir()
+    engine.save_project({"folder": str(folder), "name": "Network", "profile": "work"})
+    task, events = run(engine, present({"titre": "Brief", "blocs": [{"type": "cartes", "elements": [
+        {"titre": "Etimia", "texte": "Pas de réponse sur les accès admin.", "boutons": [
+            {"libelle": "Ouvrir", "ouvrir": {"outil": "mail", "contient": "accès admin"}},
+            {"libelle": "Retenir", "suivi": "En attente Etimia, accès admin"},
+            {"libelle": "Terminée", "terminee": {"ligne": "Tâche accès admin terminée"}},
+        ]},
+        {"titre": "Suite", "boutons": [
+            {"libelle": "Routine", "routine": {"nom": "Relance Etimia", "description": "Relancer le support",
+                                               "consigne": "Vérifie si Etimia a répondu.",
+                                               "planification": {"type": "quotidienne", "heure": "09:00"}}},
+            {"libelle": "Consigne", "consigne": {"texte": "Prévenir si Etimia n'a pas répondu sur les accès admin.",
+                                                 "description": "Attente Etimia"}},
+            {"libelle": "Mauvais", "routine": {"nom": "X", "consigne": "y", "planification": {"jours": ["jamais"]}}},
+        ]},
+    ]}]}), folder)
+    shown = displays(events)[0]
+    cards = shown["blocs"][0]["elements"]
+    assert [b["faire"] for b in cards[0]["boutons"]] == ["ouvrir", "suivi", "terminee"]
+    assert [b["faire"] for b in cards[1]["boutons"]] == ["routine", "consigne"]
+    assert "planification" in json.dumps([e["data"] for e in events if e["kind"] == "tool_result"], ensure_ascii=False)
+    tid, key = task["id"], shown["key"]
+    users = lambda: [e for e in engine.store.events(tid) if e["kind"] == "user"]
+    before = len(users())
+    with pytest.raises(TaskError, match="Aucun résultat"):
+        engine.display_act(tid, key, 0, 0, 0)
+    assert len(users()) == before
+    kept = engine.display_act(tid, key, 0, 0, 1)
+    assert kept["note"].startswith("Ajouté")
+    memo = (folder / "BRIEF.md").read_text(encoding="utf-8")
+    assert "En attente Etimia, accès admin" in memo
+    with pytest.raises(TaskError, match="Déjà fait"):
+        engine.display_act(tid, key, 0, 0, 1)
+    done = engine.display_act(tid, key, 0, 0, 2)
+    assert "lecture seule" in done["note"]
+    assert "Tâche accès admin terminée" in (folder / "BRIEF.md").read_text(encoding="utf-8")
+    assert len(users()) == before
+    offered = engine.display_act(tid, key, 0, 1, 0)
+    assert not engine.routines
+    prop = offered["proposition"]
+    assert prop["kind"] == "proposal" and prop["input"]["quoi"] == "routine"
+    engine.decide(tid, prop["id"], "allow", answers={"activer": "non"})
+    saved = next(iter(engine.routines.values()))
+    assert saved.name == "Relance Etimia" and saved.enabled is False and saved.preset == "lecture"
+    assert engine._project(str(folder)).mails.instructions == ""
+    consigne = engine.display_act(tid, key, 0, 1, 1)
+    engine.decide(tid, consigne["proposition"]["id"], "allow")
+    assert engine._project(str(folder)).mails.instructions == "Prévenir si Etimia n'a pas répondu sur les accès admin."
+    assert len(users()) == before
 
 
 def test_server_lists_the_tool(engine):

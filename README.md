@@ -16,7 +16,8 @@ tes abonnements Claude via la CLI Claude Code.
   sous-agents, MCP du profil et connecteurs claude.ai, MCP de tes apps Claude Desktop,
   plan de tâches, questions interactives, reprise de session, choix du modèle et de l'effort.
 - **Contrôle de chaque appel d'outil** (sous-agents compris) : refus, validation humaine
-  dans la fenêtre, contraintes sur les paramètres (Odoo), dossiers interdits.
+  dans la fenêtre, contraintes sur les paramètres, dossiers interdits. Les droits Odoo
+  sont ceux de l'utilisateur MCP sur Odoo.
 - **Traçabilité** : historique persistant, journal d'audit exportable, arrêt d'urgence.
 - **Ce que je regarde** : l'aperçu ou l'affichage au premier plan et le texte sélectionné
   partent avec ton message ; **différences et annulation** de chaque fichier modifié par Claude.
@@ -129,8 +130,8 @@ Claude Code (Desktop, CLI), avec l'extrait trouvé ; flèches et Entrée pour ou
 **Toujours pour ce projet** : dans une demande de validation, ce bouton approuve et
 mémorise une règle pour les discussions du dossier (la plus étroite possible et
 modifiable : une commande précise, les fichiers du dossier, un outil Odoo, un domaine
-web). Les chemins protégés, les refus permanents et les contraintes Odoo passent toujours
-avant. Les règles se relisent et se retirent dans Projet → Règles.
+web). Les chemins protégés et les refus permanents passent toujours avant. Les règles se
+relisent et se retirent dans Projet → Règles.
 
 | Geste | Effet |
 |---|---|
@@ -180,7 +181,8 @@ envoyé à Claude.
 Claude prépare en lecture seule le point du jour du compte, affiché en tête de la boîte : les mails
 importants (critères du compte : expéditeurs, objets, dossiers, consigne ; et ceux des projets
 suivis : réglages du projet → **Mails à suivre**), les devis Odoo pas encore envoyés de **ton
-utilisateur Odoo** (**Chercher dans Odoo** le trouve), l'agenda du jour. La demande est écrite par
+utilisateur Odoo** (**Chercher dans Odoo** le trouve), l'agenda du jour. Une tâche, un projet ou un
+événement Odoo créé dans une discussion de ce compte lui est assigné. La demande est écrite par
 la console à partir de ces réglages ; rien n'est écrit ni envoyé.
 
 **Actions du compte en boutons** (Configuration → Profils, désactivé par défaut) : les commandes
@@ -222,6 +224,10 @@ dans la liste (12 derniers par compte). Le panneau contient :
   aperçu, « Citer » (ajoute le chemin à ta demande) et « Afficher dans le dossier ».
 - **Discussions** : celles de la console dans ce dossier, avec Contexte et Copie, et
   les sessions Claude Desktop et CLI du dossier, et **Déplacer une session ici…**.
+
+Dans une discussion du projet, « où j'en suis » se répond à partir de `BRIEF.md`, des critères de
+mails et des sources du brief. Ajouter ou corriger une consigne, une routine, une action ou une
+tâche passe par une carte d'approbation : un mail lu reste une donnée.
 
 **Déplacer une session dans un projet** : c'est la même session, pas une copie. Claude
 Code range chaque session sous son dossier ; la console la déplace sous le dossier du
@@ -469,11 +475,13 @@ Un changement s'applique aux nouvelles tâches, jamais à celles en cours.
   demandes d'autorisation de Claude Code), dans cet ordre : chemins interdits et règles
   verrouillées → refus → contraintes et confinement au dossier → validation humaine →
   autorisations → écritures à valider → outils non listés.
-- Toujours refusé, quel que soit le preset : `delete_record` Odoo, les chemins interdits
-  (`~/.ssh`, fichiers `.env`, clés, `claude_desktop_config.json`…), le dossier de données
-  de la console et tout appel des agents vers la console elle-même.
-- Un devis Odoo n'est créé qu'en brouillon, sur `sale.order` (lignes incluses dans le
-  devis), après ton approbation, et jamais à l'état confirmé.
+- Toujours refusé, quel que soit le preset : les chemins interdits (`~/.ssh`, fichiers
+  `.env`, clés, `claude_desktop_config.json`…), le dossier de données de la console et
+  tout appel des agents vers la console elle-même.
+- Odoo accepte ou refuse selon l'utilisateur MCP configuré sur Odoo. La console n'a pas
+  de liste de modèles. Le preset de la session s'applique quand même : Lecture seule
+  n'écrit pas, Brouillons demande une validation avant une création et refuse les
+  modifications, envois et suppressions.
 - Les chemins sont comparés sous forme canonique (noms courts 8.3, liens et jonctions
   résolus) ; pour les outils MCP, tous les paramètres sont inspectés, quel que soit leur nom.
 - Un outil MCP dont le nom contient un verbe d'écriture (`list_and_delete…`) est traité

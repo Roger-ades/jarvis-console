@@ -51,28 +51,32 @@ def test_read_outside_workdir_is_confined(tmp_path):
     assert d(pol, "Read", {"file_path": str(tmp_path / "elsewhere.txt")}) == "deny"
 
 
-# ------------------------------------------------ Odoo rules (acceptance criteria)
+# ------------------------------------------------ Odoo follows the session preset; the MCP user on Odoo decides the models
 
-@pytest.mark.parametrize("preset", ["lecture", "brouillons", "edition", "assiste", "complet"])
-def test_delete_record_always_denied(tmp_path, preset):
+@pytest.mark.parametrize("preset", ["lecture", "brouillons", "edition"])
+def test_delete_record_is_refused_by_a_preset_that_does_not_write(tmp_path, preset):
     pol, _ = policy(preset, tmp_path)
     v = pol.evaluate("mcp__odoo__delete_record", {"model": "sale.order", "record_id": 3})
-    assert v.decision == "deny" and v.locked
+    assert v.decision == "deny" and not v.locked
 
 
-def test_delete_record_denied_even_without_config_rules(tmp_path):
+def test_delete_record_is_not_a_permanent_refusal(tmp_path):
     pol, _ = policy("complet", tmp_path, rules=False)
-    assert d(pol, "mcp__odoo__delete_record", {"record_id": 1}) == "deny"
+    v = pol.evaluate("mcp__odoo__delete_record", {"record_id": 1})
+    assert v.decision == "default" and not v.locked
 
 
-def test_quote_creation_needs_approval_and_constraints(tmp_path):
+def test_odoo_writes_follow_the_preset(tmp_path):
     pol, _ = policy("brouillons", tmp_path)
-    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order", "values": {"partner_id": 7}}) == "ask"
-    assert d(pol, "mcp__odoo__create_record", {"model": "res.partner", "values": {}}) == "deny"
-    assert d(pol, "mcp__odoo__create_record", {"values": {}}) == "deny"
-    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order", "values": {"state": "sale"}}) == "deny"
-    assert d(pol, "mcp__odoo__update_record", {"model": "sale.order", "record_id": 1, "values": {}}) == "deny"
+    for model in ("sale.order", "res.partner", "project.task", "sale.order.line"):
+        assert d(pol, "mcp__odoo__create_record", {"model": model, "values": {"name": "x"}}) == "ask"
+    assert d(pol, "mcp__odoo__create_record", {"values": {}}) == "ask"
+    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order", "values": {"state": "sale"}}) == "ask"
+    assert d(pol, "mcp__odoo__update_record", {"model": "project.task", "record_id": 1, "values": {}}) == "deny"
     assert d(pol, "mcp__odoo__post_message", {"record_id": 1}) == "deny"
+    assisted, _ = policy("assiste", tmp_path)
+    assert d(assisted, "mcp__odoo__create_record", {"model": "project.task", "values": {"name": "Relance"}}) == "ask"
+    assert d(assisted, "mcp__odoo__update_record", {"model": "project.task", "record_id": 1, "values": {}}) == "ask"
 
 
 def test_gmail_drafts_but_never_send(tmp_path):

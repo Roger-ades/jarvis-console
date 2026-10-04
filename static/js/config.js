@@ -259,7 +259,14 @@ const DAY_LETTERS = ["L", "M", "M", "J", "V", "S", "D"];
 const DAY_FULL = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
 
 /** Configuration → Profils → Brief du matin (docs/boite-de-reception.md): off until turned on; the console
- * writes the request from these settings at each run, with the preset Lecture seule. */
+ * writes the request from these settings at each run. Permissions default to Lecture seule. */
+function briefPresetOptions(current) {
+  const id = current || "lecture";
+  return (draft.presets || [])
+    .filter((p) => (p.enabled && !p.require_confirm) || p.id === id)
+    .map((p) => [p.id, p.name]);
+}
+
 function briefBox(p, i) {
   const base = `profiles.${i}.brief`;
   const b = getPath(base) || {};
@@ -281,12 +288,15 @@ function briefBox(p, i) {
   let users = [];
   const userLabel = (u) => `${u.name}${u.login ? ` (${u.login})` : ""}`;
   const userEl = h("input", { type: "text", value: b.odoo_user || "", list: listId, placeholder: "vide : l'utilisateur du serveur Odoo" });
-  const userNote = h("small", {}, b.odoo_user_id ? `Utilisateur Odoo n° ${b.odoo_user_id}.` : "Ses devis pas encore envoyés (état « draft ») comptent ; les autres vendeurs non.");
+  const userNote = h("small", {}, b.odoo_user_id
+    ? `Utilisateur Odoo n° ${b.odoo_user_id}. Les tâches, projets et événements créés lui sont assignés.`
+    : "Ses devis pas encore envoyés comptent. Les tâches, projets et événements créés lui sont assignés.");
   userEl.addEventListener("input", () => {
     const u = users.find((x) => userLabel(x) === userEl.value || x.name === userEl.value);
     setPath(`${base}.odoo_user`, u ? u.name : userEl.value.trim());
     setPath(`${base}.odoo_user_id`, u ? u.id : null);
-    userNote.textContent = u ? `Utilisateur Odoo n° ${u.id}.` : "Nom libre : Claude cherchera ce vendeur dans Odoo.";
+    userNote.textContent = u ? `Utilisateur Odoo n° ${u.id}. Les tâches, projets et événements créés lui sont assignés.`
+      : "Nom libre : Claude cherchera cette personne dans Odoo, puis lui assignera tâches, projets et événements.";
   });
   const find = h("button", { type: "button", class: "btn small" }, "Chercher dans Odoo");
   find.addEventListener("click", async () => {
@@ -318,7 +328,7 @@ function briefBox(p, i) {
   return h("div", { class: "subcard brief-box" },
     h("div", { class: "subcard-head" }, h("h4", {}, "Brief du matin"), runNow),
     h("p", { class: "lead" }, "Un point du jour en tête de la boîte de réception : mails importants, devis Odoo pas encore envoyés, agenda. "
-      + "Claude lit avec le preset Lecture seule et ne modifie rien ; la demande est écrite par la console à partir de ces réglages."),
+      + "Les autorisations sont choisies ci-dessous (Lecture seule par défaut). La demande est écrite par la console à partir de ces réglages."),
     grid(
       check("Activer le brief de ce compte", `${base}.enabled`, { help: "Désactivé par défaut. Une routine « Brief du matin » apparaît alors dans Routines." }),
       field("Quand", h("div", { class: "row" }, timeEl, dayBtns), "S'il était arrêté à l'heure prévue, il est lancé au démarrage de la console."),
@@ -328,11 +338,14 @@ function briefBox(p, i) {
       h("span", {}),
       lines("Mails importants : expéditeurs ou domaines", `${base}.important.senders`, { rows: 3, cls: "", help: "Un par ligne : une adresse ou un domaine (client.fr)." }),
       lines("Mots dans l'objet", `${base}.important.subjects`, { rows: 3, cls: "", help: "Un par ligne." }),
+      lines("Mots dans le corps", `${base}.important.bodies`, { rows: 2, cls: "", help: "Un par ligne. Cherchés dans le corps du mail, pas seulement dans l'objet." }),
       lines("Dossiers de la boîte mail", `${base}.important.folders`, { rows: 2, cls: "", help: "Un par ligne (vide : la boîte de réception)." }),
       area("Consigne pour les mails", `${base}.important.instructions`, { rows: 3,
         help: "En tes mots : ce qui compte en ce moment. Les critères des projets suivis (Projet → réglages → Mails à suivre) s'y ajoutent." }),
       field("Mon utilisateur Odoo", h("div", { class: "row" }, userEl, find, datalist), null),
       h("div", { class: "field" }, userNote),
+      select("Autorisations", `${base}.preset`, briefPresetOptions(b.preset),
+        { help: "Lecture seule par défaut. Un autre preset s'applique à ce brief, avec les validations qu'il demande." }),
       select("Modèle", `${base}.model`, modelOptions([["", "défaut du compte"]])),
       select("Effort", `${base}.effort`, EFFORTS),
     ));
@@ -473,10 +486,12 @@ function tabIntegrations() {
     section("Règles par outil (tous presets)", "S'ajoutent aux règles du preset. Motifs : nom exact, * pour plusieurs outils (mcp__odoo__*), Outil(motif) pour Bash, Read, WebFetch(domain:…).",
       h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Motif"), h("th", {}, "Décision"), h("th", {}, "Note"), h("th", {}))), rulesBody),
       h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: () => { draft.tool_rules.push({ pattern: "mcp__serveur__outil", decision: "ask", locked: false, note: "" }); markDirty(); renderRules(); } } }, "Ajouter une règle")),
-      h("p", { class: "lead" }, "Toujours appliqué par la console, même si la règle est retirée ici : ", ...meta.locked_rules.map((r) => h("span", { class: "tag lock" }, `${r.pattern} → refus`)))),
+      (meta.locked_rules || []).length
+        ? h("p", { class: "lead" }, "Toujours appliqué par la console, même si la règle est retirée ici : ", ...meta.locked_rules.map((r) => h("span", { class: "tag lock" }, `${r.pattern} → refus`)))
+        : null),
     section("Contraintes sur les paramètres", "Refuse un appel si un paramètre sort des valeurs permises. Chemin pointé dans les paramètres de l'outil (ex. model, values.state). Valeurs séparées par des virgules.",
       h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Outil"), h("th", {}, "Paramètre"), h("th", {}, "Valeurs permises"), h("th", {}, "Valeurs interdites"), h("th", {}, "Note"), h("th", {}))), consBody),
-      h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: () => { draft.constraints.push({ tool: "mcp__odoo__create_record", path: "model", allowed: ["sale.order"], forbidden: null, note: "" }); markDirty(); renderCons(); } } }, "Ajouter une contrainte"))),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: () => { draft.constraints.push({ tool: "mcp__serveur__outil", path: "champ", allowed: ["valeur"], forbidden: null, note: "" }); markDirty(); renderCons(); } } }, "Ajouter une contrainte"))),
   );
   return out;
 }
@@ -564,6 +579,9 @@ function tabInterface() {
       check("Sons de notification", "ui.sounds"),
       check("Joindre ce que je regarde", "ui.regard",
         { help: "L'aperçu ou l'affichage au premier plan et le texte sélectionné partent avec ton message (une puce « Regard » le montre, sa croix le retire)." }))),
+    section("Briefs", "Le brief du matin du compte et le brief de chaque projet.", grid(
+      check("Afficher le rapport dans une fenêtre", "ui.brief_show",
+        { help: "À la fin d'un brief, son rapport s'ouvre tout seul. Décoché : il reste en tête de la boîte de réception. Un projet peut forcer oui ou non." }))),
     section("Aperçus", "Images, PDF, pages web et fichiers des dossiers de la tâche s'affichent dans la console.", grid(
       check("Ouvrir les liens web dans l'aperçu intégré", "ui.link_preview",
         { help: "Ctrl/⌘ + clic ouvre toujours le vrai navigateur. Certains sites refusent l'affichage intégré." }),

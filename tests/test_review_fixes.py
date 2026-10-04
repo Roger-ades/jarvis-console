@@ -102,11 +102,11 @@ def test_wrappers_and_encoded_commands_are_never_vouched(tmp_path):
     assert d(pol, "PowerShell", {"command": "powershell -enc ZQBjAGgAbwAgAGgAaQA="}) != "allow"
 
 
-# 6 (medium) — no quote-line creation (it would modify an existing order)
-def test_quote_lines_cannot_be_created_on_their_own(tmp_path):
+# a create is asked for, whichever the Odoo model: the MCP user on Odoo accepts or refuses it
+def test_any_odoo_model_can_be_proposed_for_creation(tmp_path):
     pol = policy("brouillons", tmp_path)
-    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order.line", "values": {"order_id": 12}}) == "deny"
-    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order", "values": {"partner_id": 3}}) == "ask"
+    assert d(pol, "mcp__odoo__create_record", {"model": "sale.order.line", "values": {"order_id": 12}}) == "ask"
+    assert d(pol, "mcp__odoo__create_record", {"model": "project.task", "values": {"name": "Relance"}}) == "ask"
 
 
 # 8 (low) — a decision is taken once, whoever comes first

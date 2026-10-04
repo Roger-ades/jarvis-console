@@ -13,6 +13,7 @@ import json
 import math
 import re
 import secrets
+import unicodedata
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -20,7 +21,8 @@ from .config import trusted_url, web_domain
 
 WHERE = ("conversation", "fenetre", "modale")
 KINDS = ("texte", "images", "resultats", "tableau", "graphique", "fiche", "chronologie", "chiffres",
-         "progression", "schema", "fichiers", "choix", "actions", "application")
+         "progression", "schema", "fichiers", "choix", "actions", "cartes", "formulaire", "application")
+FIELD_TYPES = ("texte", "zone", "nombre", "date", "liste", "case")
 CHARTS = ("barres", "courbe", "secteurs")
 MAX_BLOCKS = 20
 MAX_JSON = 600 * 1024
@@ -34,11 +36,16 @@ TOOL_SPEC = {
     "description": (
         "Compose un affichage pour l'utilisateur dans la console JARVIS : images ou galerie, résultats de "
         "recherche en cartes, tableau, graphique, fiche (un client, un devis, un contact…), chronologie ou agenda, "
-        "chiffres clés, progression, schéma SVG, fichiers, et des choix ou boutons auxquels il répond d'un clic. "
+        "chiffres clés, progression, schéma SVG, fichiers, des choix ou boutons auxquels il répond d'un clic, "
+        "un formulaire prérempli (un mail, un devis) qu'il corrige puis valide, "
+        "et des cartes dont les boutons sont exécutés par la console (ouvrir un résultat déjà lu, retenir une ligne, "
+        "noter une tâche terminée, proposer une routine ou une consigne). "
         "La console dessine chaque bloc : donne les données, pas de mise en forme. À utiliser dès que l'utilisateur "
-        "demande de montrer, d'afficher, de comparer ou de visualiser quelque chose, et quand un affichage est plus "
-        "clair qu'un long texte. Une réponse à un choix ou à un bouton t'arrive comme un nouveau message de "
-        "l'utilisateur, préfixé par « [Affichage …] ». Pour faire évoluer un affichage (progression, tableau qui se "
+        "demande de montrer, d'afficher, de comparer ou de visualiser quelque chose, quand un affichage est plus "
+        "clair qu'un long texte, et pour faire corriger un texte déjà rédigé (un formulaire plutôt qu'une suite de "
+        "questions). Une réponse à un choix, à un bouton ou à un formulaire t'arrive comme un nouveau message de "
+        "l'utilisateur, préfixé par « [Affichage …] ». Le formulaire ne crée ni n'envoie rien : une action qui suit "
+        "reste soumise à la validation habituelle. Pour faire évoluer un affichage (progression, tableau qui se "
         "remplit), rappelle l'outil avec le même id. Pour un fichier seul, utilise plutôt « afficher » ; pour le "
         "résultat brut d'un outil (un mail…), « afficher_resultat »."),
     "inputSchema": {
@@ -67,7 +74,15 @@ TOOL_SPEC = {
                         "elements": {"type": "array", "items": {"type": "object"}, "description":
                                      "resultats : [{titre, url, extrait, source, image}] ; "
                                      "chronologie : [{quand, titre, texte}] (quand : date ISO ou texte) ; "
-                                     "chiffres : [{libelle, valeur, evolution, detail}]."},
+                                     "chiffres : [{libelle, valeur, evolution, detail}] ; "
+                                     "cartes : [{titre, texte, boutons}]. Chaque bouton a exactement une action : "
+                                     "{ouvrir: {outil, contient, id, rang}} ouvre un résultat d'outil déjà reçu "
+                                     "(contient doit y figurer tel quel) ; {suivi: \"ligne\"} l'ajoute au fichier de suivi ; "
+                                     "{terminee: {ligne, message}} note la tâche terminée (et, si le brief peut écrire, "
+                                     "redemande de la clôturer) ; {routine: {nom, consigne, description, planification}} "
+                                     "et {consigne: {texte, description}} ouvrent une carte de validation, rien n'est "
+                                     "enregistré avant ; {message: \"…\"} renvoie ce texte à la discussion. "
+                                     "Huit cartes, quatre boutons chacune."},
                         "colonnes": {"type": "array", "items": {"type": "string"}, "description": "tableau : en-têtes."},
                         "lignes": {"type": "array", "items": {"type": "array"}, "description": "tableau : lignes de cellules."},
                         "forme": {"type": "string", "enum": list(CHARTS), "description": "graphique : barres, courbe ou secteurs."},
@@ -75,7 +90,11 @@ TOOL_SPEC = {
                         "series": {"type": "array", "items": {"type": "object"},
                                    "description": "graphique : [{nom, valeurs: [nombres]}], 8 au plus (secteurs : une)."},
                         "unite": {"type": "string", "description": "graphique : unité des valeurs (€, h, %…)."},
-                        "champs": {"type": "array", "items": {"type": "object"}, "description": "fiche : [{libelle, valeur}]."},
+                        "champs": {"type": "array", "items": {"type": "object"}, "description":
+                                   "fiche : [{libelle, valeur}]. formulaire : [{id, libelle, type, valeur, requis, aide, options}]. "
+                                   "type : texte, zone (texte long, un mail), nombre, date (AAAA-MM-JJ), liste (avec options), "
+                                   "case. valeur préremplit le champ. requis : il doit être rempli."},
+                        "bouton": {"type": "string", "description": "formulaire : libellé du bouton (Valider par défaut)."},
                         "lien": {"type": "string", "description": "fiche : adresse https:// de l'enregistrement."},
                         "image": {"type": "string", "description": "fiche : image (chemin ou https://)."},
                         "valeur": {"type": "number", "description": "progression : 0 à 100."},
@@ -141,6 +160,57 @@ def _num(v):
 
 def _list(v, n: int) -> list:
     return list(v)[:n] if isinstance(v, (list, tuple)) else []
+
+
+def _field_id(raw, j: int) -> str:
+    s = unicodedata.normalize("NFKD", _s(raw, 40).lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9_-]+", "-", s).strip("-")[:40]
+    return s or f"c{j + 1}"
+
+
+def _field_prefill(kind: str, value, options: list[str]) -> str:
+    """The value Claude wrote, kept only when it matches the field type."""
+    if kind == "case":
+        return "oui" if value in (True, 1, "1", "oui", "true", "vrai") else ""
+    if kind == "nombre":
+        n = _num(value)
+        if n is None:
+            return ""
+        return str(int(n)) if n == int(n) else str(n)
+    if kind == "date":
+        s = _s(value, 10)
+        return s if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) else ""
+    if kind == "liste":
+        s = _s(value, 200)
+        return s if s in options else ""
+    return _s(value, 8000 if kind == "zone" else 2000)
+
+
+def _field_answer(kind: str, raw, options: list[str]) -> str | None:
+    """The value the user sent, or None when it does not match the type."""
+    if kind == "case":
+        return "oui" if raw in (True, 1, "1", "oui", "true", "vrai") else "non"
+    if isinstance(raw, (dict, list)) or raw is None:
+        raw = ""
+    if kind == "nombre":
+        if str(raw).strip() == "":
+            return ""
+        n = _num(raw)
+        if n is None:
+            return None
+        return str(int(n)) if n == int(n) else str(n)
+    if kind == "date":
+        s = _s(raw, 10)
+        if s and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            return None
+        return s
+    if kind == "liste":
+        s = _s(raw, 200)
+        if s and s not in options:
+            return None
+        return s
+    return _s(raw, 8000 if kind == "zone" else 2000)
 
 
 def key_of(raw) -> str:
@@ -304,6 +374,42 @@ class Checker:
             return None
         return {"champs": fields, **({"lien": link} if link else {}), **({"image": img} if img else {})}
 
+    def _formulaire(self, b, where):
+        """A prefilled sheet the user corrects. Nothing is sent or created: the values come back as a message."""
+        raw = b.get("champs")
+        if isinstance(raw, dict):
+            items = [{**(v if isinstance(v, dict) else {"valeur": v}), "id": k} for k, v in list(raw.items())[:24]]
+        else:
+            items = _list(raw, 24)
+        fields, seen = [], set()
+        for j, f in enumerate(items):
+            if not isinstance(f, dict):
+                continue
+            label = _s(f.get("libelle") or f.get("id"), 120)
+            if not label:
+                continue
+            kind = _s(f.get("type") or f.get("sorte"), 20).lower()
+            if kind not in FIELD_TYPES:
+                kind = "zone" if len(_s(f.get("valeur"), 8000)) > 200 else "texte"
+            fid = _field_id(f.get("id") or label, j)
+            if fid in seen:
+                fid = f"{fid}-{j + 1}"[:40]
+            seen.add(fid)
+            options = [_s(o, 200) for o in _list(f.get("options"), 30)]
+            options = [o for o in options if o]
+            if kind == "liste" and not options:
+                self.problems.add(where, f"« {label} » : une liste sans option")
+                continue
+            value = _field_prefill(kind, f.get("valeur"), options)
+            fields.append({"id": fid, "libelle": label, "type": kind, "valeur": value, "requis": bool(f.get("requis")),
+                           **({"options": options} if kind == "liste" else {}),
+                           **({"aide": _s(f.get("aide"), 300)} if _s(f.get("aide")) else {})})
+        if not fields:
+            self.problems.add(where, "formulaire sans champ")
+            return None
+        intro = _s(b.get("texte"), 2000)
+        return {"champs": fields, "bouton": _s(b.get("bouton"), 40) or "Valider", **({"texte": intro} if intro else {})}
+
     def _chronologie(self, b, where):
         items = [{"quand": _s(it.get("quand") or it.get("date"), 60), "titre": _s(it.get("titre"), 300),
                   "texte": _s(it.get("texte"), 1500)}
@@ -392,6 +498,121 @@ class Checker:
             return None
         return {"boutons": buttons}
 
+    def _cartes(self, b, where):
+        """Cards whose buttons the console runs on a click. One action per button, taken from the stored card."""
+        from . import project_tools
+        cards = []
+        for j, x in enumerate(_list(b.get("elements"), 8)):
+            if not isinstance(x, dict):
+                continue
+            title = _s(x.get("titre"), 120)
+            if not title:
+                continue
+            buttons = []
+            for k, btn in enumerate(_list(x.get("boutons"), 4)):
+                got = self._card_button(btn, f"{where}, carte {j + 1}, bouton {k + 1}", project_tools.schedule)
+                if got:
+                    buttons.append(got)
+            if not buttons:
+                self.problems.add(f"{where}, carte {j + 1}", "aucun bouton")
+                continue
+            card = {"titre": title, "boutons": buttons}
+            text = _s(x.get("texte"), 500)
+            if text:
+                card["texte"] = text
+            cards.append(card)
+        if not cards:
+            self.problems.add(where, "aucune carte")
+            return None
+        return {"elements": cards}
+
+    def _card_button(self, btn, where: str, schedule) -> dict | None:
+        if not isinstance(btn, dict):
+            return None
+        label = _s(btn.get("libelle"), 60)
+        if not label:
+            return None
+        kinds = [k for k in ("ouvrir", "message", "suivi", "terminee", "routine", "consigne")
+                 if btn.get(k) not in (None, "", {})]
+        if len(kinds) != 1:
+            self.problems.add(where, "un bouton a exactement une action : ouvrir, message, suivi, terminee, routine ou consigne")
+            return None
+        kind, raw = kinds[0], btn.get(kinds[0])
+        if kind == "ouvrir":
+            if not isinstance(raw, dict):
+                self.problems.add(where, "ouvrir est un objet")
+                return None
+            spec = {}
+            for key, limit in (("outil", 80), ("contient", 200), ("id", 80)):
+                v = _s(raw.get(key), limit)
+                if v:
+                    spec[key] = v
+            if raw.get("rang") not in (None, ""):
+                try:
+                    spec["rang"] = max(1, min(50, int(raw.get("rang"))))
+                except (TypeError, ValueError):
+                    self.problems.add(where, "rang invalide")
+                    return None
+            if not any(k in spec for k in ("outil", "contient", "id")):
+                self.problems.add(where, "ouvrir : indique l'outil, un extrait (contient) ou l'identifiant")
+                return None
+            return {"libelle": label, "faire": "ouvrir", "ouvrir": spec}
+        if kind == "message":
+            msg = _s(raw, 2000) if isinstance(raw, str) else ""
+            if not msg:
+                self.problems.add(where, "message vide")
+                return None
+            return {"libelle": label, "faire": "message", "message": msg}
+        if kind == "suivi":
+            line = _s(raw, 200) if isinstance(raw, str) else ""
+            if not line:
+                self.problems.add(where, "ligne vide")
+                return None
+            return {"libelle": label, "faire": "suivi", "ligne": line}
+        if kind == "terminee":
+            if isinstance(raw, str):
+                line, msg = _s(raw, 200), ""
+            elif isinstance(raw, dict):
+                line, msg = _s(raw.get("ligne"), 200), _s(raw.get("message"), 2000)
+            else:
+                line, msg = "", ""
+            if not line:
+                self.problems.add(where, "ligne vide")
+                return None
+            out = {"libelle": label, "faire": "terminee", "ligne": line}
+            if msg:
+                out["message"] = msg
+            return out
+        if kind == "routine":
+            if not isinstance(raw, dict):
+                self.problems.add(where, "routine est un objet")
+                return None
+            name, body = _s(raw.get("nom"), 80), _s(raw.get("consigne"), 4000)
+            if not name or not body:
+                self.problems.add(where, "routine : nom et consigne requis")
+                return None
+            plan = raw.get("planification") if isinstance(raw.get("planification"), dict) else {}
+            try:
+                schedule(plan)
+            except ValueError as exc:
+                self.problems.add(where, f"planification : {exc}")
+                return None
+            return {"libelle": label, "faire": "routine", "routine": {
+                "nom": name, "consigne": body, "description": _s(raw.get("description"), 300) or name,
+                "planification": plan}}
+        if isinstance(raw, str):
+            text, description = _s(raw, 2000), ""
+        elif isinstance(raw, dict):
+            text = _s(raw.get("texte") or raw.get("consigne"), 2000)
+            description = _s(raw.get("description"), 300)
+        else:
+            text, description = "", ""
+        if not text:
+            self.problems.add(where, "consigne vide")
+            return None
+        return {"libelle": label, "faire": "consigne",
+                "consigne": {"texte": text, "description": description or _s(text, 120)}}
+
 
 def check(args: dict, file: Callable[[str], str], trusted: list[str], previous: dict | None = None) -> tuple[dict | None, list[str], int]:
     """(display, problems, web images waiting for a click) of one call of the tool."""
@@ -430,6 +651,10 @@ def summary(doc: dict) -> str:
             parts.append(f"{len(b['elements'])} résultat(s)")
         elif k == "graphique":
             parts.append(f"graphique en {b['forme']}")
+        elif k == "formulaire":
+            parts.append(f"formulaire ({len(b['champs'])} champs)")
+        elif k == "cartes":
+            parts.append(f"{len(b['elements'])} carte(s)")
         elif k == "application":
             parts.append(f"application ({len(b['html']) // 1024 + 1} Ko)")
         else:
@@ -437,13 +662,17 @@ def summary(doc: dict) -> str:
     return ", ".join(parts)
 
 
-def answer_text(doc: dict, index: int, choice: list[int] | None, other: str, button: int | None) -> tuple[str, list[str]]:
-    """The message sent to the session for a click in a display, and the labels shown as answered."""
+def answer_text(doc: dict, index: int, choice: list[int] | None, other: str, button: int | None,
+                valeurs: dict | None = None) -> tuple[str, list[str], dict | None]:
+    """The message sent to the session for a click in a display, the labels shown as answered,
+    and, for a form, the values the user kept."""
     blocks = doc.get("blocs") or []
     if not 0 <= index < len(blocks):
         raise ValueError("Bloc introuvable.")
     b = blocks[index]
     head = f"[Affichage « {doc.get('titre') or 'Affichage'} »]"
+    if b["type"] == "formulaire":
+        return _form_answer(head, b, valeurs if isinstance(valeurs, dict) else {})
     if b["type"] == "choix":
         picked = [b["options"][i] for i in dict.fromkeys(choice or []) if isinstance(i, int) and 0 <= i < len(b["options"])]
         if not b.get("multiple"):
@@ -453,13 +682,34 @@ def answer_text(doc: dict, index: int, choice: list[int] | None, other: str, but
         if not labels:
             raise ValueError("Aucune réponse choisie.")
         q = f" {b['question']}" if b.get("question") else ""
-        return f"{head}{q} → {' ; '.join(labels)}", labels
+        return f"{head}{q} → {' ; '.join(labels)}", labels, None
     if b["type"] == "actions":
         btns = b["boutons"]
         if button is None or not 0 <= button < len(btns) or "message" not in btns[button]:
             raise ValueError("Bouton introuvable.")
-        return f"{head} {btns[button]['message']}", [btns[button]["libelle"]]
+        return f"{head} {btns[button]['message']}", [btns[button]["libelle"]], None
     raise ValueError("Ce bloc n'attend pas de réponse.")
+
+
+def _form_answer(head: str, b: dict, got: dict) -> tuple[str, list[str], dict]:
+    lines, labels, clean = [], [], {}
+    for f in b.get("champs") or []:
+        text = _field_answer(f["type"], got.get(f["id"]), f.get("options") or [])
+        if text is None:
+            raise ValueError(f"« {f['libelle']} » : valeur invalide.")
+        if f.get("requis") and text in ("", "non") and f["type"] == "case":
+            raise ValueError(f"Le champ « {f['libelle']} » est requis.")
+        if f.get("requis") and f["type"] != "case" and not text:
+            raise ValueError(f"Le champ « {f['libelle']} » est requis.")
+        clean[f["id"]] = text
+        shown = text if len(text) <= 80 else text[:79].rstrip() + "…"
+        labels.append(f"{f['libelle']} : {shown or '—'}")
+        if f["type"] == "zone" and "\n" in text:
+            lines.append(f"{f['libelle']} :\n{text}")
+        else:
+            lines.append(f"{f['libelle']} : {text}")
+    name = b.get("titre") or "Formulaire"
+    return f"{head} Formulaire « {name} » :\n" + "\n".join(lines), labels, clean
 
 
 def host_of(url: str) -> str:

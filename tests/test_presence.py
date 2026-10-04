@@ -53,6 +53,42 @@ def test_a_project_lists_its_validated_actions_and_its_routines(engine, tmp_path
     assert text == system_prompt(engine, tid)
 
 
+def test_a_project_session_already_knows_where_things_stand(engine, tmp_path):
+    wd = tmp_path / "network"
+    wd.mkdir()
+    engine.save_project({"folder": str(wd), "name": "Network",
+                         "mails": {"instructions": "Prévenir si Etimia n'a pas répondu.", "subjects": ["admin"]},
+                         "brief": {"mails": True, "office_tasks": True, "calendar": False, "odoo": False}})
+    tid = later(engine, "bonjour", preset="assiste", workdir=str(wd))
+    text = system_prompt(engine, tid)
+    assert "où j'en suis" in text and "BRIEF.md" in text
+    assert "Prévenir si Etimia n'a pas répondu." in text and "admin" in text
+    sources = next(line for line in text.splitlines() if line.startswith("- Sources du point"))
+    assert "tâches Office 365" in sources and "mails du projet" in sources
+    assert "calendrier" not in sources and "Odoo" not in sources
+    assert "Rien n'est enregistré avant son clic" in text
+    assert text == system_prompt(engine, tid)
+
+
+def test_a_discussion_assigns_created_odoo_records_to_the_account_user(engine, tmp_path):
+    cfg = engine.cfg.model_copy(deep=True)
+    cfg.profile("work").brief.odoo_user = "Roger T."
+    cfg.profile("work").brief.odoo_user_id = 7
+    engine.cfg_store.save(cfg, "tests")
+    wd = tmp_path / "network"
+    wd.mkdir()
+    engine.save_project({"folder": str(wd), "name": "Network",
+                         "brief": {"odoo": True, "odoo_projects": ["Network"], "mails": False,
+                                   "office_tasks": False, "calendar": False}})
+    text = system_prompt(engine, later(engine, "bonjour", preset="assiste", workdir=str(wd)))
+    assert "Utilisateur Odoo du compte : n° 7, Roger T." in text
+    assert "user_ids = [7]" in text and "user_id = 7" in text and "calendar.event" in text
+    assert "project.task" in text and "project.project" in text
+    assert "va dans le projet « Network » (project_id)" in text
+    plain = system_prompt(engine, later(engine, "bonjour", preset="assiste"))
+    assert "user_ids = [7]" in plain and "project_id" not in plain
+
+
 def test_the_prompt_stays_the_same_from_one_turn_to_the_next(engine):
     tid = later(engine, "bonjour", preset="lecture")
     first = system_prompt(engine, tid)

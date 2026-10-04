@@ -17,7 +17,7 @@ SECTIONS = ("head", "todo", "read", "reminder")
 COUNTED = ("todo", "read", "reminder")
 APPROVE = ("hook", "permission")        # tool calls: approved or refused from the inbox
 ENDED = ("done", "error", "interrupted")  # a cancelled task never comes: the user stopped it
-CHOICE_BLOCKS = ("choix", "actions")    # display blocks that wait for a click
+CHOICE_BLOCKS = ("choix", "actions", "formulaire")    # display blocks that wait for a click
 EXCERPT = 300
 RUN_STATUSES = ("non lancée", "manquée", "reportée")
 

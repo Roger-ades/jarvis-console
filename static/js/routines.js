@@ -157,8 +157,9 @@ function row(r) {
       last ? h("div", { class: "hs" }, `Dernière : ${fmtDate(last.ts)} · `, h("span", { class: `run-st s-${last.status}` }, RUN_LABEL[last.status] || last.status),
         last.error ? ` — ${last.error}` : "") : null),
     h("button", { type: "button", class: "btn small", title: "Lancer maintenant", on: { click: (e) => { e.stopPropagation(); runNow(r); } } }, "Lancer"),
-    // a morning brief follows its account's settings: they turn it on or off
-    r.brief ? h("button", { type: "button", class: "btn small ghost", title: "Configuration → Profils → Brief du matin",
+    // a brief follows its account or its project: the console keeps the routine
+    (r.brief || r.brief_project) ? h("button", { type: "button", class: "btn small ghost",
+      title: r.brief_project ? "Réglages du projet → Brief du projet" : "Configuration → Profils → Brief du matin",
       on: { click: (e) => { e.stopPropagation(); editor(r); } } }, "Réglages") : toggle);
 }
 
@@ -190,6 +191,10 @@ function editor(r = null, defaults = {}, after = null) {
   if (r?.brief) {   // a morning brief: the console keeps it from the account's settings
     toast("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.");
     ctx.openConfig?.("profiles");
+    return;
+  }
+  if (r?.brief_project) {
+    toast("Le brief de ce projet se règle dans les réglages du projet.");
     return;
   }
   const done = after || load;

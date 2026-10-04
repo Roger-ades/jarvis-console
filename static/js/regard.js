@@ -18,7 +18,11 @@ function changed() { listeners.forEach((fn) => fn()); }
 
 /** What would go with the next message, or null. */
 export function get() { return settings.enabled() ? current : null; }
-export function clear() { if (current) { current = null; changed(); } }
+export function clear() {
+  clearTimeout(pending);
+  mute = Date.now() + 500; // the click keeps the selection: do not put the chip back from it
+  if (current) { current = null; changed(); }
+}
 /** After a message went with r: it is not sent again. */
 export function sent(r) { if (r && current === r) clear(); }
 
@@ -55,17 +59,21 @@ export function label(r, here = "") {
 
 /** A window brought forward: what it shows becomes what the user looks at (its selection kept). */
 function look(desc, wid = null) {
-  if (!desc) return;
+  if (!desc || Date.now() < mute) return;
   const keep = current && current.wid === wid && current.selection ? { selection: current.selection } : {};
   current = { ...desc, ...keep, wid };
   changed();
 }
 export { look };
 
+let front = null; // the window already in front: a click inside it must not rebuild the chip under the pointer
 wm.onFocus((id) => {
+  const moved = front !== id;
+  front = id;
+  if (!moved) return;
   const meta = wm.meta(id);
   if (meta?.regard) look(meta.regard, id);
-  else changed(); // (a bar shows the chip only while its window has the focus)
+  else changed(); // a bar shows the chip only while its window has the focus
 });
 // the window it came from is closed: the user no longer looks at it
 wm.onChange(() => { if (current?.wid && !wm.has(current.wid)) clear(); });
@@ -85,10 +93,12 @@ function sourceOf(el) {
 }
 
 let pending = 0;
+let mute = 0; // a click on the cross leaves the selection in place: ignore it coming back for a moment
 // every document: the page's, and each native window's in the desktop app
 wm.onDocument((doc) => doc.addEventListener("selectionchange", () => {
   clearTimeout(pending);
   pending = setTimeout(() => {
+    if (Date.now() < mute) return;
     const sel = doc.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return;
     const node = sel.anchorNode;
@@ -106,6 +116,15 @@ wm.onDocument((doc) => doc.addEventListener("selectionchange", () => {
 /** A chip that follows what would be sent. visible(): whether this bar shows it now; here: the
  * discussion of this bar ("" for the command bar). Returns {render, dispose}. */
 export function chip(list, { visible = () => true, here = "" } = {}) {
+  // A click in the window focuses it first (capture on .win) and used to rebuild this chip
+  // before the cross could run. The list itself stays, so the cross is caught here.
+  list.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest?.(".att-x")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clear();
+    list.ownerDocument.getSelection()?.removeAllRanges();
+  }, true);
   const render = () => {
     const r = get();
     list.replaceChildren();
@@ -121,7 +140,16 @@ export function chip(list, { visible = () => true, here = "" } = {}) {
     list.append(h("div", { class: "att ok regard", title: tip },
       h("span", { class: "att-ic", svg: "eye" }), h("span", { class: "att-name" }, h("b", {}, "Regard : "), what),
       h("button", { type: "button", class: "att-x", title: "Ne pas joindre", "aria-label": "Ne pas joindre ce que je regarde", svg: "x",
-        on: { click: (e) => { e.preventDefault(); clear(); } } })));
+        on: {
+          pointerdown: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const doc = e.currentTarget.ownerDocument;
+            clear();
+            doc.getSelection()?.removeAllRanges();
+          },
+          click: (e) => { e.preventDefault(); e.stopPropagation(); },
+        } })));
   };
   onChange(render);
   render();

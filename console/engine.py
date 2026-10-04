@@ -381,7 +381,7 @@ class Engine:
         return {"color": prof.color, "profile_name": prof.name} if prof else {}
 
     def public(self, t: dict) -> dict:
-        out = {k: v for k, v in t.items() if k not in ("spec", "queued_messages")}
+        out = {k: v for k, v in t.items() if k not in ("spec", "queued_messages", "offers")}
         out.update(self._live_profile(t))
         out["queued_messages"] = len(t.get("queued_messages") or [])
         spec = t.get("spec") or {}
@@ -458,7 +458,7 @@ class Engine:
                 t["status"] = "interrupted"
                 t["error"] = "Interrompue : le serveur s'est arrêté pendant l'exécution."
                 t["ended"] = t.get("ended") or time.time()
-                t["pending"] = []
+                t["pending"] = self._offers_pending(t)
                 t["queued_messages"] = []
                 self.store.save_task(t)
                 self.tasks[t["id"]] = t
@@ -970,7 +970,9 @@ class Engine:
             raise TaskError("Décision invalide.")
         run = self.runs.get(tid)
         appr = run.approvals.get(aid) if run else None
-        if not appr or appr.decision is not None:
+        if not appr:
+            return self._decide_offer(tid, aid, decision, message, answers)
+        if appr.decision is not None:
             raise TaskError("Cette validation n'est plus en attente.", 409)
         added = []
         if decision == "allow" and remember:
@@ -1177,9 +1179,12 @@ class Engine:
         proj.created = old.created if old else time.time()
         if old and "mails" not in data:
             proj.mails = old.mails
+        if old and "brief" not in data:
+            proj.brief = old.brief
         cfg.projects = [p for p in cfg.projects if norm(p.folder) != norm(folder)] + [proj]
         self.cfg_store.save(cfg, f"projet {proj.name}")
         self.bus.publish("projects", {"projects": self.projects()})
+        self.sync_briefs()
         return proj.model_dump()
 
     def delete_project(self, folder: str):
@@ -1190,6 +1195,7 @@ class Engine:
         cfg.projects = keep
         self.cfg_store.save(cfg, f"projet retiré : {Path(folder).name}")  # the folder itself is untouched
         self.bus.publish("projects", {"projects": self.projects()})
+        self.sync_briefs()
 
     def _project(self, folder: str | None):
         key = norm(folder or "")
@@ -1515,9 +1521,10 @@ class Engine:
             prop = self._proposal(tid, (msg.get("params") or {}).get("arguments") or {})
         except TaskError as exc:
             return reply("Rien de proposé : " + exc.message, True)
-        what = "une action" if prop["quoi"] == "action" else "une routine"
+        what = {"action": "une action", "routine": "une routine", "consigne": "une consigne"}.get(prop["quoi"], "quelque chose")
+        verb = "remplacer" if prop["quoi"] == "consigne" and prop.get("remplace") is True else "ajouter"
         appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=PROPOSE_TOOL, input=prop,
-                        reason=f"Claude propose d'ajouter {what} au projet « {prop['projet']} ».")
+                        reason=f"Claude propose de {verb} {what} au projet « {prop['projet']} ».")
 
         def answer(a: Approval):
             if a.decision != "allow":
@@ -1548,6 +1555,14 @@ class Engine:
 
         quoi = text("quoi", 20, True).lower()
         base = {"quoi": quoi, "projet": proj.name, "dossier": proj.folder, "description": text("description", 300, True)}
+        if quoi == "consigne":
+            flag = args.get("remplace")
+            replace = flag is True or str(flag or "").strip().lower() in ("1", "true", "oui", "vrai")
+            out = {**base, "nom": text("nom", 80) or "consigne", "consigne": text("consigne", 2000, True)}
+            if replace:
+                out["remplace"] = True
+                out["actuelle"] = (proj.mails.instructions or "").strip()
+            return out
         if quoi == "action":
             name = text("nom", 40, True).lower()
             if not project_tools.NAME.match(name):
@@ -1562,7 +1577,7 @@ class Engine:
             return {**base, "nom": name, "libelle": label, "parametre": hint, "consigne": body, "fichier": str(path),
                     "remplace": old, "contenu": project_tools.command_file(name, label, base["description"], hint, body)}
         if quoi != "routine":
-            raise TaskError("« quoi » vaut action ou routine.")
+            raise TaskError("« quoi » vaut action, routine ou consigne.")
         from .routines import Schedule
         action = text("action", 40).lower().lstrip("/")
         if action:
@@ -1588,6 +1603,8 @@ class Engine:
 
     def _apply_proposal(self, tid: str, prop: dict, answers: dict) -> str:
         t = self._get(tid)
+        if prop["quoi"] == "consigne":
+            return self._apply_consigne(t, prop)
         if prop["quoi"] == "action":
             path = Path(prop["fichier"])
             now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
@@ -1609,6 +1626,102 @@ class Engine:
                 if enabled and r.get("next_run") else "")
         return (f"Routine « {r['name']} » ({r['schedule_label']}) ajoutée au projet "
                 f"{'et activée' if enabled else 'mais désactivée : l’utilisateur l’activera'}.{when}")
+
+    def _apply_consigne(self, t: dict, prop: dict) -> str:
+        """Append a mail instruction the user just accepted. A read mail never writes this by itself."""
+        proj = self._project(prop.get("dossier") or "")
+        if not proj:
+            raise TaskError("Projet introuvable.")
+        data = proj.model_dump()
+        cur = (data["mails"].get("instructions") or "").strip()
+        add = " ".join(str(prop.get("consigne") or "").split())
+        if not add:
+            raise TaskError("Consigne vide.")
+        replace = prop.get("remplace") is True
+        if replace:
+            if add == cur:
+                return f"Cette consigne est déjà celle du projet « {proj.name} »."
+            merged = add
+        else:
+            if add in cur:
+                return f"Cette consigne est déjà dans le projet « {proj.name} »."
+            merged = f"{cur}\n{add}".strip() if cur else add
+        if len(merged) > 2000:
+            raise TaskError("La consigne dépasse 2 000 caractères avec celles déjà enregistrées.")
+        data["mails"]["instructions"] = merged
+        saved = self.save_project(data)
+        self._audit("consigne de mails", {"projet": saved["name"], "consigne": add[:200], "remplace": replace}, t)
+        return (f"Consigne {'remplacée' if replace else 'ajoutée'} pour les mails du projet « {saved['name']} ».")
+
+    def _offers_pending(self, t: dict) -> list[dict]:
+        """Proposals opened from a card, still waiting: they survive the end of the brief."""
+        out = []
+        for o in t.get("offers") or []:
+            if o.get("decision"):
+                continue
+            inp = o.get("input") or {}
+            out.append({"id": o["id"], "kind": "proposal", "tool": PROPOSE_TOOL, "reason": o.get("reason") or "",
+                        "target": summarize_target(PROPOSE_TOOL, inp), "input": _clip_json(inp, 20000),
+                        "created": o.get("created") or time.time(), "suggest": []})
+        return out
+
+    def _set_pending(self, t: dict, run: Run | None):
+        live = [a.public() for a in run.approvals.values()] if run else []
+        seen = {a["id"] for a in live}
+        t["pending"] = live + [p for p in self._offers_pending(t) if p["id"] not in seen]
+
+    def _add_offer(self, tid: str, prop: dict, reason: str) -> dict:
+        t = self._get(tid)
+        offer = {"id": secrets.token_hex(4), "input": prop, "reason": reason, "created": time.time()}
+        with self._lock:
+            offers = [o for o in (t.get("offers") or []) if not o.get("decision")]
+            offers.append(offer)
+            t["offers"] = offers[-20:]
+            self._set_pending(t, self.runs.get(tid))
+            self._save(t)
+        public = next(p for p in t["pending"] if p["id"] == offer["id"])
+        self._event(tid, "approval", public)
+        return public
+
+    def _decide_offer(self, tid: str, aid: str, decision: str, message: str, answers: dict | None) -> dict:
+        """A proposal opened from a report card, after the brief has finished: no session is waiting."""
+        t = self._get(tid)
+        offer = next((o for o in (t.get("offers") or []) if o.get("id") == aid and not o.get("decision")), None)
+        if not offer:
+            raise TaskError("Cette validation n'est plus en attente.", 409)
+        note = ""
+        if decision == "allow":
+            note = self._apply_proposal(tid, offer["input"], answers or {})
+        offer["decision"] = decision
+        with self._lock:
+            self._set_pending(t, self.runs.get(tid))
+            self._save(t)
+        self._event(tid, "approval_done", {"id": aid, "decision": decision, "message": (message or "").strip()[:2000],
+                                           "by": "utilisateur", "tool": PROPOSE_TOOL})
+        self._audit("validation", {"outil": "proposer", "décision": decision, "par": "utilisateur",
+                                   "message": (message or "").strip()[:2000],
+                                   "cible": summarize_target(PROPOSE_TOOL, offer.get("input") or {})}, t)
+        return {"ok": True, "remembered": [], "note": note}
+
+    def _suivi_folder(self, t: dict) -> str:
+        info = t.get("routine") or {}
+        routine = self.routines.get(info.get("id") or "")
+        if routine and routine.brief_project:
+            return routine.brief_project
+        proj = self._project(t.get("workdir") or "")
+        return proj.folder if proj else ""
+
+    def _append_suivi(self, t: dict, lines: list[str]) -> int:
+        folder = self._suivi_folder(t)
+        if not folder:
+            raise TaskError("Ce brief n'a pas de fichier de suivi.")
+        try:
+            n = brief_mod.append_lines(folder, lines)
+        except ValueError as exc:
+            raise TaskError(str(exc)) from exc
+        if n:
+            self._audit("fichier de suivi", {"lignes": n, "dossier": folder}, t)
+        return n
 
     # -------------------------------------------------------- rules remembered for a project
     def project_allow(self, folder: str) -> list[str]:
@@ -1662,7 +1775,7 @@ class Engine:
             run.approvals[appr.id] = appr
             if run.awaiting_since is None:
                 run.awaiting_since = time.time()
-            t["pending"] = [a.public() for a in run.approvals.values()]
+            self._set_pending(t, run)
             t["status"] = "awaiting"
             self._event(tid, "approval", appr.public())
             self._save(t)
@@ -1674,7 +1787,7 @@ class Engine:
             finally:
                 with self._lock:
                     run.approvals.pop(appr.id, None)
-                    t["pending"] = [a.public() for a in run.approvals.values()]
+                    self._set_pending(t, run)
                     if not run.approvals and run.awaiting_since is not None:
                         run.awaiting_total += time.time() - run.awaiting_since
                         run.awaiting_since = None
@@ -1791,7 +1904,8 @@ class Engine:
         where = presence.prompt(t, prof, pre, proj.name if proj else "", ask_user=self.cfg.general.ask_user_questions,
                                 actions=[a for a in self.project_actions(proj.folder) if a["status"] == "ok"] if proj else None,
                                 routines=self.project_routines(proj.folder) if proj else None,
-                                apps=mcp.web_apps(prof, t["workdir"]))
+                                apps=mcp.web_apps(prof, t["workdir"]),
+                                facts=brief_mod.session_lines(proj) if proj else None)
         system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
                              if x and x.strip())
         if team.get("agents"):
@@ -1928,7 +2042,7 @@ class Engine:
                 status, err = "error", f"Claude Code s'est arrêté sans résultat (code {rc})." + (f" {tail}" if tail else "")
             t["status"], t["error"] = status, err
             t["ended"] = time.time()
-            t["pending"] = []
+            t["pending"] = self._offers_pending(t)
             if err:
                 self._event(tid, "error" if status == "error" else "status", {"status": status, "text": err})
             else:
@@ -2638,19 +2752,47 @@ class Engine:
         where = {"conversation": "dans la conversation", "fenetre": "dans une fenêtre", "modale": "au premier plan"}[doc["ou"]]
         lines = [f"{'Mis à jour' if prev else 'Affiché'} {where} de la console JARVIS : « {doc['titre']} » "
                  f"({display_mod.summary(doc)}). Identifiant : {key} (à passer en id pour le modifier)."]
-        if any(b["type"] in ("choix", "actions", "application") for b in doc["blocs"]):
+        kinds = {b["type"] for b in doc["blocs"]}
+        if kinds & {"choix", "actions", "application", "formulaire"}:
             lines.append("Les réponses de l'utilisateur t'arriveront comme un nouveau message, préfixé par "
                          f"« [Affichage « {doc['titre']} »] » : termine ton tour sans les attendre.")
+        if "formulaire" in kinds:
+            lines.append("Un formulaire renvoie les champs corrigés. Envoyer, créer ou modifier à partir de "
+                         "ces champs reste soumis à la validation habituelle.")
+        if "cartes" in kinds:
+            lines.append("Les boutons des cartes (ouvrir, retenir, tâche terminée, routine, consigne) sont exécutés "
+                         "par la console. Seul un bouton « message » te revient comme un nouveau message : termine "
+                         "ton tour sans l'attendre.")
         if waiting:
             lines.append(f"{waiting} image(s) du web hors des domaines approuvés : l'utilisateur les charge d'un clic.")
         if problems:
             lines.append("Ignoré : " + " ; ".join(problems))
         return "\n".join(lines), False
 
+    def _write_brief_choice(self, t: dict, doc: dict, index: int, labels: list[str]):
+        """A ticked « Ajouter au fichier de suivi » on a project brief: the console appends the lines."""
+        info = t.get("routine") or {}
+        routine = self.routines.get(info.get("id") or "")
+        folder = routine.brief_project if routine else ""
+        if not folder:
+            return
+        blocks = doc.get("blocs") or []
+        if not 0 <= index < len(blocks):
+            return
+        lines = brief_mod.lines_from_choice(blocks[index].get("question") or "", labels)
+        if not lines:
+            return
+        try:
+            n = brief_mod.append_lines(folder, lines)
+        except ValueError as exc:
+            raise TaskError(str(exc)) from exc
+        if n:
+            self._audit("fichier de suivi", {"lignes": n, "dossier": folder}, t)
+
     def display_answer(self, tid: str, key: str, index: int, choice: list[int] | None = None,
-                       other: str = "", button: int | None = None) -> dict:
-        """A click in a display (a choice, a button): the message is built here from the stored display, then
-        sent to the session like a follow-up."""
+                       other: str = "", button: int | None = None, valeurs: dict | None = None) -> dict:
+        """A click in a display (a choice, a button, a validated form): the message is built here from the
+        stored display, then sent to the session like a follow-up."""
         t = self._get(tid)
         d = self._display(tid, key)
         if not d:
@@ -2658,12 +2800,16 @@ class Engine:
         if index in d["answers"]:
             raise TaskError("Déjà répondu.", 409)
         try:
-            message, labels = display_mod.answer_text(d["doc"], index, choice, other, button)
+            message, labels, clean = display_mod.answer_text(d["doc"], index, choice, other, button, valeurs)
         except ValueError as exc:
             raise TaskError(str(exc)) from exc
         d["answers"][index] = labels
-        self._event(tid, "display_answer", {"key": key, "rev": d["rev"], "bloc": index, "labels": labels})
+        payload = {"key": key, "rev": d["rev"], "bloc": index, "labels": labels}
+        if clean is not None:
+            payload["valeurs"] = clean
+        self._event(tid, "display_answer", payload)
         try:
+            self._write_brief_choice(t, d["doc"], index, labels)
             out = self.followup(tid, message)
         except TaskError:
             d["answers"].pop(index, None)
@@ -2671,6 +2817,80 @@ class Engine:
             raise
         self._audit("réponse à un affichage", {"titre": _clip(d["doc"]["titre"], 200), "réponse": labels}, t)
         return out
+
+    def display_act(self, tid: str, key: str, index: int, card: int, button: int) -> dict:
+        """A button of a card: the console does it. Opening, keeping a line and noting a task done
+        do not start a new turn. A routine or a mail instruction only opens the validation card."""
+        t = self._get(tid)
+        d = self._display(tid, key)
+        if not d:
+            raise TaskError("Affichage introuvable.", 404)
+        blocks = d["doc"].get("blocs") or []
+        if not 0 <= index < len(blocks) or blocks[index].get("type") != "cartes":
+            raise TaskError("Ce bloc n'est pas une carte.", 404)
+        elements = blocks[index].get("elements") or []
+        if not 0 <= card < len(elements):
+            raise TaskError("Carte introuvable.", 404)
+        buttons = elements[card].get("boutons") or []
+        if not 0 <= button < len(buttons):
+            raise TaskError("Bouton introuvable.", 404)
+        btn = buttons[button]
+        token = f"{card}:{button}"
+        done = list(d["answers"].get(index) or [])
+        if btn["faire"] != "ouvrir" and token in done:
+            raise TaskError("Déjà fait.", 409)
+        title = d["doc"].get("titre") or "Affichage"
+        head = f"[Affichage « {title} »]"
+        note, proposal = "", None
+        faire = btn["faire"]
+        if faire == "ouvrir":
+            msg, failed = self.show_result(tid, btn["ouvrir"])
+            if failed:
+                raise TaskError(msg)
+            return {"ok": True, "note": msg}
+        if faire == "suivi":
+            n = self._append_suivi(t, [btn["ligne"]])
+            note = "Ajouté au fichier de suivi." if n else "Déjà dans le fichier de suivi."
+        elif faire == "terminee":
+            note = self._finish_task_line(tid, t, head, btn)
+        elif faire == "message":
+            self.followup(tid, f"{head} {btn['message']}")
+            note = "Envoyé."
+        elif faire == "routine":
+            raw = btn["routine"]
+            prop = self._proposal(tid, {"quoi": "routine", "nom": raw["nom"], "description": raw["description"],
+                                        "consigne": raw["consigne"], "planification": raw.get("planification") or {}})
+            proposal = self._add_offer(tid, prop, f"Claude propose d'ajouter une routine au projet « {prop['projet']} ».")
+            note = "Proposition affichée : confirme pour l'enregistrer."
+        elif faire == "consigne":
+            raw = btn["consigne"]
+            prop = self._proposal(tid, {"quoi": "consigne", "nom": "consigne", "description": raw["description"],
+                                        "consigne": raw["texte"]})
+            proposal = self._add_offer(tid, prop, f"Claude propose une consigne pour les mails du projet « {prop['projet']} ».")
+            note = "Proposition affichée : confirme pour l'ajouter au projet."
+        else:
+            raise TaskError("Bouton introuvable.", 404)
+        done.append(token)
+        d["answers"][index] = done
+        self._event(tid, "display_answer", {"key": key, "rev": d["rev"], "bloc": index, "labels": done})
+        self._audit("bouton d'une carte", {"titre": _clip(title, 200), "action": faire, "bouton": btn.get("libelle")}, t)
+        return {"ok": True, "note": note, **({"proposition": proposal} if proposal else {})}
+
+    def _finish_task_line(self, tid: str, t: dict, head: str, btn: dict) -> str:
+        """Note the task done in BRIEF.md. A preset that can write also asks Claude to close it in the tool."""
+        wrote = (t.get("preset") or "lecture") != "lecture"
+        folder = self._suivi_folder(t)
+        if folder:
+            self._append_suivi(t, [btn["ligne"]])
+        elif not wrote:
+            raise TaskError("Ce brief n'a pas de fichier de suivi, et il est en lecture seule : la tâche n'est pas modifiée.")
+        if not wrote:
+            return "Noté dans le suivi. Le brief est en lecture seule : Office 365 et Odoo ne sont pas modifiés."
+        message = btn.get("message") or f"Marque comme terminée uniquement ceci : {btn['ligne']}. Ne touche à rien d'autre."
+        self.followup(tid, f"{head} {message}")
+        if folder:
+            return "Noté dans le suivi. Claude s'occupe de la clôturer."
+        return "Demandé à Claude."
 
     APP_MESSAGES = 40  # messages one application may send to its session
 
@@ -3667,6 +3887,8 @@ class Engine:
             old = self.routines.get(str(data.get("id", "")))
             if (old and old.brief) or data.get("brief"):
                 raise TaskError("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.", 409)
+            if (old and old.brief_project) or data.get("brief_project"):
+                raise TaskError("Le brief d'un projet se règle dans les réglages du projet.", 409)
             base = old.model_dump() if old else {}
             keep = {k: base[k] for k in ("created", "last_run", "runs") if k in base}
             try:
@@ -3688,6 +3910,8 @@ class Engine:
                 raise TaskError("Routine inconnue.", 404)
             if r.brief:
                 raise TaskError("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.", 409)
+            if r.brief_project:
+                raise TaskError("Le brief d'un projet se règle dans les réglages du projet.", 409)
             self.routines.pop(rid, None)
             self._audit("routine supprimée", {"nom": r.name})
             self._persist_routines()
@@ -3714,6 +3938,13 @@ class Engine:
                     if not prof or not prof.brief.enabled:
                         raise TaskError("Le brief de ce compte est désactivé.")
                     prompt = brief_mod.prompt(prof, self.cfg.projects, now, r.last_run)
+                elif r.brief_project:   # a project brief: written now, from the project's settings, still read-only
+                    proj = self._project(r.brief_project)
+                    if not proj or not proj.brief.enabled:
+                        raise TaskError("Le brief de ce projet est désactivé.")
+                    prof = self.cfg.profile(r.profile)
+                    prompt = brief_mod.project_prompt(proj, prof.name if prof else r.profile, now, r.last_run,
+                                                       assignee=brief_mod.assignee_line(prof) if prof else "")
                 t = self.create_task(prompt, profile=r.profile, model=r.model or None, preset=r.preset,
                                      workdir=r.workdir or None, effort=r.effort or None, confirmed=True,
                                      origin="routine", routine={"id": r.id, "name": r.name, "inbox": r.inbox},
@@ -3755,31 +3986,73 @@ class Engine:
                         r.enabled = False
             self.store.kv_set("routines", [r.model_dump() for r in self.routines.values()])
 
+    def _upsert_brief(self, rid: str, fields: dict) -> bool:
+        """Replace a console-kept brief routine, keeping its runs. True when something changed."""
+        old = self.routines.get(rid)
+        keep = {k: getattr(old, k) for k in ("created", "last_run", "runs", "next_run")} if old else {}
+        try:
+            r = Routine.model_validate({**fields, **keep})
+        except ValueError:
+            return False
+        if old and old.model_dump() == r.model_dump():
+            return False
+        if not old or old.schedule != r.schedule:
+            r.next_run = r.schedule.next_after(time.time())
+        self.routines[rid] = r
+        return True
+
     def sync_briefs(self):
-        """The routines of the morning briefs follow the accounts' settings: one per account whose brief is
-        on (brief.py), none for the others. Their runs and last run are kept."""
+        """The brief routines follow the settings: one per account whose brief is on, one per project whose
+        brief is on (brief.py), none for the others. Their runs and last run are kept."""
         with self._lock:
             changed = False
             want = {brief_mod.routine_id(p.id): p for p in self.cfg.profiles if p.brief.enabled}
+            projects = {}
+            for proj in self.cfg.projects:
+                if not proj.brief.enabled:
+                    continue
+                pid = proj.profile or self.cfg.general.default_profile
+                if self.cfg.profile(pid):
+                    projects[brief_mod.project_routine_id(proj.folder)] = (proj, pid)
             for rid, r in list(self.routines.items()):
-                if r.brief and rid not in want:
+                if (r.brief and rid not in want) or (r.brief_project and rid not in projects):
                     self.routines.pop(rid)
                     changed = True
             for rid, p in want.items():
-                old = self.routines.get(rid)
-                keep = {k: getattr(old, k) for k in ("created", "last_run", "runs", "next_run")} if old else {}
-                try:
-                    r = Routine.model_validate({**brief_mod.routine_fields(p), **keep})
-                except ValueError:
-                    continue
-                if old and old.model_dump() == r.model_dump():
-                    continue
-                if not old or old.schedule != r.schedule:
-                    r.next_run = r.schedule.next_after(time.time())
-                self.routines[rid] = r
-                changed = True
+                changed = self._upsert_brief(rid, brief_mod.routine_fields(p)) or changed
+            for rid, (proj, pid) in projects.items():
+                changed = self._upsert_brief(rid, brief_mod.project_routine_fields(proj, pid)) or changed
             if changed:
                 self._persist_routines()
+
+    def run_project_brief(self, folder: str) -> dict:
+        """Launch a project's brief now, from its settings (the routine is created if it was just turned on)."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        if not proj.brief.enabled:
+            raise TaskError("Active d'abord le brief de ce projet.")
+        self.sync_briefs()
+        return self.run_routine(brief_mod.project_routine_id(proj.folder), manual=True)
+
+    def follow_sender(self, folder: str, sender: str) -> dict:
+        """The user asks to follow a correspondent in a project's mails. The address comes from the mail
+        header the console read, never from Claude's text."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        addr = brief_mod.email_of(sender)
+        if not addr:
+            raise TaskError("Adresse de messagerie introuvable.")
+        data = proj.model_dump()
+        senders = list(data["mails"]["senders"])
+        if addr not in [s.lower() for s in senders]:
+            senders.append(addr)
+        data["mails"]["senders"] = senders
+        data["mails"]["follow"] = True
+        saved = self.save_project(data)
+        self._audit("interlocuteur suivi", {"projet": saved["name"], "adresse": addr})
+        return {"sender": addr, "project": saved["name"]}
 
     def odoo_users_start(self, pid: str) -> dict:
         """Configuration → Profils → Brief du matin → Chercher dans Odoo: a short discussion of the account,

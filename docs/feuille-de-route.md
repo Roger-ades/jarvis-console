@@ -32,7 +32,7 @@ Le serveur MCP intégré `jarvis` offre quatre outils (`afficher`, `afficher_res
 - **« Ce que je regarde »** : l'aperçu ou l'affichage au premier plan et le texte sélectionné partent
   avec le message. *En place, voir plus bas.*
 - **Bloc `formulaire`** de `presenter` : Claude pré-remplit un devis ou un mail, l'utilisateur
-  corrige et valide.
+  corrige et valide. *En place ([ihm.md](ihm.md)).*
 - **`lancer_discussion`** (coordination entre discussions) : une discussion en ouvre d'autres, dans
   leurs propres fenêtres et après validation, et récupère leur résultat. C'est ce qui multiplie le
   plus la puissance : Jarvis devient un chef d'orchestre visible, au lieu de sous-agents invisibles.
@@ -118,7 +118,7 @@ mode navigateur reste disponible.
 4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne.
-6. Bloc `formulaire`, puis `lancer_discussion`.
+6. Brief de projet ([ihm.md](ihm.md)), puis `lancer_discussion`. Le bloc `formulaire` est en place, ainsi que les cartes du rapport (ouvrir, retenir, tâche terminée, routine, consigne). Une discussion de projet répond à « où j'en suis » à partir de `BRIEF.md`, des critères de mails et des sources du brief ; ajouter ou corriger une consigne, une routine ou une tâche passe par une carte d'approbation.
 7. Aperçu Office, index des documents.
 8. Hub d'équipe ([equipe.md](equipe.md)).
 

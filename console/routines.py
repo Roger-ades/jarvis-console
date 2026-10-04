@@ -93,6 +93,7 @@ class Routine(BaseModel):
     inbox: Literal["always", "errors"] = "always"
     headline: bool = False
     brief: str = ""           # the account of a morning brief: a routine kept by the console (brief.py)
+    brief_project: str = ""   # the folder of a project brief: kept the same way, from the project's settings
     created: float = Field(default_factory=time.time)
     last_run: float | None = None
     next_run: float | None = None

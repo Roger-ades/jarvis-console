@@ -3,7 +3,8 @@
 // through the console (token header), as blob URLs.
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
-import { copyText, downloadBlob, h, toast } from "./util.js";
+import { copyText, dialog, downloadBlob, h, toast } from "./util.js";
+import { projectFor, projects as allProjects } from "./projects.js";
 import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
@@ -260,6 +261,28 @@ export async function openPreview(opts) {
   await check(true);
 }
 
+/** The user asks to follow a mail's sender in a project's brief. The console reads the address from the header. */
+async function followSender(from, projectFolder) {
+  const list = allProjects();
+  if (!list.length) { toast("Crée d'abord un projet : le suivi se range dans ses mails.", "err"); return; }
+  const sel = h("select", {}, ...list.map((p) => h("option", { value: p.folder }, p.name)));
+  const here = projectFor(projectFolder);
+  if (here) sel.value = here.folder;
+  const ok = await dialog({
+    title: "Suivre cet interlocuteur",
+    body: h("div", {},
+      h("p", {}, "Son adresse sera ajoutée aux mails suivis du projet. C'est toi qui l'ajoutes : un mail ne s'inscrit pas tout seul."),
+      h("p", {}, h("b", {}, from || "")),
+      h("label", { class: "field" }, h("span", {}, "Projet"), sel)),
+    buttons: [{ label: "Annuler", value: false }, { label: "Suivre", value: true, cls: "primary" }],
+  });
+  if (!ok) return;
+  try {
+    const r = await api("/api/projects/follow", { method: "POST", body: { folder: sel.value, sender: from } });
+    toast(`${r.sender} sera suivi dans le projet « ${r.project} ».`, "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
 /** A tool's result that Claude shows as it is (afficher_resultat): a mail with its header, a page,
  * data or text. The console reads it from the task's tool calls: Claude never copies it. */
 async function openResult(opts) {
@@ -301,6 +324,10 @@ async function openResult(opts) {
   if (v.weblink) {
     actions.append(act("external", "Ouvrir dans Outlook (navigateur)", () => window.open(v.weblink, "_blank", "noopener,noreferrer")),
       act("copy", "Copier le lien", () => copyText(v.weblink)));
+  }
+  if (v.kind === "mail" && (v.meta || {}).from) {
+    actions.append(h("button", { type: "button", class: "btn small", title: "Ajouter cet expéditeur aux mails suivis d'un projet",
+      on: { click: () => followSender(v.meta.from, opts.projectFolder) } }, "Suivre"));
   }
   const parts = [];
   if (v.kind === "mail") {

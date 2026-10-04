@@ -979,6 +979,7 @@ export class TaskWindow {
     el?.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     try {
       const r = await api(`/api/tasks/${this.id}/approvals/${p.id}`, { method: "POST", body: { decision, message, answers, remember } });
+      if (r?.note) toast(r.note, "ok");
       if (r?.remembered?.length) toast(`Mémorisé pour ce projet : ${r.remembered.join(", ")}`, "ok");
     } catch (e) {
       toast(e.message, "err");
@@ -999,7 +1000,7 @@ export class TaskWindow {
     rules.value = (p.suggest || []).join("\n");
     const folder = String(this.task.workdir || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
     const always = h("div", { class: "appr-always", hidden: true },
-      h("div", { class: "muted" }, `Règle mémorisée pour les discussions du dossier ${folder}. Les chemins protégés, les refus permanents et les contraintes Odoo restent appliqués.`),
+      h("div", { class: "muted" }, `Règle mémorisée pour les discussions du dossier ${folder}. Les chemins protégés et les refus permanents restent appliqués.`),
       rules,
       h("div", { class: "row" },
         h("button", { type: "button", class: "btn small ghost", on: { click: () => { always.hidden = true; } } }, "Annuler"),
@@ -1029,32 +1030,45 @@ export class TaskWindow {
   proposalCard(p) {
     const x = p.input || {};
     const action = x.quoi === "action";
+    const consigne = x.quoi === "consigne";
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
     const el = h("div", { class: "appr proposal" });
     const field = (k, v) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", {}, v)) : null);
     const go = (answers) => this.decide(p, "allow", msg.value, answers, el);
     const buttons = action
       ? [h("button", { type: "button", class: "btn ok", on: { click: () => go(null) } }, x.remplace != null ? "Remplacer l'action" : "Ajouter l'action")]
+      : consigne
+      ? [h("button", { type: "button", class: "btn ok", on: { click: () => go(null) } },
+          x.remplace === true ? "Remplacer la consigne" : "Ajouter la consigne")]
       : [h("button", { type: "button", class: "btn", on: { click: () => go({ activer: "non" }) } }, "Ajouter désactivée"),
         h("button", { type: "button", class: "btn ok", on: { click: () => go({ activer: "oui" }) } }, "Ajouter et activer")];
     const fields = action
       ? [field("Commande", `/${x.nom}`), field("Bouton", x.libelle || x.nom), field("À saisir", x.parametre), field("Fichier", x.fichier)]
+      : consigne
+      ? [field("Projet", x.projet)]
       : [field("Nom", x.nom), field("Quand", x.planification), field("Compte", x.compte), field("Autorisations", x.preset),
         field("Modèle", x.modele), field("Dossier", x.dossier)];
+    const title = action ? "Nouvelle action proposée" : consigne ? (x.remplace === true ? "Consigne à remplacer" : "Consigne proposée") : "Nouvelle routine proposée";
     el.append(...[
-      this.apprHead(action ? "bolt" : "clock", action ? "Nouvelle action proposée" : "Nouvelle routine proposée", `Projet « ${x.projet || ""} »`),
+      this.apprHead(action ? "bolt" : consigne ? "mail" : "clock", title, `Projet « ${x.projet || ""} »`),
       h("div", { class: "appr-reason" }, x.description || p.reason),
       h("div", { class: "prop-fields" }, ...fields.filter(Boolean)),
       h("div", { class: "prop-note muted" }, action
         ? "Ces consignes seront suivies à chaque clic sur le bouton, avec les autorisations du projet. Relis-les : rien n'est écrit avant ton accord."
+        : consigne
+        ? (x.remplace === true
+          ? "Ce texte remplace la consigne actuelle des mails du projet. Rien n'est enregistré avant ton accord."
+          : "Ce texte sera ajouté aux consignes des mails du projet. Rien n'est enregistré avant ton accord.")
         : "Elle tournera seule, avec ces autorisations ; une validation demandée attendra ton retour. Rien n'est enregistré avant ton accord."),
       h("div", { class: "appr-actions" }, msg,
         h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
         ...buttons),
-      h("details", { open: true }, h("summary", { class: "muted" }, action ? "Contenu du fichier" : "Demande envoyée à chaque exécution"),
+      h("details", { open: true }, h("summary", { class: "muted" }, action ? "Contenu du fichier" : consigne ? (x.remplace === true ? "Nouvelle consigne" : "Texte ajouté") : "Demande envoyée à chaque exécution"),
         h("pre", { class: "prop-code" }, action ? x.contenu || "" : x.consigne || "")),
       action && x.remplace != null ? h("details", {}, h("summary", { class: "muted" }, "Contenu actuel, qui sera remplacé"),
         h("pre", { class: "prop-code" }, x.remplace)) : null,
+      consigne && x.remplace === true && x.actuelle ? h("details", {}, h("summary", { class: "muted" }, "Consigne actuelle, qui sera remplacée"),
+        h("pre", { class: "prop-code" }, x.actuelle)) : null,
     ].filter(Boolean));
     return el;
   }

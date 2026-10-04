@@ -37,6 +37,7 @@ export function setDoc(taskId, d) {
   e.doc = { titre: d.titre, ou: d.ou, blocs: d.blocs || [] };
   e.rev = d.rev || 1;
   e.answers = new Map();
+  e.filled = new Map();
   e.movedFrom = prevWhere && prevWhere !== d.ou ? prevWhere : null;
   redraw(e);
   return e;
@@ -46,7 +47,11 @@ export function setDoc(taskId, d) {
 export function setAnswer(taskId, d) {
   const e = entry(taskId, d.key);
   if (!e || (d.rev && d.rev !== e.rev)) return;
-  if (d.annule) e.answers.delete(d.bloc); else e.answers.set(d.bloc, d.labels || []);
+  if (d.annule) e.answers.delete(d.bloc);
+  else {
+    e.answers.set(d.bloc, d.labels || []);
+    if (d.valeurs && typeof d.valeurs === "object") e.filled.set(d.bloc, d.valeurs);
+  }
   e.pending.delete(d.bloc);
   redraw(e);
 }
@@ -183,6 +188,8 @@ const BLOCKS = {
 
   choix: (b, e, m, i) => choice(b, e, i),
   actions: (b, e, m, i) => buttons(b, e, m, i),
+  cartes: (b, e, m, i) => cards(b, e, m, i),
+  formulaire: (b, e, m, i) => formBlock(b, e, i),
   application: (b, e, m, i) => application(b, e, m, i),
 };
 
@@ -233,6 +240,56 @@ function choice(b, e, i) {
           busy ? "Envoi…" : "Envoyer")));
 }
 
+function formBlock(b, e, i) {
+  const done = e.answers.has(i);
+  const busy = e.pending.has(i);
+  const locked = done || busy;
+  const kept = e.filled?.get(i) || {};
+  const val = (f) => (Object.prototype.hasOwnProperty.call(kept, f.id) ? kept[f.id] : (f.valeur || ""));
+  const controls = b.champs.map((f) => {
+    const v = String(val(f) ?? "");
+    if (f.type === "case") {
+      return h("label", { class: "fld case" },
+        h("input", { type: "checkbox", name: f.id, checked: v === "oui" || undefined, disabled: locked || undefined, required: f.requis || undefined }),
+        h("span", {}, f.libelle));
+    }
+    let ctrl;
+    if (f.type === "zone") {
+      ctrl = h("textarea", { name: f.id, rows: "6", maxlength: "8000", disabled: locked || undefined, required: f.requis || undefined }, v);
+    } else if (f.type === "liste") {
+      ctrl = h("select", { name: f.id, disabled: locked || undefined, required: f.requis || undefined },
+        f.requis ? null : h("option", { value: "" }, "—"),
+        ...f.options.map((o) => h("option", { value: o, selected: o === v || undefined }, o)));
+    } else {
+      ctrl = h("input", {
+        type: f.type === "date" ? "date" : "text", name: f.id, value: v,
+        maxlength: f.type === "nombre" ? "40" : "2000",
+        inputmode: f.type === "nombre" ? "decimal" : undefined,
+        disabled: locked || undefined, required: f.requis || undefined,
+      });
+    }
+    return h("label", { class: "fld" }, h("span", {}, f.libelle), ctrl, f.aide ? h("small", { class: "aide" }, f.aide) : null);
+  });
+  const form = h("form", { class: "dsp-form", on: { submit: (ev) => {
+    ev.preventDefault();
+    if (done || e.pending.has(i)) return;
+    const valeurs = {};
+    for (const f of b.champs) {
+      const el = form.elements.namedItem(f.id);
+      valeurs[f.id] = f.type === "case" ? (el?.checked ? "oui" : "non") : (el?.value ?? "");
+    }
+    (e.filled ??= new Map()).set(i, valeurs);
+    answer(e, i, { valeurs });
+  } } },
+  b.texte ? h("p", { class: "dsp-q" }, b.texte) : null,
+  ...controls,
+  done
+    ? h("div", { class: "dsp-done" }, icon("check"), "Validé")
+    : h("div", { class: "dsp-form-act" },
+      h("button", { type: "submit", class: "btn small primary", disabled: busy || undefined }, busy ? "Envoi…" : (b.bouton || "Valider"))));
+  return form;
+}
+
 function buttons(b, e, m, i) {
   const done = e.answers.get(i);
   const busy = e.pending.has(i);
@@ -241,6 +298,46 @@ function buttons(b, e, m, i) {
     : h("button", { type: "button", class: `btn small${done?.includes(x.libelle) ? " primary" : ""}`, disabled: !!(done || busy),
       title: x.message, on: { click: () => answer(e, i, { bouton: j }) } }, done?.includes(x.libelle) ? icon("check") : null, x.libelle)),
   done ? h("span", { class: "dsp-done" }, "Envoyé à Claude") : null);
+}
+
+const CARD_ICON = { ouvrir: "mail", suivi: "pin", terminee: "check", routine: "clock", consigne: "mail", message: "send" };
+
+async function act(e, i, carte, bouton) {
+  const k = `${i}:${carte}:${bouton}`;
+  e.cardBusy ??= new Set();
+  if (e.cardBusy.has(k)) return;
+  e.cardBusy.add(k);
+  redraw(e);
+  try {
+    const r = await api(`/api/tasks/${e.taskId}/displays/${encodeURIComponent(e.key)}/act`, {
+      method: "POST", body: { bloc: i, carte, bouton },
+    });
+    if (r?.note) toast(r.note, "ok");
+    if (r?.proposition) settings.openTask?.(e.taskId);
+  } catch (err) {
+    toast(err.message, "err");
+  } finally {
+    e.cardBusy.delete(k);
+    redraw(e);
+  }
+}
+
+function cards(b, e, m, i) {
+  const done = new Set(e.answers.get(i) || []);
+  return h("div", { class: "dsp-cards" }, ...b.elements.map((card, c) => h("article", { class: "dsp-card" },
+    h("h3", {}, card.titre),
+    card.texte ? h("p", {}, card.texte) : null,
+    h("div", { class: "dsp-actions" }, ...card.boutons.map((x, j) => {
+      const used = done.has(`${c}:${j}`);
+      const busy = e.cardBusy?.has(`${i}:${c}:${j}`);
+      const again = x.faire === "ouvrir";
+      return h("button", {
+        type: "button",
+        class: `btn small${used && !again ? " primary" : ""}`,
+        disabled: busy || (!again && used) || undefined,
+        on: { click: () => act(e, i, c, j) },
+      }, used && !again ? icon("check") : (CARD_ICON[x.faire] ? icon(CARD_ICON[x.faire]) : null), x.libelle);
+    })))));
 }
 
 // ---------------------------------------------------------------- application (a small page written by Claude)

@@ -752,6 +752,7 @@ const winCtx = {
 };
 configureDisplays({
   autoImages: winCtx.autoImages,
+  openTask,
   // jarvis.action() of an application, confirmed by the user: the action of the discussion's project
   appAction: (taskId, name, args) => {
     const t = S.tasks.get(taskId);
@@ -824,6 +825,16 @@ function followFiles() {
   followTimer = setTimeout(refreshPreviews, 300);
 }
 
+/** A brief report opens in a window when the global option is on, unless the project forces yes or no. */
+function briefOpensWindow(task) {
+  const id = task?.routine?.id || "";
+  if (!id.startsWith("brief-")) return false;  // brief du compte (brief-<compte>) ou brief de projet (brief-projet-…)
+  const show = projectFor(task.workdir)?.brief?.show;
+  if (show === "oui") return true;
+  if (show === "non") return false;
+  return !!S.config?.ui?.brief_show;
+}
+
 /** Claude composed a display (tool presenter). In the conversation it is drawn by the task's window; a
     window or a modal opens here, live only, and once (an update redraws it where it is). A modal never
     covers the screen for a task the user is not looking at: it opens as a window instead. */
@@ -832,7 +843,12 @@ function showDisplay(ev) {
   const e = setDoc(ev.task_id, d);
   if (ev.ts && Date.now() / 1000 - ev.ts > 120) return;
   const first = (d.rev || 1) === 1 || e.movedFrom;
-  const color = taskTint(S.tasks.get(ev.task_id));
+  const task = S.tasks.get(ev.task_id);
+  const color = taskTint(task);
+  if (briefOpensWindow(task) && first && d.key && !isWindowOpen(ev.task_id, d.key)) {
+    openDisplayWindow(ev.task_id, d.key, color);
+    return;
+  }
   const w = S.windows.get(ev.task_id);
   const looking = w && wm.has(ev.task_id) && !wm.isMinimized(ev.task_id);
   if (d.ou === "fenetre" || (d.ou === "modale" && !looking)) {
@@ -857,7 +873,7 @@ function showFiles(ev) {
     try { image = IMG_EXT.test(new URL(url).pathname); } catch { /* shown as a page */ }
     openPreview({ url, kind: image ? "image" : "web", color });
   }
-  for (const result of ev.data?.results || []) openPreview({ taskId: ev.task_id, result, color });
+  for (const result of ev.data?.results || []) openPreview({ taskId: ev.task_id, result, color, projectFolder: S.tasks.get(ev.task_id)?.workdir || "" });
   const ask = ev.data?.ask || [];
   if (ask.length && !S.windows.get(ev.task_id)) {
     const t = S.tasks.get(ev.task_id);

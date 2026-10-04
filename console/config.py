@@ -131,16 +131,17 @@ class MailCriteria(BaseModel):
     user, never by Claude (a trapped mail must not be able to have a sender ignored)."""
     senders: list[str] = Field(default_factory=list)    # addresses or domains
     subjects: list[str] = Field(default_factory=list)   # words of the subject
+    bodies: list[str] = Field(default_factory=list)     # words of the body
     folders: list[str] = Field(default_factory=list)    # folders of the mailbox
     instructions: str = Field("", max_length=2000)      # in the user's words
 
-    @field_validator("senders", "subjects", "folders")
+    @field_validator("senders", "subjects", "bodies", "folders")
     @classmethod
     def _lists(cls, v: list[str]) -> list[str]:
         return _short_list(v, "critères de mails")
 
     def empty(self) -> bool:
-        return not (self.senders or self.subjects or self.folders or self.instructions.strip())
+        return not (self.senders or self.subjects or self.bodies or self.folders or self.instructions.strip())
 
 
 class ProjectMails(MailCriteria):
@@ -162,6 +163,7 @@ class Brief(BaseModel):
     odoo_user_id: int | None = None
     model: str = ""
     effort: Effort = "low"
+    preset: str = "lecture"  # the permissions of this brief; lecture until the user picks another
 
     @field_validator("time")
     @classmethod
@@ -175,6 +177,65 @@ class Brief(BaseModel):
     @classmethod
     def _days(cls, v: list[int]) -> list[int]:
         return sorted({d for d in v if 0 <= d <= 6})
+
+    @field_validator("model")
+    @classmethod
+    def _model(cls, v: str) -> str:
+        if not _MODEL.fullmatch(v or ""):
+            raise ValueError("nom de modèle invalide")
+        return v
+
+    @field_validator("preset")
+    @classmethod
+    def _preset(cls, v: str) -> str:
+        v = (v or "").strip() or "lecture"
+        if not _ID.fullmatch(v):
+            raise ValueError("preset du brief invalide")
+        return v
+
+
+class ProjectBrief(BaseModel):
+    """A project's own brief, launched on its own (docs/ihm.md). Off until the user turns it on.
+    Permissions default to read-only; the user picks another preset in the project settings.
+    A line reaches BRIEF.md only when the user ticks it."""
+    enabled: bool = False
+    time: str = "08:00"
+    days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    mails: bool = True
+    office_tasks: bool = True
+    calendar: bool = True
+    odoo: bool = True
+    odoo_projects: list[str] = Field(default_factory=list)  # Odoo project names; empty = search by this folder's name
+    show: Literal["", "oui", "non"] = ""  # "" follows ui.brief_show
+    model: str = ""
+    effort: Effort = "low"
+    preset: str = "lecture"
+
+    @field_validator("time")
+    @classmethod
+    def _time(cls, v: str) -> str:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})", (v or "").strip())
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+            raise ValueError("heure du brief attendue au format HH:MM")
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+    @field_validator("days")
+    @classmethod
+    def _days(cls, v: list[int]) -> list[int]:
+        return sorted({d for d in v if 0 <= d <= 6})
+
+    @field_validator("preset")
+    @classmethod
+    def _preset(cls, v: str) -> str:
+        v = (v or "").strip() or "lecture"
+        if not _ID.fullmatch(v):
+            raise ValueError("preset du brief invalide")
+        return v
+
+    @field_validator("odoo_projects")
+    @classmethod
+    def _projects(cls, v: list[str]) -> list[str]:
+        return _short_list(v, "projets Odoo")
 
     @field_validator("model")
     @classmethod
@@ -315,6 +376,7 @@ class Project(BaseModel):
     effort: Literal["", "low", "medium", "high", "xhigh", "max"] = ""
     created: float = 0
     mails: ProjectMails = Field(default_factory=ProjectMails)   # "Mails à suivre" (the morning briefs)
+    brief: ProjectBrief = Field(default_factory=ProjectBrief)  # this project's own brief (docs/ihm.md)
 
     @field_validator("color")
     @classmethod
@@ -409,6 +471,8 @@ class UISettings(BaseModel):
     link_preview: bool = True
     auto_images: bool = False
     regard: bool = True  # "Ce que je regarde": the preview or selected text goes with the message
+    # a finished brief opens its report in a window; a project can force yes or no (ProjectBrief.show)
+    brief_show: bool = False
     # desktop app (shell/): native windows on the OS desktop, or the whole console in one window
     bureau: Literal["integre", "fenetre"] = "integre"
 
@@ -559,25 +623,9 @@ def default_config() -> Config:
                unlisted="ask", confine="none", enabled=False, require_confirm=True,
                require_dedicated_workdir=True),
     ]
-    odoo_read = ["search_records", "get_record", "get_fields", "list_models",
-                 "aggregate_records", "get_current_context", "list_resource_templates"]
-    rules = [ToolRule(pattern="mcp__*__delete_record", decision="deny", locked=True,
-                      note="Suppression Odoo : refusée en permanence")]
-    rules += [ToolRule(pattern=f"mcp__odoo__{n}", decision="allow", note="Odoo : lecture") for n in odoo_read]
-    rules += [
-        ToolRule(pattern="mcp__odoo__create_record", decision="ask", note="Création Odoo : validation humaine"),
-        ToolRule(pattern="mcp__odoo__update_record", decision="deny", note="Modification Odoo : refusée par défaut"),
-        ToolRule(pattern="mcp__odoo__post_message", decision="deny", note="Message dans le chatter : refusé par défaut"),
-    ]
-    constraints = [
-        # Lines are created inside the quote (values.order_line); creating a
-        # sale.order.line on its own could add lines to an existing, confirmed order.
-        InputConstraint(tool="mcp__*__create_record", path="model",
-                        allowed=["sale.order"], note="Création limitée aux devis (lignes incluses dans le devis)"),
-        InputConstraint(tool="mcp__*__create_record", path="values.state",
-                        forbidden=["sale", "done", "cancel"], note="Un devis n'est jamais créé confirmé"),
-    ]
-    return Config(profiles=profiles, presets=presets, tool_rules=rules, constraints=constraints,
+    # Which Odoo models and operations exist is decided by the MCP user on Odoo.
+    # A session still follows its preset (lecture does not write, brouillons asks before a create).
+    return Config(profiles=profiles, presets=presets, tool_rules=[], constraints=[],
                   general=General(setup_done=False))  # a fresh install starts with the assistant
 
 

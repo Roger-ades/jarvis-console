@@ -300,7 +300,7 @@ function renderTasks(body) {
 // ------------------------------------------------------------ remembered rules
 function renderRules(body) {
   body.append(h("p", { class: "pj-lead pad" }, "Actions autorisées sans validation pour les discussions de ce dossier, mémorisées avec « Toujours pour ce projet ». ",
-    "Les chemins protégés, les refus permanents et les contraintes Odoo s'appliquent toujours."));
+    "Les chemins protégés et les refus permanents s'appliquent toujours."));
   const rules = ws.rules || [];
   if (!rules.length) {
     body.append(h("div", { class: "empty-row" }, "Aucune règle pour ce projet. Elles se créent depuis une demande de validation."));

@@ -27,10 +27,7 @@ from urllib.parse import urlparse
 
 from .config import InputConstraint, Preset, ToolRule
 
-LOCKED_RULES = [
-    ToolRule(pattern="mcp__*__delete_record", decision="deny", locked=True,
-             note="Suppression Odoo : refusée en permanence"),
-]
+LOCKED_RULES: list[ToolRule] = []  # Odoo rights live on the MCP user in Odoo, not here
 
 FILE_TOOLS = {
     "Read": "file_path", "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
@@ -319,6 +316,8 @@ def summarize_target(tool: str, inp: dict) -> str:
         return ", ".join(str(x) for x in inp.get("fichiers") or [])[:300]
     if tool == "mcp__jarvis__afficher_resultat":
         return " · ".join(str(inp[k]) for k in ("outil", "contient", "id") if inp.get(k))[:200] or "dernier résultat"
+    if tool == "mcp__jarvis__proposer":
+        return str(inp.get("nom") or inp.get("description") or "")[:200]
     if tool == "mcp__jarvis__presenter":
         return str(inp.get("titre") or "")[:200] or "affichage"
     if is_mcp(tool):

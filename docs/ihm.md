@@ -78,9 +78,12 @@ validation ; rien ne dépasse le preset de la discussion.
      aussi le contenu actuel. Le fichier n'est écrit qu'après l'accord de l'utilisateur, qui
      vaut validation.
 3. **Section « ## Ce projet »** du prompt système ([console/presence.py](../console/presence.py)).
-   Elle donne à Claude les actions validées et les routines du projet, et lui rappelle qu'il
-   peut en proposer. Le texte ne change que si les actions ou les routines changent, pour
-   garder le cache de prompt.
+   Elle donne à Claude les actions validées, les routines, les critères de mails (dont la consigne)
+   et les sources du brief. « Où j'en suis » se répond tout de suite : `BRIEF.md`, les mails selon
+   ces critères, les sources cochées, puis un affichage avec des cartes. Ajouter ou corriger une
+   consigne, une routine, une action ou une tâche passe par une carte d'approbation. Un mail lu
+   peut être mis sur une carte ; il n'écrit rien. Le texte ne change que si l'utilisateur change
+   le projet, pour garder le cache de prompt.
 4. **Mini-application** (bloc `application` de `presenter`,
    [console/content.py](../console/content.py)). Claude écrit une petite page HTML :
    calculateur, simulateur, tri, saisie…
@@ -95,11 +98,62 @@ validation ; rien ne dépasse le preset de la discussion.
    - La console n'écoute que ce cadre précis, et seulement quand l'utilisateur est dedans : le
      focus est dans l'application, avec au plus un envoi toutes les 1,5 s.
 
+## Brief de projet (en cours)
+
+Le brief du compte reste le tour d'horizon du matin : mails, devis Odoo en brouillon, agenda. Chaque dossier a en plus **son** brief, plus fin, lancé seul. « Déménagement » est un projet comme un autre.
+
+Le brief qui part tout seul **lit et prépare**. Il affiche le rapport. Il propose une ligne à retenir ou une tâche à créer. Le clic **écrit**. Un mail lu reste une donnée : il ne s'inscrit pas tout seul dans les suivis.
+
+### Deux niveaux
+
+- **Compte** (Configuration → Profils → Brief du matin) : inchangé dans son rôle. Ses critères de mails gagnent les mots du corps, comme ceux du projet.
+- **Projet** (réglages du projet → Brief du projet) : désactivé par défaut. Heure, jours, modèle, effort, autorisations. Sources à cocher : mails du projet, tâches Office 365, calendrier, un ou plusieurs projets Odoo et leurs tâches. Une routine « Brief · *nom* », en tête de la boîte, lançable depuis les réglages ou depuis Routines. Le compte du projet (ou le compte par défaut) la porte. Les autorisations sont Lecture seule par défaut ; un autre preset du compte s'applique à ce brief, avec les validations qu'il demande.
+
+Les critères « Mails à suivre » servent les deux. **Suivre dans le brief** les fait compter dans le brief du compte. La source Mails du brief de projet les reprend même si cette case est décochée. Mots de l'objet, mots du corps, expéditeur, dossier, consigne.
+
+### Fichier de suivi
+
+`BRIEF.md` à la racine du dossier. La console le lit à chaque lancement et le donne à Claude comme une donnée, jamais comme une consigne. Claude propose des lignes dans un bloc `choix` dont la question est exactement « Ajouter au fichier de suivi ». Les lignes cochées sont ajoutées par la console, pas par Claude. En Lecture seule, la session ne crée ni tâche Office 365 ni tâche Odoo : elle les propose. Avec un autre preset, écrire, envoyer ou créer suit ce preset et la validation habituelle.
+
+Créer vraiment la tâche ou le mail, après ce suivi, passe par le bloc `formulaire` (ci-dessous) : une feuille préremplie, puis la validation habituelle.
+
+### Depuis un mail affiché
+
+Dans l'aperçu d'un mail, **Suivre** ajoute l'adresse de l'expéditeur (lue par la console dans l'en-tête, pas recopiée par Claude) aux mails suivis du projet choisi. Le projet de la discussion est proposé. Un clic, une adresse.
+
+### Cartes du rapport
+
+Le brief demande un bloc `cartes` : une carte par mail, tâche ou oubli, avec des boutons. La console exécute le clic.
+
+- **Ouvrir** retrouve le résultat d'outil déjà lu (l'extrait doit y figurer tel quel) et ouvre le mail. Pas de nouveau tour.
+- **Retenir** ajoute la ligne à `BRIEF.md`.
+- **Terminée** écrit la ligne tout de suite. En Lecture seule, Office 365 et Odoo ne sont pas modifiés. Avec un autre preset, la console redemande à Claude de clôturer cette tâche, sous les validations de ce preset.
+- **Routine** et **Consigne** ouvrent la carte de validation habituelle. Rien n'est enregistré avant « Ajouter » ou « Ajouter la consigne ». Pour corriger une consigne, la carte dit « Remplacer la consigne » et montre l'ancienne. Une consigne ne vient que d'une demande de l'utilisateur : un mail lu ne l'écrit pas.
+
+Le bloc choix « Ajouter au fichier de suivi » reste pour les lignes qui n'ont pas leur carte.
+
+### À l'écran
+
+Configuration → Interface → **Afficher le rapport dans une fenêtre**, décoché par défaut : le rapport reste en tête de la boîte, comme aujourd'hui. Coché, la fenêtre du rapport s'ouvre à la fin du brief (compte ou projet). Chaque projet peut forcer oui ou non.
+
+Les notifications à boutons Approuver et Refuser restent celles des validations. Les propositions du brief sont les choix de son affichage.
+
+### Ce qui reste pour la suite de ce brief
+
+La synchro qui crée ou clôt la tâche dans Office 365 ou Odoo sans repasser par Claude. Le bouton « Terminée » écrit la ligne dans `BRIEF.md` tout de suite ; si le brief n'est pas en lecture seule, il redemande à Claude de la clôturer, avec les validations du preset. Les priorités et les échéances sont déjà demandées dans le rapport ; les porter dans une liste de tâches de Jarvis viendra avec cette synchro.
+
+## Bloc formulaire
+
+En place. Claude prépare une feuille (un mail, un devis) avec `presenter`, bloc `formulaire` : champs typés (`texte`, `zone`, `nombre`, `date`, `liste`, `case`), préremplis. On corrige, on valide. La console renvoie les champs comme un message de l'utilisateur, préfixé par `[Affichage « … »]`. Le formulaire n'envoie ni ne crée rien : le mail ou l'enregistrement qui suit reste sur la validation habituelle. Tant qu'il n'est pas validé, il attend dans la boîte, comme un choix.
+
+Un mail lu reste une donnée. Les champs proposés se corrigent ici, puis le clic Valider les renvoie. Claude ne change ni la configuration, ni les permissions, ni les domaines approuvés.
+
 ## Pistes, de la plus utile à la plus ambitieuse
+
+Le brief de projet, ci-dessus, est le chantier en cours.
 
 | Piste | Ce que ça apporte | Points d'attention |
 |---|---|---|
-| **Bloc `formulaire` dans `presenter`** : champs typés et réponse structurée | Claude prépare un devis Odoo ou un mail pré-rempli ; on corrige puis on valide. Plus efficace qu'une suite de questions. | La réponse revient comme un message de l'utilisateur. Une action irréversible reste soumise à la validation habituelle. |
 | **`demander_validation`** : aperçu ou différences, relié aux validations existantes | Une décision claire avant une action sensible, au lieu d'un refus brut. | Ne doit jamais permettre de valider à la place de l'utilisateur. |
 | **Vue « Consommation »** : par compte, projet et discussion, cache lu et écrit, compactions, part des sous-agents | Voir où partent les tokens. L'analyse du 2 octobre l'a montré : c'est le mode équipe qui coûte, pas la console. | Les données viennent des transcriptions (`<config>/projects/…`) : pas de nouvel appel. |
 | **Signaler ce qui fait perdre le cache** : pause de plus d'une heure, compaction automatique | Comprendre une consommation inattendue. Proposer « Garder au chaud » sur une discussion importante. | La compaction est normale : il s'agit d'informer, pas d'alarmer. |
@@ -202,9 +256,10 @@ proposées, une nouvelle discussion demande sa validation.
 ## Ordre proposé
 
 1. ~~« Ce que je regarde »~~ (fait, avec les différences et l'annulation des fichiers).
-2. Bloc `formulaire`.
-3. Vue « Consommation » et signalement des pertes de cache.
-4. `demander_validation`, puis la coordination entre discussions.
+2. Brief de projet (en cours, voir plus haut) : lancé seul, sources mails (objet et corps), tâches Office 365, calendrier, projets Odoo, fichier `BRIEF.md`, suivi d'un interlocuteur depuis un mail, affichage du rapport en fenêtre.
+3. ~~Bloc `formulaire`~~ (fait).
+4. Vue « Consommation » et signalement des pertes de cache.
+5. `demander_validation`, puis la coordination entre discussions.
 
 La feuille de route d'ensemble (déclencheurs, boîte de réception, validations depuis le téléphone,
 Electron…) est dans [feuille-de-route.md](feuille-de-route.md).

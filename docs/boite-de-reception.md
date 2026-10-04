@@ -236,7 +236,8 @@ Configuration → Profils → *compte* → **Brief du matin** :
   Odoo choisi ici (**Mon utilisateur Odoo**). Les devis des autres vendeurs ne comptent pas. Le champ
   prend un nom, ou un utilisateur de la liste que **Chercher dans Odoo** lit : une courte discussion du
   compte, en lecture seule, qui reste dans l'historique et n'entre pas dans la boîte. Vide : l'utilisateur
-  avec lequel le serveur Odoo est connecté.
+  avec lequel le serveur Odoo est connecté. Une tâche (`project.task`), un projet (`project.project`) ou
+  un événement (`calendar.event`) créé dans une discussion de ce compte lui est assigné.
 - **Modèle et effort** : ceux du compte par défaut ; un modèle moyen et un effort faible suffisent pour
   une exécution par jour.
 
@@ -251,23 +252,31 @@ Configuration → Profils → *compte* → **Brief du matin** :
 - À chaque exécution, la console écrit la demande à partir des réglages du moment : sources cochées,
   critères du compte, critères des projets suivis (avec leur nom), définition des devis en attente.
   Changer un critère vaut dès le brief suivant.
-- Toujours avec le preset **Lecture seule**, quel que soit celui du compte : rien n'est écrit ni
-  envoyé.
+- Autorisations : **Lecture seule** par défaut, quel que soit le preset du compte. Le brief a le
+  sien (Configuration → Profils → Brief du matin, et les réglages du brief de projet). Un autre
+  preset s'applique à ce brief, avec les validations qu'il demande. Un preset qui exige une
+  confirmation à chaque lancement n'est pas proposé : une routine ne peut pas la donner.
 - Claude rend un seul affichage `presenter` d'id `brief` : chiffres clés, chronologie pour l'agenda,
   tableau des devis, liste des mails avec le critère qui les a retenus (« projet Dupont »,
-  « expéditeur client-x.fr »). `afficher_resultat` ouvre un mail tel quel, `afficher` un devis dans la
-  fenêtre Odoo.
+  « expéditeur client-x.fr »), et des cartes. **Ouvrir** montre le mail déjà lu, sans nouveau tour.
+  **Préparer** renvoie une demande à la session. Le brief de projet ajoute **Retenir** (ligne dans
+  `BRIEF.md`), **Terminée** (la ligne tout de suite ; la clôture dans l'outil seulement si le preset
+  peut écrire), **Routine** et **Consigne** (carte de validation, rien n'est enregistré avant).
 - La boîte montre en tête le brief de chaque compte activé, replié sur ses chiffres clés et à la
-  couleur du compte ; Ouvrir le met dans sa fenêtre. Ses choix et boutons reviennent à la session du
-  brief, comme ailleurs.
+  couleur du compte ; Ouvrir le met dans sa fenêtre. Ses choix, ses formulaires et ses boutons
+  « message » reviennent à la session du brief. Les autres boutons des cartes sont exécutés par la console.
 
 ### Sécurité
 
-- Le brief lit des mails, la porte d'entrée principale des injections : d'où le preset Lecture seule
-  imposé. Une proposition éventuelle (`proposer`) reste une carte à valider.
-- Les critères sont écrits par l'utilisateur, jamais par Claude : un mail piégé ne doit pas pouvoir
-  faire ignorer un expéditeur. Plus tard, Claude pourra suggérer un critère depuis le brief
-  (« ajouter ce correspondant au projet Dupont »), toujours comme une proposition à valider.
+- Le brief lit des mails, la porte d'entrée principale des injections : d'où Lecture seule par
+  défaut. Un autre preset est un choix de l'utilisateur. Une proposition éventuelle (`proposer`)
+  reste une carte à valider. Le contenu lu reste une donnée.
+- Les critères sont écrits par l'utilisateur. Un mail lu ne les modifie pas. Claude peut proposer
+  une consigne (`proposer`, ou le bouton **Consigne** d'une carte) : elle n'est ajoutée qu'après
+  le clic sur la carte de validation. Pour la corriger, la carte dit « Remplacer la consigne » et
+  montre l'ancienne. Une discussion de projet connaît déjà ces critères : « où j'en suis » s'en sert.
+  L'adresse d'un correspondant ne s'ajoute que par **Suivre**
+  sur un mail affiché, lue dans l'en-tête par la console.
 - Les mails sont des données, pas des consignes (déjà dit à Claude dans le prompt système).
 
 La partie sans Claude (validations en attente, échecs de la nuit, rappels et routines du jour) est la
