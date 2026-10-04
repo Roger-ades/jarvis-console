@@ -1,7 +1,7 @@
 # Application de bureau : JARVIS intégré au bureau
 
-L'application de bureau (Electron, dossier `shell/`) est en place et validée sous Windows (installation,
-fenêtre JARVIS). Elle a trois objectifs :
+L'application de bureau (Electron, dossier `shell/`) est en place et validée sous Windows. Elle a trois
+objectifs :
 
 1. **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le « bureau » de la console
    (son fond) : une discussion, un aperçu ou un affichage se range à côté d'Excel ou d'Outlook,
@@ -48,10 +48,13 @@ Plus de fenêtre principale : tout passe par la barre JARVIS et des fenêtres de
 - **Ctrl+Alt+J** appelle la **barre JARVIS** en bas de l'écran où se trouve la souris : la barre de
   commande (puces Regard, pièces jointes, contexte, compte, dossier, réglages) et les pastilles de
   tâches. Échap, une demande envoyée ou un clic ailleurs la rangent ; l'épingle la garde affichée.
-- **L'emblème JARVIS**, à gauche de la barre, ouvre le **menu JARVIS** : tâches en cours, à valider et
-  en file ; comptes et leurs limites ; Rechercher, Projet, Notes, Historique, Routines, claude.ai,
-  Sessions, Ranger, Configuration, Arrêt d'urgence ; projets épinglés et discussions à reprendre.
-  « Ouvrir JARVIS » (icône de la zone de notification, lanceur) ouvre la barre avec ce menu.
+- **L'emblème JARVIS**, à gauche de la barre, ouvre le **menu JARVIS** : en tête, la boîte de réception
+  (les entrées les plus urgentes et « Tout voir », un badge sur l'emblème compte ce qui est à faire) ;
+  tâches en cours, à valider et en file ; comptes et leurs limites ; Boîte, Rechercher, Projet, Notes,
+  Historique, Routines, claude.ai, Sessions, Ranger, Configuration, Arrêt d'urgence ; actions du compte
+  mises dans le menu, projets épinglés et discussions à reprendre. « Ouvrir JARVIS » (icône de la zone
+  de notification, lanceur) ouvre la barre avec ce menu. La boîte de réception est décrite dans
+  [boite-de-reception.md](boite-de-reception.md).
 - Chaque discussion, aperçu, affichage ou fenêtre de différences s'ouvre en fenêtre de Windows. Les
   **panneaux** (Historique, Sessions, Routines, Projet, Notes) aussi, chacun dans la sienne (position et
   taille gardées) ; leur bouton ramène une fenêtre déjà ouverte.
@@ -196,8 +199,10 @@ Ce qu'il faut adapter pour les documents enfants :
   éléments, mêmes modules) : compteurs, comptes (leurs limites s'ouvrent dans la barre), actions,
   projets épinglés, discussions à reprendre. Les bandeaux (connexion, arrêt d'urgence, mise à jour) et
   les rappels s'affichent au-dessus de la barre.
-- **Icône de la zone de notification** : tâches en cours, en file et à valider ; menu Ouvrir JARVIS,
-  Nouvelle demande (la barre), Se déconnecter des sites, Quitter. Une pastille sur les boutons de la
+- **Icône de la zone de notification** : tâches en cours, en file et à valider, entrées à lire ; menu
+  Boîte de réception (avec ses compteurs), Ouvrir JARVIS, Nouvelle demande (la barre), Se déconnecter
+  des sites, Quitter. Le verrouillage et la mise en veille de la session (`powerMonitor`) sont signalés à
+  la page : au retour, « Pendant ton absence : … » au-dessus de la barre. Une pastille sur les boutons de la
   barre des tâches de Windows (`setOverlayIcon`, sur chaque fenêtre de JARVIS) signale une validation
   en attente.
 - **Fenêtres cadres** ([static/js/wm.js](../static/js/wm.js), `jarvis-win:cadre-…`) : ce que la fenêtre
@@ -325,8 +330,21 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
 
 ## Ce qui est vérifié
 
-**Sous Windows** (par l'utilisateur) : installation d'Electron par `start-app.bat`, ouverture de la
-fenêtre JARVIS, fenêtres natives et affichage intégré.
+**Sous Windows** (par l'utilisateur) :
+
+- installation d'Electron par `start-app.bat`, ouverture de la fenêtre JARVIS, fenêtres natives et
+  affichage intégré ;
+- installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
+  (Paramètres → Applications), démarrage avec la session qui suit l'application installée ;
+- barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J, clic ailleurs qui
+  la range ; menu JARVIS ;
+- fenêtres des panneaux et des modales : bandeau de titre sous les boutons natifs, taille des
+  questions, déplacement par le bandeau ;
+- notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
+  de la barre des tâches ;
+- fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
+  fenêtres surgissantes), téléchargements ;
+- glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native.
 
 **Sous Linux** (affichage virtuel, Electron 44, piloté par Playwright sur le serveur de démo) :
 
@@ -353,20 +371,9 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
   prend le relais de l'application lancée par `start-app.bat` ;
 - le mode navigateur ne change pas (scénarios rejoués dans Chromium).
 
-## Points à vérifier sous Windows
+## Pour la suite
 
-- Installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
-  (Paramètres → Applications), démarrage avec la session qui suit l'application installée.
-- Barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J (pas de conflit
-  avec d'autres outils), clic ailleurs qui la range ; menu JARVIS.
-- Fenêtres des panneaux et des modales : bandeau de titre sous les boutons natifs, taille des
-  questions, glisser une fenêtre par son bandeau.
-- Notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
-  de la barre des tâches.
-- Fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
-  fenêtres surgissantes), téléchargements.
-- Glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native.
-- Pour la suite : matériau Mica ou Acrylic, couleur de bordure native.
+- Matériau Mica ou Acrylic de Windows 11 pour la barre JARVIS, couleur de bordure native.
 
 ## Étapes
 
@@ -379,7 +386,7 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
 6. **Finitions** : fenêtre JARVIS qui reste cachée, rappels, pastille sur chaque fenêtre. *Fait.*
 7. **Plus de fenêtre principale** : menu JARVIS dans la barre, panneaux et modales en fenêtres de
    l'OS, bandeaux et rappels au-dessus de la barre. *Fait.*
-8. **Installateur**, signature, mises à jour de l'application. *Fait ; à essayer sous Windows.*
+8. **Installateur**, signature, mises à jour de l'application. *Fait, validé sous Windows.*
 
 ## Ce qui ne change pas
 

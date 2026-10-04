@@ -23,8 +23,11 @@ tes abonnements Claude via la CLI Claude Code.
 
 - **Application de bureau** (Electron) : fenêtres de Windows, barre JARVIS (Ctrl+Alt+J),
   notifications avec Approuver et Refuser, sites connectés avec leur session.
+- **Boîte de réception** : tout ce qui attend, toutes discussions confondues (validations, réponses
+  non lues, résultats de routines, rappels), le **brief du matin** de chaque compte et les commandes
+  du compte en boutons.
 
-La suite prévue (boîte de réception, déclencheurs, validations depuis le téléphone…) est dans
+La suite prévue (déclencheurs, validations depuis le téléphone…) est dans
 [docs/feuille-de-route.md](docs/feuille-de-route.md).
 
 ---
@@ -151,6 +154,43 @@ Fermer une fenêtre n'arrête pas la tâche ; tout reste dans l'**Historique**.
 Quand une tâche attend ta validation, la fenêtre passe « À valider » (et se rouvre si tu
 l'avais fermée) : action proposée en détail, **Approuver** ou **Refuser** avec un message
 pour Claude. Les questions de Claude et les plans à approuver s'affichent de la même façon.
+
+### Boîte de réception
+
+Le bouton **Boîte** (badge : ce qui attend), le compteur « à valider », Ctrl+K ou, dans
+l'application de bureau, le haut du menu JARVIS et l'icône de la zone de notification : un seul
+endroit pour ce qui attend, quels que soient la discussion, le compte ou le projet. Rien n'en est
+envoyé à Claude.
+
+- **À faire** : les validations de toutes les discussions, avec leur heure d'expiration
+  (**Approuver**, **Refuser** avec un message, **Détail** de l'appel, **Ouvrir**) ; les questions,
+  plans et propositions (ouverts dans leur fenêtre) ; une validation **expirée** (refusée faute de
+  réponse après le délai, 30 min par défaut) : **Reprendre** la redemande dans la même discussion ;
+  un affichage de Claude qui attend un choix ; une discussion en erreur ou interrompue (**Relancer**).
+- **À lire** : les discussions terminées pendant que tu regardais ailleurs, avec un extrait, et les
+  résultats des routines (regroupés par routine) ; une routine non lancée ou manquée, avec la raison.
+  Regarder la discussion la marque lue ; **Tout marquer comme lu**.
+- **Rappels** des notes arrivés à leur heure.
+- En tête : le dernier résultat des routines « en tête de la boîte » (le brief du matin), puis
+  **Aujourd'hui** (rappels et routines du jour, compte proche de ses limites).
+- De retour d'un verrouillage ou d'une veille (application de bureau), ou après plus de 15 min
+  ailleurs (navigateur) : « Pendant ton absence : … » au-dessus de la barre.
+
+**Brief du matin** (Configuration → Profils → *compte*, désactivé par défaut) : à l'heure choisie,
+Claude prépare en lecture seule le point du jour du compte, affiché en tête de la boîte : les mails
+importants (critères du compte : expéditeurs, objets, dossiers, consigne ; et ceux des projets
+suivis : réglages du projet → **Mails à suivre**), les devis Odoo pas encore envoyés de **ton
+utilisateur Odoo** (**Chercher dans Odoo** le trouve), l'agenda du jour. La demande est écrite par
+la console à partir de ces réglages ; rien n'est écrit ni envoyé.
+
+**Actions du compte en boutons** (Configuration → Profils, désactivé par défaut) : les commandes
+(`commands/`) et skills (`skills/`) du dossier de configuration du compte deviennent des boutons
+(Ctrl+K, **Actions** de l'accueil et du menu JARVIS pour celles cochées « Dans le menu », onglet
+Actions des projets), lancés dans le dossier choisi. Comme les actions de projet, chacune est relue
+et validée avant de servir et redemande ta validation si son fichier change ; si un projet a une
+action du même nom, les deux doivent être validées.
+
+Détails : [docs/boite-de-reception.md](docs/boite-de-reception.md).
 
 ### Mode équipe
 
@@ -377,7 +417,8 @@ l'installer. En affichage **Intégré au bureau** :
 - une validation en attente produit une notification avec **Approuver** et **Refuser** ;
 - les liens et les pages qu'affiche Claude (Odoo, SharePoint, Outlook web) s'ouvrent dans des
   fenêtres de sites, chacune avec sa session : on y reste connecté ;
-- l'icône de la zone de notification montre les tâches en cours et à valider.
+- l'icône de la zone de notification montre les tâches en cours et à valider, et ouvre la boîte de
+  réception.
 
 Configuration → Général → **Ouvrir avec** « Application de bureau JARVIS » la fait ouvrir par
 `start.bat` et le lanceur ; **Démarrer avec la session** la démarre discrètement. Configuration →
@@ -396,7 +437,9 @@ Le panneau **Routines** a deux parties :
 
 Le bouton **Nouvelle routine** planifie des demandes : chaque jour à heure fixe (jours au choix),
 à intervalle régulier, ou une seule fois. Chaque exécution est une tâche normale (compte,
-preset, validations, historique). Les routines tournent tant que la console est lancée :
+preset, validations, historique). Son résultat arrive dans la boîte de réception (**Dans la boîte de
+réception** : chaque résultat, ou seulement les erreurs), ou reste **en tête de la boîte** jusqu'à
+l'exécution suivante. Les routines tournent tant que la console est lancée :
 coche « Lancer la console au démarrage de Windows » pour qu'elle démarre toute seule.
 Une exécution manquée console arrêtée est notée, et peut être rattrapée au démarrage.
 
@@ -477,6 +520,8 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/display.py` | affichages de `presenter` : vérification des blocs, limites, réponses aux choix et boutons |
 | `console/regard.py` | « Ce que je regarde » : vérification et mise en forme de ce qui part avec le message |
 | `console/changes.py` | modifications de fichiers : copies avant / après, différences, annuler et rétablir |
+| `console/inbox.py` | boîte de réception : ce qui attend l'utilisateur, calculé à partir des tâches, des routines et des notes |
+| `console/brief.py` | brief du matin : la routine de chaque compte qui l'active, la demande écrite à chaque exécution |
 | `console/routines.py` | routines : planification et calcul des prochaines exécutions |
 | `console/winsys.py` | démarrage à l'ouverture de session (Windows, macOS) |
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |

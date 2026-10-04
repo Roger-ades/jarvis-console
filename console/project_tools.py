@@ -114,7 +114,12 @@ def _first_line(body: str) -> str:
 
 def scan(folder: str) -> list[dict]:
     """The project's commands and skills (a user may hide a skill with `user-invocable: false`)."""
-    base = Path(folder) / ".claude"
+    return scan_dir(Path(folder) / ".claude")
+
+
+def scan_dir(base: Path) -> list[dict]:
+    """The commands and skills under a Claude Code folder: a project's .claude, or an account's
+    configuration folder (its commands and skills apply to all its folders)."""
     out: list[dict] = []
     cmds = base / "commands"
     if cmds.is_dir():

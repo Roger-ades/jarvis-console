@@ -4,8 +4,9 @@ Note de travail. Objectif : qu'une fois dans Jarvis, l'utilisateur n'ait plus de
 Jarvis couvre déjà très bien le pilotage de Claude (sessions parallèles, validations, projets,
 routines, `presenter`). Cette note recense ce qui oblige encore à quitter la console, les pistes pour
 y remédier et l'ordre proposé. Le détail de conception des pistes d'interface est dans
-[ihm.md](ihm.md), celui de l'intégration au bureau (Electron) dans [electron.md](electron.md), celui du
-travail en équipe dans [equipe.md](equipe.md).
+[ihm.md](ihm.md), celui de l'intégration au bureau (Electron) dans [electron.md](electron.md), celui de
+la boîte de réception dans [boite-de-reception.md](boite-de-reception.md), celui du travail en équipe
+dans [equipe.md](equipe.md).
 
 ## Ce qui fait encore sortir de Jarvis
 
@@ -17,8 +18,8 @@ travail en équipe dans [equipe.md](equipe.md).
 | Retoucher un fichier écrit par Claude, revenir en arrière | Aperçu seulement : pas d'édition, pas de différences, pas d'annulation | — |
 | Être loin du PC | Le serveur n'écoute que `127.0.0.1` ; une validation demandée par une routine attend le retour de l'utilisateur | `console/__main__.py`, `console/presence.py` |
 | Réagir à un événement (mail reçu, fichier déposé) | Les routines ne partent qu'à heure fixe ou à intervalle | `console/routines.py` |
-| Retrouver ce qu'une routine a produit | Dans l'historique, la fenêtre restant fermée si la routine ne l'ouvre pas | `console/engine.py` |
-| Lancer une commande générale du compte d'un clic | Seules les commandes et skills du dossier projet deviennent des boutons | `Engine.project_actions` |
+| Retrouver ce qu'une routine a produit | Dans l'historique, la fenêtre restant fermée si la routine ne l'ouvre pas | [boite-de-reception.md](boite-de-reception.md) |
+| Lancer une commande générale du compte d'un clic | Seules les commandes et skills du dossier projet deviennent des boutons | [boite-de-reception.md](boite-de-reception.md) |
 | Montrer à Claude ce qu'on a sous les yeux | Copier-coller le passage ou recopier le chemin du fichier | — |
 
 ## Axes d'amélioration
@@ -53,10 +54,10 @@ exemple) : c'est la porte d'entrée principale des injections.
 
 Réunir ce qui est aujourd'hui éparpillé entre fenêtres, historique et notes : validations et
 questions en attente de toutes les discussions, résultats de routines non lus, propositions, rappels.
-Avec un « brief du matin » (mails, devis Odoo en attente, agenda) en affichage `presenter`. Après le
-passage à Electron, elle prend la forme de l'icône de la zone de notification (compteurs) et d'un
-onglet de la fenêtre JARVIS. Au passage, les commandes du compte (`~/.claude/commands`) en boutons
-partout.
+Avec un « brief du matin » (mails, devis Odoo en attente, agenda) en affichage `presenter`. Avec
+l'application de bureau, elle prend la forme de compteurs sur l'icône de la zone de notification, d'un
+panneau et d'une place en tête du menu JARVIS. Au passage, les commandes du compte (`~/.claude/commands`) en boutons
+partout. *En place : [boite-de-reception.md](boite-de-reception.md).*
 
 ### 4. Les fichiers sans quitter Jarvis
 
@@ -110,7 +111,10 @@ mode navigateur reste disponible.
    notification, les notifications et les sites connectés. *Fait : application de bureau
    (`build-app.bat`), fenêtres natives, barre JARVIS, sites connectés, notifications avec Approuver
    et Refuser ; validée sous Windows.*
-3. Boîte de réception, actions du compte en boutons.
+3. **Boîte de réception, actions du compte en boutons**. *Fait
+   ([boite-de-reception.md](boite-de-reception.md)) : boîte (à faire, à lire, rappels, Approuver depuis
+   la boîte, Reprendre une validation expirée), routines « seulement les erreurs » et « en tête », brief
+   du matin par compte, actions du compte en boutons, « Pendant ton absence » ; à essayer sous Windows.*
 4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne.

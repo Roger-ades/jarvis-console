@@ -18,6 +18,7 @@ export function projectFor(folder) {
   return k ? list.find((p) => key(p.folder) === k) || null : null;
 }
 export const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+const lines = (t) => t.value.split("\n").map((x) => x.trim()).filter(Boolean);
 
 /** The settings of a project (or of a folder about to become one). Resolves with the saved project, "deleted" or null. */
 export async function editProject({ folder, profiles, presets, models, current = {} }) {
@@ -34,9 +35,25 @@ export async function editProject({ folder, profiles, presets, models, current =
   const pinned = h("input", { type: "checkbox" });
   pinned.checked = p.pinned;
   const row = (label, control) => h("label", { class: "pf-row" }, h("span", {}, label), control);
+  // "Mails à suivre": what makes a mail of this project important in the morning briefs (written by the user)
+  const mails = { follow: true, senders: [], subjects: [], folders: [], instructions: "", ...(p.mails || {}) };
+  const follow = h("input", { type: "checkbox" });
+  follow.checked = mails.follow !== false;
+  const listArea = (values, placeholder) => { const t = h("textarea", { rows: "2", spellcheck: "false", placeholder }); t.value = values.join("\n"); return t; };
+  const senders = listArea(mails.senders, "dupont@client.fr\nclient.fr");
+  const subjects = listArea(mails.subjects, "Chantier Dupont\nDevis 2026-041");
+  const instr = h("textarea", { rows: "2", placeholder: "Ex. les relances du maître d'œuvre, les demandes de modification" });
+  instr.value = mails.instructions || "";
+  const mailBox = h("details", { class: "pf-mails", open: !!(mails.senders.length || mails.subjects.length || mails.instructions) },
+    h("summary", {}, "Mails à suivre (brief du matin)"),
+    h("p", { class: "muted" }, "Pendant ce dossier, les mails qui répondent à ces critères comptent comme importants dans le brief du matin "
+      + "(Configuration → Profils). Une valeur par ligne."),
+    h("label", { class: "check" }, follow, "Suivre dans le brief"),
+    row("Correspondants", senders), row("Mots de l'objet", subjects), row("Consigne", instr));
   const body = h("div", { class: "pf" }, h("p", { class: "muted pf-path" }, folder),
     row("Nom", name), row("Couleur", color), row("Compte", account), row("Autorisations", preset), row("Modèle", model), row("Effort", effort),
     h("label", { class: "check" }, pinned, "Épingler sur l'accueil"),
+    mailBox,
     h("p", { class: "muted" }, "Choisir ce projet règle la barre du bas sur ces valeurs ; tu peux toujours les changer pour une demande."));
   const buttons = [{ label: "Annuler", value: null }];
   if (existing) buttons.push({ label: "Retirer le projet", value: "delete", cls: "danger" });
@@ -59,7 +76,9 @@ export async function editProject({ folder, profiles, presets, models, current =
       return "deleted";
     }
     const saved = await api("/api/projects", { method: "PUT", body: { folder, name: name.value.trim() || baseName(folder), color: color.value,
-      pinned: pinned.checked, profile: account.value, preset: preset.value, model: model.value, effort: effort.value } });
+      pinned: pinned.checked, profile: account.value, preset: preset.value, model: model.value, effort: effort.value,
+      mails: { follow: follow.checked, senders: lines(senders), subjects: lines(subjects), folders: mails.folders || [],
+        instructions: instr.value.trim() } } });
     await loadProjects();
     return saved;
   } catch (e) { toast(e.message, "err"); return null; }

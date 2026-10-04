@@ -157,7 +157,9 @@ function row(r) {
       last ? h("div", { class: "hs" }, `Dernière : ${fmtDate(last.ts)} · `, h("span", { class: `run-st s-${last.status}` }, RUN_LABEL[last.status] || last.status),
         last.error ? ` — ${last.error}` : "") : null),
     h("button", { type: "button", class: "btn small", title: "Lancer maintenant", on: { click: (e) => { e.stopPropagation(); runNow(r); } } }, "Lancer"),
-    toggle);
+    // a morning brief follows its account's settings: they turn it on or off
+    r.brief ? h("button", { type: "button", class: "btn small ghost", title: "Configuration → Profils → Brief du matin",
+      on: { click: (e) => { e.stopPropagation(); editor(r); } } }, "Réglages") : toggle);
 }
 
 async function runNow(r) {
@@ -185,6 +187,11 @@ export async function setRoutineEnabled(r, enabled) {
 }
 
 function editor(r = null, defaults = {}, after = null) {
+  if (r?.brief) {   // a morning brief: the console keeps it from the account's settings
+    toast("Le brief du matin se règle avec son compte : Configuration → Profils → Brief du matin.");
+    ctx.openConfig?.("profiles");
+    return;
+  }
   const done = after || load;
   const profiles = ctx.profiles();
   const presets = ctx.presets().filter((p) => p.enabled && !p.require_confirm);
@@ -235,6 +242,11 @@ function editor(r = null, defaults = {}, after = null) {
   const [openWin, openWinEl] = cb("Ouvrir une fenêtre à chaque exécution", cur.open_window, "Sinon la tâche tourne en arrière-plan (historique, notifications).");
   const [catchUp, catchUpEl] = cb("Rattraper une exécution manquée", cur.catch_up, "Si la console était arrêtée à l'heure prévue, lancer au démarrage suivant.");
   const [teamCb, teamEl] = cb("Mode équipe", !!cur.team, "Le modèle choisi dirige et délègue à des sous-agents (Configuration → Modèles).");
+  // the inbox (docs/boite-de-reception.md)
+  const inboxSel = h("select", {}, h("option", { value: "always" }, "Chaque résultat"), h("option", { value: "errors" }, "Seulement les erreurs"));
+  inboxSel.value = cur.inbox || "always";
+  const [headCb, headEl] = cb("En tête de la boîte de réception", !!cur.headline,
+    "Son dernier résultat (son affichage, s'il en a un) reste en haut de la boîte jusqu'à l'exécution suivante.");
   const err = h("div", { class: "line err", hidden: true });
   const { root, doc } = modalHost("dialog");
   const close = () => { overlay.remove(); doc.removeEventListener("keydown", onKey, true); };
@@ -244,7 +256,7 @@ function editor(r = null, defaults = {}, after = null) {
       at: at.value ? new Date(at.value).getTime() / 1000 : null };
     const body = { ...(r ? { id: r.id } : {}), name: name.value.trim(), prompt: prompt.value.trim(), profile: prof.value, preset: pre.value,
       model: model.value, effort: effort.value, workdir: workdir.value.trim(), schedule, enabled: enabled.checked,
-      open_window: openWin.checked, catch_up: catchUp.checked, team: teamCb.checked };
+      open_window: openWin.checked, catch_up: catchUp.checked, team: teamCb.checked, inbox: inboxSel.value, headline: headCb.checked };
     try {
       await api("/api/routines", { method: "POST", body });
       close();
@@ -265,7 +277,9 @@ function editor(r = null, defaults = {}, after = null) {
         field("Autorisations", pre, "Les presets à confirmation (Complet) sont exclus."), field("Modèle", model),
         field("Effort", effort), field("Dossier de travail", workdir),
         h("label", { class: "field wide" }, h("span", {}, "Planification"), kind, daily, interval, once),
-        enabledEl, openWinEl, catchUpEl, teamEl),
+        field("Dans la boîte de réception", inboxSel, "« Seulement les erreurs » : une réussite n'y reste pas. Validations et erreurs y arrivent toujours."),
+        h("span", {}),
+        enabledEl, openWinEl, catchUpEl, teamEl, headEl),
       err,
       r?.runs?.length ? h("div", { class: "section" }, h("h3", {}, "Dernières exécutions"),
         h("table", { class: "tbl" }, h("tbody", {}, ...r.runs.slice(0, 8).map((x) => h("tr", {},

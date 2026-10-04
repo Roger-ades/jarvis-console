@@ -26,6 +26,9 @@
       <button class="btn ghost" id="btn-install" hidden title="Installer JARVIS comme application (fenêtre séparée, menu Démarrer)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg><span class="lbl">Installer</span>
       </button>
+      <button class="btn ghost" id="btn-inbox" title="Boîte de réception : ce qui attend, toutes discussions confondues">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13l2.5-7.5A2 2 0 0 1 8.4 4h7.2a2 2 0 0 1 1.9 1.5L20 13"/><path d="M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5h-5l-1.5 2.5h-3L9 13z"/></svg><span class="lbl">Boîte</span><span class="ib-count" hidden></span>
+      </button>
       <button class="btn ghost" id="btn-search" title="Rechercher partout (Ctrl+K)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><span class="lbl">Rechercher</span>
       </button>
@@ -89,6 +92,7 @@
         <p class="wordmark">JARVIS</p>
         <p class="empty-title">Prêt, monsieur.</p>
       </div>
+      <div id="inbox-peek" class="inbox-peek" hidden></div>
       <div id="home" class="home-grid"></div>
       <p class="empty-keys">
         <span><kbd>Ctrl</kbd><kbd>K</kbd> rechercher</span>
@@ -156,6 +160,7 @@
     </form>
   </div>
 
+  <aside id="inbox" class="drawer wide" hidden aria-label="Boîte de réception"></aside>
   <aside id="history" class="drawer" hidden aria-label="Historique"></aside>
   <aside id="sessions" class="drawer wide" hidden aria-label="Sessions Claude Code"></aside>
   <aside id="routines" class="drawer wide" hidden aria-label="Routines"></aside>

@@ -12,7 +12,7 @@ if (mode) {
     win: (op, id, data) => ipcRenderer.invoke("jarvis:win", { op, id, data }),
     /** fn({id, type: focus | minimize | restore | bounds | close-request | closed, bounds}) */
     onWin: (fn) => { ipcRenderer.on("jarvis:win-event", (_e, ev) => fn(ev)); },
-    /** Counters for the notification area: {running, awaiting, queued}. */
+    /** Counters for the notification area: {running, awaiting, queued, todo, unread, reminders} (the inbox's). */
     status: (s) => ipcRenderer.send("jarvis:status", s),
     switchMode: (m) => ipcRenderer.invoke("jarvis:switch-mode", m),
     /** A notification of the OS: {tid, aid, kind, title, body, buttons (Approuver / Refuser), looking}. */
@@ -25,7 +25,8 @@ if (mode) {
     siteLogout: () => ipcRenderer.invoke("jarvis:site-logout"),
     /** "JARVIS" shortcuts (Start menu, Desktop) to this app: {paths} or {error}. */
     createLauncher: () => ipcRenderer.invoke("jarvis:launcher"),
-    /** fn({cmd}) — "nouvelle-demande": the global shortcut or the notification area's menu. */
+    /** fn({cmd}) — "nouvelle-demande": the global shortcut or the notification area's menu; "boite": the
+     * inbox; "absent" / "retour": the session locked or asleep, then back. */
     onCommand: (fn) => { ipcRenderer.on("jarvis:command", (_e, c) => fn(c)); },
   });
 }

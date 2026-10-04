@@ -88,6 +88,11 @@ class Routine(BaseModel):
     open_window: bool = True
     catch_up: bool = False
     team: bool = False
+    # the inbox (docs/boite-de-reception.md): every result, or only the errors (a success is read at once);
+    # headline: its latest result shown at the top of the inbox until the next run
+    inbox: Literal["always", "errors"] = "always"
+    headline: bool = False
+    brief: str = ""           # the account of a morning brief: a routine kept by the console (brief.py)
     created: float = Field(default_factory=time.time)
     last_run: float | None = None
     next_run: float | None = None
