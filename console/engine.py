@@ -26,6 +26,7 @@ from . import activity as activity_mod
 from . import attachments as att
 from . import changes as changes_mod
 from . import display as display_mod
+from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
 from . import project_tools
 from . import regard as regard_mod
@@ -180,14 +181,17 @@ class Approval:
     answers: dict | None = None
     by: str = "utilisateur"
     suggest: list = field(default_factory=list)  # rules for "toujours pour ce projet"
+    timed_out: bool = False   # refused by the approval delay (not by a cancel or a stop): the inbox says so
     _claim_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def claim(self, decision: str, message: str = "", by: str = "utilisateur", answers: dict | None = None) -> bool:
+    def claim(self, decision: str, message: str = "", by: str = "utilisateur", answers: dict | None = None,
+              timed_out: bool = False) -> bool:
         """Take the decision once: the user, the watchdog and a cancel may race."""
         with self._claim_lock:
             if self.decision is not None:
                 return False
             self.decision, self.message, self.by, self.answers = decision, message, by, answers
+            self.timed_out = timed_out
         self.event.set()
         return True
 
@@ -335,6 +339,12 @@ class Engine:
         self._displays_lock = threading.Lock()
         self.changes = changes_mod.Changes(self.data_dir / "modifications")  # what Claude changed in files
         self._snaps_lock = threading.Lock()
+        # the inbox (console/inbox.py): what ended before `since` counts as read; set the first time a page asks
+        self._inbox_since: float | None = store.kv_get("inbox_since")
+        self._inbox_lock = threading.Lock()
+        self._inbox_publishing = threading.Lock()  # one publication at a time: the newest is always the last sent
+        self._inbox_timer: threading.Timer | None = None
+        self._inbox_sig = None
         self.routines: dict[str, Routine] = {}
         for raw in store.kv_get("routines", []) or []:
             try:
@@ -410,6 +420,8 @@ class Engine:
         self.bus.publish("ev", {"task_id": tid, "seq": seq, "ts": ts, "kind": kind, "data": data})
         if kind in ("status", "approval", "approval_done"):
             self.bus.publish("state", self.state())   # top bar counters and the emblem follow every transition
+        if kind in ("status", "approval", "approval_done", "display", "display_answer", "user"):
+            self._inbox_changed()
 
     def _audit(self, kind: str, detail: dict, t: dict | None = None):
         if not self.cfg.security.audit:
@@ -426,6 +438,7 @@ class Engine:
             "running": sum(1 for t in active if t["status"] == "running"),
             "awaiting": sum(1 for t in active if t["status"] == "awaiting"),
             "queued": sum(1 for t in active if t["status"] == "queued"),
+            "inbox": inbox_mod.counts(self._inbox_entries(light=True)),
             "cli": {"path": cli[-1] if cli else None,
                     "version": claude_cli.cli_version(cli[0]) if cli and not self._cli_override else "test"},
             "probes": {pid: {k: p.get(k) for k in ("ok", "logged_in", "account", "checked", "error")}
@@ -473,6 +486,9 @@ class Engine:
 
     def shutdown(self):
         self._stop = True
+        with self._inbox_lock:
+            if self._inbox_timer is not None:
+                self._inbox_timer.cancel()
         with self._lock:
             runs = list(self.runs.items())
         for tid, run in runs:
@@ -833,6 +849,7 @@ class Engine:
                 if run and run.policy and adir not in run.policy.ctx.add_dirs:
                     run.policy.ctx.add_dirs.append(adir)  # the live session may read it at once
             seen, seen_block = self._regard(regard, tid, t["profile"])
+            t.pop("waiting_displays", None)  # the user said something: the displays no longer wait for a click
             notes = self._change_notes(t)
             sent = att.message(text + "".join(f"\n\n{b}" for b in (seen_block, notes) if b), files)
             if compact:
@@ -945,7 +962,8 @@ class Engine:
 
     # -------------------------------------------------------- approvals
     def decide(self, tid: str, aid: str, decision: str, message: str = "", answers: dict | None = None,
-               remember: list[str] | None = None) -> dict:
+               remember: list[str] | None = None, via: str = "") -> dict:
+        """via: "boite" when the user decided from the inbox (said in the log)."""
         if decision not in ("allow", "deny"):
             raise TaskError("Décision invalide.")
         run = self.runs.get(tid)
@@ -955,10 +973,136 @@ class Engine:
         added = []
         if decision == "allow" and remember:
             added = self.add_project_rules(self._get(tid)["workdir"], [str(x) for x in remember][:10], tool=appr.tool)
-        if not appr.claim(decision, (message or "").strip()[:2000], "utilisateur",
+        by = "utilisateur (boîte de réception)" if via == "boite" else "utilisateur"
+        if not appr.claim(decision, (message or "").strip()[:2000], by,
                           answers if isinstance(answers, dict) else None):
             raise TaskError("Cette validation n'est plus en attente.", 409)
         return {"ok": True, "remembered": added}
+
+    # -------------------------------------------------------- inbox (console/inbox.py, docs/boite-de-reception.md)
+    def _inbox_entries(self, light: bool = False) -> list[dict]:
+        with self._lock:
+            tasks = list(self.tasks.values())
+            routines = [r.model_dump() for r in self.routines.values()]
+        profiles = {p.id: {"name": p.name, "color": p.color} for p in self.cfg.profiles}
+        return inbox_mod.entries(tasks, routines, self.store.list_notes(), now=time.time(), since=self._inbox_since,
+                                 approval_timeout=self.cfg.general.approval_timeout_min * 60, profiles=profiles,
+                                 light=light)
+
+    def inbox(self, start: bool = False) -> dict:
+        """The entries and their counters. `start` (a page asks): the first time, what has already ended
+        counts as read, so the inbox never opens on the whole history."""
+        if start and self._inbox_since is None:
+            self._inbox_since = time.time()
+            self.store.kv_set("inbox_since", self._inbox_since)
+        items = self._inbox_entries()
+        return {"entries": items, "counts": inbox_mod.counts(items), "since": self._inbox_since}
+
+    def _inbox_changed(self):
+        """Something an entry depends on changed: the pages get the inbox again, once per burst."""
+        with self._inbox_lock:
+            if self._inbox_timer is not None or self._stop:
+                return
+            self._inbox_timer = threading.Timer(0.3, self._inbox_publish)
+            self._inbox_timer.daemon = True
+            self._inbox_timer.start()
+
+    def _inbox_publish(self):
+        with self._inbox_lock:
+            self._inbox_timer = None
+        with self._inbox_publishing:
+            if self._stop:
+                return
+            try:
+                data = self.inbox()
+            except Exception:  # noqa: BLE001 - the store closes at shutdown; the next change publishes again
+                return
+            sig = [(e["id"], e.get("ts"), e.get("count"), e.get("expires")) for e in data["entries"]]
+            if sig == self._inbox_sig:
+                return
+            self._inbox_sig = sig
+            self.bus.publish("inbox", data)
+
+    def inbox_mark(self, ids: list[str] | None = None, section: str | None = None, tasks: list[str] | None = None,
+                   dismiss: bool = False) -> dict:
+        """Mark entries read: by id, a whole section, or the discussions the user just looked at (`tasks`).
+        `dismiss` (Ignorer) also takes away an expired approval, a display waiting for a click, a reminder.
+        An approval waiting is never marked: the user decides."""
+        now = time.time()
+        wanted = {str(x) for x in ids or []}
+        picked = [e for e in self._inbox_entries(light=True)
+                  if e["id"] in wanted or (section and e["section"] == section)]
+        marked, routines_changed, reminders = 0, False, []
+        with self._lock:
+            touched: dict[str, dict] = {}
+
+            def read(tid):
+                t = self.tasks.get(str(tid or ""))
+                if t is not None:
+                    t["read_at"] = now
+                    touched[t["id"]] = t
+            for tid in tasks or []:
+                read(tid)
+            for e in picked:
+                kind = e["kind"]
+                if kind in ("done", "routine", "error", "interrupted"):
+                    for tid in e.get("task_ids") or [e["task_id"]]:
+                        read(tid)
+                elif kind == "run":
+                    r = self.routines.get((e.get("routine") or {}).get("id") or "")
+                    for run in r.runs if r else []:
+                        if run.get("ts") == e["ts"]:
+                            run["read"] = True
+                            routines_changed = True
+                elif not dismiss:
+                    continue
+                elif kind == "expired":
+                    t = self.tasks.get(e["task_id"])
+                    aid = e["id"].rsplit(":", 1)[-1]
+                    if t is not None:
+                        t["expired"] = [x for x in t.get("expired") or [] if x.get("aid") != aid]
+                        touched[t["id"]] = t
+                elif kind == "choice":
+                    t = self.tasks.get(e["task_id"])
+                    if t is not None:
+                        t["waiting_displays"] = [d for d in t.get("waiting_displays") or [] if d.get("key") != e["key"]]
+                        touched[t["id"]] = t
+                elif kind == "reminder":
+                    reminders.append(e["note_id"])
+                else:
+                    continue  # an approval waiting
+                marked += 1
+            for t in touched.values():
+                self._save(t)
+        if routines_changed:
+            self._persist_routines()
+        for nid in reminders:
+            try:
+                self.save_note({"reminded": True}, nid)
+            except TaskError:
+                pass
+        self._inbox_changed()
+        return {"marked": marked}
+
+    def resume_expired(self, tid: str, aid: str) -> dict:
+        """Reprendre: an approval refused for lack of an answer is asked again, the user being back. The
+        session gets a message written by the console and keeps its context (a session that never started
+        is relaunched)."""
+        with self._lock:
+            t = self._get(tid)
+            rec = next((x for x in t.get("expired") or [] if x.get("aid") == aid), None)
+        if not rec:
+            raise TaskError("Rien à reprendre : cette validation n'est plus dans la boîte de réception.", 404)
+        if t.get("session_started"):
+            out = self.followup(tid, inbox_mod.resume_message(rec, self.cfg.general.approval_timeout_min))
+        else:
+            out = self.retry(tid)
+        with self._lock:
+            t["expired"] = [x for x in t.get("expired") or [] if x.get("aid") != aid]
+            self._audit("reprise après expiration", {"outil": rec.get("tool"), "cible": rec.get("target")}, t)
+            self._save(t)
+        self._inbox_changed()
+        return out
 
     # -------------------------------------------------------- search (Ctrl+K)
     def search(self, q: str, limit: int = 30) -> dict:
@@ -1089,12 +1233,14 @@ class Engine:
         note["updated"] = time.time()
         self.store.save_note(note)
         self.bus.publish("notes", {"note": note})
+        self._inbox_changed()
         return note
 
     def delete_note(self, note_id: str):
         if not self.store.delete_note(note_id):
             raise TaskError("Note introuvable.", 404)
         self.bus.publish("notes", {"deleted": note_id})
+        self._inbox_changed()
 
     # -------------------------------------------------------- project actions (its commands and skills)
     def project_actions(self, folder: str, content: bool = False, profile: str | None = None) -> list[dict]:
@@ -1419,6 +1565,10 @@ class Engine:
                         run.awaiting_since = None
                     if t["status"] == "awaiting" and not run.approvals:
                         t["status"] = "running"
+                    if appr.timed_out:  # the inbox keeps it: Reprendre asks again once the user is back
+                        t["expired"] = [*(t.get("expired") or []), {
+                            "aid": appr.id, "kind": appr.kind, "tool": appr.tool, "ts": time.time(),
+                            "target": _clip(summarize_target(appr.tool, appr.input), 300)}][-20:]
                     self._event(tid, "approval_done", {"id": appr.id, "decision": appr.decision,
                                                        "message": appr.message, "by": appr.by, "tool": appr.tool})
                     self._audit("validation", {"outil": appr.tool, "décision": appr.decision,
@@ -1482,7 +1632,8 @@ class Engine:
                         pass
                 for appr in list(run.approvals.values()):
                     if appr.decision is None and now - appr.created > g.approval_timeout_min * 60:
-                        appr.claim("deny", f"Délai de validation dépassé ({g.approval_timeout_min} min).", "console")
+                        appr.claim("deny", f"Délai de validation dépassé ({g.approval_timeout_min} min).", "console",
+                                   timed_out=True)
                 # Background work is over and the lead said nothing since: the session can close.
                 t = self.tasks.get(tid) or {}
                 if (run.had_background and not run.background and not run.stdin_closed and run.got_result
@@ -2359,6 +2510,12 @@ class Engine:
             per_task[key] = {"doc": doc, "rev": rev, "answers": {}}
             while len(per_task) > 100:  # old ones are rebuilt from the events if Claude reuses them
                 per_task.pop(next(iter(per_task)))
+        with self._lock:  # a choice or buttons: the display waits for a click (the inbox shows it)
+            clicks = [d for d in (t.get("waiting_displays") or []) if d.get("key") != key]
+            if any(b["type"] in inbox_mod.CHOICE_BLOCKS for b in doc["blocs"]):
+                clicks = [*clicks, {"key": key, "titre": _clip(doc["titre"], 200), "ts": time.time()}][-20:]
+            t["waiting_displays"] = clicks
+            self._save(t, publish=False)
         self._event(tid, "display", {"key": key, "rev": rev, **doc})
         self._audit("affichage", {"titre": _clip(doc["titre"], 200), "où": doc["ou"], "id": key,
                                   "blocs": [b["type"] for b in doc["blocs"]], **({"mise à jour": rev} if rev > 1 else {})}, t)
@@ -2837,6 +2994,7 @@ class Engine:
             self._calls.pop(tid, None)
         self.changes.drop(tid)
         self.bus.publish("deleted", {"id": tid})
+        self._inbox_changed()
 
     def list_tasks(self, include_closed: bool = True, limit: int = 500) -> list[dict]:
         with self._lock:
@@ -2854,6 +3012,7 @@ class Engine:
         self.changes.sweep(alive)
         self._audit("purge de l'historique", {"tâches supprimées": n, "plus_de_jours": days})
         self.bus.publish("reload", {})
+        self._inbox_changed()
         return n
 
     def export_history(self) -> dict:
@@ -3366,6 +3525,7 @@ class Engine:
     def _persist_routines(self):
         self.store.kv_set("routines", [r.model_dump() for r in self.routines.values()])
         self.bus.publish("routines", {"routines": self.list_routines()})
+        self._inbox_changed()
 
     def list_routines(self) -> list[dict]:
         return [r.public() for r in sorted(self.routines.values(), key=lambda r: (r.next_run or 9e18, r.name))]
@@ -3417,7 +3577,8 @@ class Engine:
             if not r:
                 raise TaskError("Routine inconnue.", 404)
             now = time.time()
-            run = {"ts": now, "manual": manual, "task_id": None, "status": "lancée", "error": ""}
+            # read: an automatic run not launched or put off waits in the inbox (a manual one answered the click)
+            run = {"ts": now, "manual": manual, "task_id": None, "status": "lancée", "error": "", "read": manual}
             try:
                 if self.emergency:
                     raise TaskError("Arrêt d'urgence actif.", 423)
@@ -3457,7 +3618,7 @@ class Engine:
                     r.next_run = None
                     continue
                 if r.next_run and r.next_run <= now and startup and not r.catch_up:
-                    r.runs = ([{"ts": now, "manual": False, "task_id": None, "status": "manquée",
+                    r.runs = ([{"ts": now, "manual": False, "task_id": None, "status": "manquée", "read": False,
                                 "error": "La console était arrêtée à l'heure prévue."}] + r.runs)[:20]
                     r.next_run = None
                 if not r.next_run:
@@ -3467,9 +3628,13 @@ class Engine:
             self.store.kv_set("routines", [r.model_dump() for r in self.routines.values()])
 
     def _routine_loop(self):
+        tick = 0
         while not self._stop:
             time.sleep(5)
             now = time.time()
+            tick += 1
+            if tick % 6 == 0:
+                self._inbox_changed()  # a reminder now due (nothing else tells)
             due = [r.id for r in list(self.routines.values()) if r.enabled and r.next_run and r.next_run <= now]
             for rid in due:
                 try:

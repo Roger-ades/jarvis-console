@@ -477,6 +477,7 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 | `console/display.py` | affichages de `presenter` : vérification des blocs, limites, réponses aux choix et boutons |
 | `console/regard.py` | « Ce que je regarde » : vérification et mise en forme de ce qui part avec le message |
 | `console/changes.py` | modifications de fichiers : copies avant / après, différences, annuler et rétablir |
+| `console/inbox.py` | boîte de réception : ce qui attend l'utilisateur, calculé à partir des tâches, des routines et des notes |
 | `console/routines.py` | routines : planification et calcul des prochaines exécutions |
 | `console/winsys.py` | démarrage à l'ouverture de session (Windows, macOS) |
 | `console/cloud.py` | routines claude.ai (relais Claude Code) |

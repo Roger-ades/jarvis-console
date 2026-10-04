@@ -1,6 +1,7 @@
 # Boîte de réception (conception)
 
-Note de travail : rien n'est commencé. C'est l'étape 3 de la [feuille de route](feuille-de-route.md).
+Note de travail : le serveur est en place (étape 1 ci-dessous), l'interface pas encore. C'est l'étape 3
+de la [feuille de route](feuille-de-route.md).
 Objectif : un seul endroit pour tout ce qui attend l'utilisateur, quels que soient la discussion, la
 fenêtre, le compte ou le projet ; et les commandes du compte en boutons, comme celles des projets.
 
@@ -97,8 +98,9 @@ routine de 7 h dont la validation attendait un utilisateur pas encore arrivé.
 - La page marque lu quand l'utilisateur regarde la discussion : sa fenêtre prend le focus, ou le tour
   se termine pendant qu'elle a le focus et n'est pas réduite (la même règle `looking` que pour les
   notifications). Ouvrir l'entrée, ou la notification d'une tâche terminée, marque aussi lu.
-- Au premier démarrage de cette version, tout ce qui est déjà fini compte comme lu (`inbox_since` dans
-  la table `kv`) : la boîte ne s'ouvre pas sur tout l'historique.
+- La première fois qu'une page demande la boîte, tout ce qui est déjà fini compte comme lu
+  (`inbox_since` dans la table `kv`) : la boîte ne s'ouvre pas sur tout l'historique. D'ici là, seul
+  ce qui est en cours compte (validations en attente, rappels arrivés).
 - **Tout marquer comme lu** par section ; **Ignorer** sur une entrée. Une validation en attente ne
   s'ignore pas : on décide.
 - `S.attention` (pastilles des tâches réduites) laisse la place à ces marques : même sens, mais partagé
@@ -107,10 +109,12 @@ routine de 7 h dont la validation attendait un utilisateur pas encore arrivé.
 
 ## Serveur
 
-- **`console/inbox.py`** : une fonction pure `entries(tasks, routines, notes, now, since)` qui rend la
-  liste triée, testable sans moteur. Identifiants stables : `valider:<tâche>:<validation>`,
-  `expiree:<tâche>:<validation>`, `fin:<tâche>`, `affichage:<tâche>:<clé>`,
-  `routine:<id>:<horodatage>`, `rappel:<note>`.
+- **[console/inbox.py](../console/inbox.py)** : une fonction pure `entries(tasks, routines, notes, …)`
+  qui rend la liste triée, testable sans moteur. Identifiants stables : `valider:<tâche>:<validation>`,
+  `expiree:<tâche>:<validation>`, `affichage:<tâche>:<clé>`, `fin:<tâche>`, `routine:<routine>` (ses
+  résultats regroupés, avec `count` et `task_ids`), `execution:<routine>:<horodatage>`,
+  `rappel:<note>`. Les sortes (`kind`) : `hook`, `permission`, `question`, `plan`, `proposal`,
+  `expired`, `choice`, `error`, `interrupted`, `done`, `routine`, `run`, `reminder`.
 - Forme d'une entrée :
 
 ```json
@@ -122,22 +126,27 @@ routine de 7 h dont la validation attendait un utilisateur pas encore arrivé.
 ```
 
 - **Moteur** ([console/engine.py](../console/engine.py)) :
-  - `_watchdog` note les validations expirées dans la tâche ;
+  - `_watchdog` refuse une validation trop longue avec `timed_out` ; l'attente (`_park`) la note alors
+    dans la tâche (`expired`). Une validation libérée par une annulation ou un arrêt n'y entre pas ;
   - `present` et `display_answer` tiennent à jour les affichages en attente de la tâche
     (`waiting_displays` : clé, titre) ; un message de l'utilisateur (`followup`) les vide ;
-  - `run_routine` marque `read: false` les exécutions non lancées, manquées ou reportées ;
-  - `state()` ajoute les compteurs `inbox: {todo, read, reminders}`. `state` part déjà à chaque
+  - les exécutions automatiques d'une routine naissent non lues (`read: false`) ; celles qui restent
+    non lancées, manquées ou reportées sont des entrées. Une exécution manuelle a eu sa réponse au clic ;
+  - `state()` ajoute les compteurs `inbox: {todo, read, reminder}`. `state` part déjà à chaque
     transition (`_event`) : la barre, le titre de la page et l'icône de notification les reçoivent sans
     rien de plus ;
-  - un événement `inbox` (la liste entière, regroupée à 300 ms près) part quand une entrée change :
-    statut, validation, routine, note, marque.
+  - un événement `inbox` (la liste entière et les compteurs, regroupés à 300 ms près) part quand une
+    entrée change : statut, validation, affichage, message, routine, note, marque ; et toutes les 30 s
+    pour un rappel qui arrive à son heure. Rien ne part si la liste n'a pas changé.
 - **API** :
   - `GET /api/inbox` : les entrées et les compteurs ;
-  - `POST /api/inbox/read` `{ids}` ou `{section}` : marquer lu ;
-  - `POST /api/inbox/dismiss` `{ids}` : ignorer ;
+  - `POST /api/inbox/read` `{ids}`, `{section}` ou `{tasks}` (les discussions que l'utilisateur vient
+    de regarder) : marquer lu ;
+  - `POST /api/inbox/dismiss` `{ids}` : ignorer (enlève aussi une validation expirée, un affichage en
+    attente, un rappel) ;
   - `POST /api/tasks/{tid}/resume-expired` `{aid}` : Reprendre ;
   - Approuver et Refuser : la route existante `/api/tasks/{tid}/approvals/{aid}`, avec `via: "boite"`
-    pour le journal (« par : utilisateur, depuis la boîte de réception »).
+    pour le journal (« par : utilisateur (boîte de réception) »).
 - Calcul en mémoire sur les tâches chargées (2 000 au plus), à chaque changement et regroupé : aucune
   requête à la base.
 
@@ -223,9 +232,10 @@ Configuration → Profils → *compte* → **Brief du matin** :
     comptent tant que la case **Suivre dans le brief** est cochée. Un dossier qui se termine : on la
     décoche, les critères restent pour plus tard. Ceux d'un projet sans compte attitré valent pour les
     briefs de tous les comptes.
-- **Devis en attente** : les devis pas encore envoyés ; les brouillons ne comptent pas. Le filtre
-  Odoo exact reste à préciser (voir Questions ouvertes) ; il fait partie des réglages, pour suivre la
-  façon de travailler.
+- **Devis en attente** : par défaut, les devis pas encore envoyés (état `draft`) dont le vendeur est
+  l'utilisateur Odoo choisi ici (**Mon utilisateur Odoo**, une liste lue dans Odoo par le serveur MCP du
+  compte). Les devis préparés pour d'autres vendeurs ne comptent pas. Le filtre fait partie des
+  réglages, pour suivre la façon de travailler.
 - **Modèle et effort** : ceux du compte par défaut ; un modèle moyen et un effort faible suffisent pour
   une exécution par jour.
 
@@ -299,9 +309,9 @@ les tapant après `/`.
 
 ## Étapes
 
-1. **Serveur** : `inbox.py`, marques de lecture, validations expirées, affichages en attente,
-   compteurs dans `state`, événement et API. Tests avec la fausse CLI (`ASK`, `TOOL Bash …` pour les
-   validations, `DEMO` pour un résultat), une routine sans fenêtre, une expiration avec un délai court.
+1. **Serveur** : `inbox.py`, marques de lecture, validations expirées et Reprendre, affichages en
+   attente, exécutions de routines, compteurs dans `state`, événement et API. *Fait :
+   [tests/test_inbox.py](../tests/test_inbox.py) (fonction pure, moteur avec la fausse CLI, API).*
 2. **Interface** : panneau (tiroir et fenêtre de l'OS), barre du haut, menu JARVIS, Ctrl+K, icône de
    notification ; `S.attention` remplacé. Playwright sur le serveur de démo, dans le navigateur et
    dans l'application (Linux, affichage virtuel), comme pour Electron.
@@ -336,14 +346,11 @@ l'historique, les notes et leurs rappels.
 ## Décisions
 
 - Brief du matin : par compte, désactivé par défaut ; mails importants définis par des critères du
-  compte et des projets suivis ; devis en attente = devis pas encore envoyés, sans les brouillons.
+  compte et des projets suivis ; devis en attente = devis pas encore envoyés (`draft`) de l'utilisateur
+  Odoo choisi dans les réglages du compte.
 - Approuver et refuser depuis la boîte, avec Détail et Ouvrir à côté.
 - Actions du compte en boutons : pour chaque compte, activées au choix de l'utilisateur.
 
 ## Questions ouvertes
 
-- **Devis en attente, côté Odoo** : un devis pas encore envoyé est à l'état `draft`, le même que celui
-  d'un brouillon (Odoo passe à `sent` à l'envoi). Qu'est-ce qui distingue chez vous un devis prêt d'un
-  brouillon : une étiquette, une étape, la personne qui l'a créé (les devis préparés par Claude sont
-  des brouillons), une date de validité renseignée, des lignes complètes ? Ce critère devient le
-  filtre par défaut.
+Aucune pour l'instant.

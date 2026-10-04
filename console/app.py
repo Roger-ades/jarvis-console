@@ -13,12 +13,13 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import MutableHeaders
 
 from . import __version__, attachments, claude_cli, content, mcp, updater, winsys
@@ -117,6 +118,13 @@ class DecisionIn(BaseModel):
     message: str = ""
     answers: dict | None = None
     remember: list[str] = []  # "toujours pour ce projet"
+    via: str = ""             # "boite": decided from the inbox (said in the log)
+
+
+class InboxMarkIn(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=500)
+    section: Literal["", "todo", "read", "reminder"] = ""
+    tasks: list[str] = Field(default_factory=list, max_length=500)  # discussions the user looked at
 
 
 def _err(status: int, detail: str, **extra) -> JSONResponse:
@@ -652,7 +660,24 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.post("/api/tasks/{tid}/approvals/{aid}")
     def task_decide(tid: str, aid: str, body: DecisionIn):
-        return engine.decide(tid, aid, body.decision, body.message, body.answers, body.remember)
+        return engine.decide(tid, aid, body.decision, body.message, body.answers, body.remember, via=body.via)
+
+    # -------------------------------------------------------- inbox (console/inbox.py)
+    @app.get("/api/inbox")
+    def inbox():
+        return engine.inbox(start=True)
+
+    @app.post("/api/inbox/read")
+    def inbox_read(body: InboxMarkIn):
+        return engine.inbox_mark(body.ids, body.section or None, body.tasks)
+
+    @app.post("/api/inbox/dismiss")
+    def inbox_dismiss(body: InboxMarkIn):
+        return engine.inbox_mark(body.ids, body.section or None, body.tasks, dismiss=True)
+
+    @app.post("/api/tasks/{tid}/resume-expired")
+    def task_resume_expired(tid: str, body: dict = Body(...)):
+        return engine.resume_expired(tid, str(body.get("aid", "")))
 
     @app.get("/api/tasks/{tid}/file")
     def task_file(tid: str, path: str, stat: bool = False):

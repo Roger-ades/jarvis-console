@@ -112,7 +112,7 @@ mode navigateur reste disponible.
    (`build-app.bat`), fenêtres natives, barre JARVIS, sites connectés, notifications avec Approuver
    et Refuser ; validée sous Windows.*
 3. **Boîte de réception, actions du compte en boutons**. *Conception :
-   [boite-de-reception.md](boite-de-reception.md).*
+   [boite-de-reception.md](boite-de-reception.md) ; serveur de la boîte en place.*
 4. Déclencheurs : dossier surveillé, enchaînement. Côté serveur : peut avancer en parallèle de 2.
 5. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne.
