@@ -1,0 +1,283 @@
+# Boîte de réception (conception)
+
+Note de travail : rien n'est commencé. C'est l'étape 3 de la [feuille de route](feuille-de-route.md).
+Objectif : un seul endroit pour tout ce qui attend l'utilisateur, quels que soient la discussion, la
+fenêtre, le compte ou le projet ; et les commandes du compte en boutons, comme celles des projets.
+
+## Ce qui est aujourd'hui éparpillé
+
+| Ce qui attend | Où on le voit aujourd'hui | Ce qui manque |
+|---|---|---|
+| Validations, questions, plans, propositions | Fenêtre de la discussion (rouverte d'office), compteur « à valider », notification avec Approuver et Refuser | Une liste de toutes celles en attente, avec l'heure où elles expirent |
+| Validation expirée (`approval_timeout_min`, 30 min par défaut) | Refusée par la console ; une ligne dans la discussion et le journal | Rien ne le signale : une routine de 7 h qui attendait une validation échoue sans qu'on le sache |
+| Discussion terminée pendant qu'on regardait ailleurs | Pastille de la tâche réduite (`S.attention` de [static/js/app.js](../static/js/app.js)), notification | La marque vit dans la page : perdue au rechargement, différente d'une page à l'autre, inconnue de l'icône de notification |
+| Résultat d'une routine sans fenêtre (`open_window: false`) | Historique, ou les 20 dernières exécutions dans le panneau Routines | Rien ne dit qu'un résultat est arrivé, ni ce qu'il contient |
+| Routine non lancée, manquée ou reportée | Panneau Routines, ligne de l'exécution | Idem |
+| Affichage `presenter` dont un choix ou un bouton attend un clic | Dans la conversation ou dans sa fenêtre | Claude a fini son tour en attendant : fenêtre fermée, plus rien ne le rappelle |
+| Rappel d'une note arrivé à son heure | Popup au-dessus de la barre, badge du bouton Notes | Bien couvert ; à réunir avec le reste |
+
+## Principes
+
+- **Une vue calculée par le serveur, pas une copie.** Les entrées se déduisent des tâches, de leurs
+  validations, des routines et des notes. Seules les marques « lu » et « ignoré » s'enregistrent, dans
+  la tâche (comme `closed` ou `pinned`) ou dans l'exécution de routine. Toutes les pages ouvertes,
+  l'icône de notification et, plus tard, le téléphone (étape 5) voient la même chose.
+- **Rien pour Claude.** La boîte n'entre dans aucun prompt et aucun outil ne la lit ni ne la modifie :
+  elle ne coûte aucun token, et un contenu piégé ne peut pas y marquer une entrée comme lue pour la
+  cacher. Seul l'utilisateur marque lu, ignore ou décide.
+- **Pas plus de pouvoir que les fenêtres.** Approuver depuis la boîte passe par la même route qu'un
+  clic dans la fenêtre ou dans la notification, journal compris. Ce qui demande de relire un contenu
+  long (question, plan, proposition) ouvre sa fenêtre.
+- **Les fenêtres restent le lieu du travail.** Une entrée dit quoi et où ; un clic ouvre la
+  discussion. La boîte ne recopie pas la conversation et ne remplace pas l'historique : elle ne garde
+  que ce qui attend.
+
+## Les entrées
+
+Trois sections, dans cet ordre.
+
+**À faire** : ce qui bloque ou attend une décision.
+
+| Entrée | Source | Boutons |
+|---|---|---|
+| Validation d'un appel d'outil | `pending` de la tâche (`hook`, `permission`) | Approuver, Refuser, Ouvrir ; « expire à 10:42 » |
+| Question, plan, proposition | `pending` (`question`, `plan`, `proposal`) | Ouvrir |
+| Validation expirée | notée par le délai de validation (voir plus bas) | Reprendre, Ouvrir, Ignorer |
+| Choix en attente | affichage dont un bloc `choix` ou `actions` n'a pas de réponse, sans message de l'utilisateur depuis | Ouvrir l'affichage, Ignorer |
+| En erreur, interrompue | statut `error` ou `interrupted`, non lue | Relancer, Ouvrir, Ignorer |
+
+**À lire** : ce qui est arrivé pendant qu'on regardait ailleurs.
+
+| Entrée | Source | Boutons |
+|---|---|---|
+| Discussion terminée | statut `done`, fin de tour non lue | Ouvrir, Marquer comme lu ; extrait de la réponse |
+| Résultat de routine | idem, tâche `origin: "routine"` ; regroupé par routine (« 3 exécutions ») | Ouvrir, Marquer comme lu ; extrait |
+| Routine non lancée, manquée ou reportée | `runs` de la routine (sans tâche, ou programmée plus tard) | Ouvrir la routine, Lancer maintenant, Marquer comme lu |
+
+**Rappels** : les rappels des notes arrivés à leur heure (`remind_at` passé, `reminded` faux), avec
+Ouvrir, Plus tard… et Vu, comme la popup actuelle.
+
+Une tâche annulée par l'utilisateur n'y entre jamais : c'est lui qui l'a arrêtée. Une discussion qui
+continue (message de suite) redevient non lue à chaque fin de tour qu'on n'a pas regardée.
+
+### Validation expirée : Reprendre
+
+Passé le délai, le chien de garde du moteur (`_watchdog` dans [console/engine.py](../console/engine.py))
+refuse à la place de l'utilisateur ; Claude continue sans l'action, ou s'arrête. C'est le cas d'une
+routine de 7 h dont la validation attendait un utilisateur pas encore arrivé.
+
+- Le chien de garde note l'expiration dans la tâche (`expired` : validation, outil, cible, heure). On ne
+  peut pas la déduire du refus lui-même : `by: "console"` sert aussi quand une tâche est annulée,
+  arrêtée ou interrompue par l'arrêt du serveur (`_release_approvals`).
+- **Reprendre** envoie à la session un message de suite rédigé par la console : « L'utilisateur est
+  là : refais l'action refusée faute de validation (outil, cible), si elle est toujours utile. » La
+  nouvelle demande de validation arrive aussitôt, cette fois devant l'utilisateur, et la session garde
+  son contexte : rien n'est refait depuis le début. Si la session n'a pas démarré, Reprendre devient
+  Relancer.
+- Pourquoi ne pas simplement attendre plus longtemps : une tâche à valider garde sa place parmi les
+  tâches simultanées (3 par défaut) ; attendre des heures bloquerait la file. On garde le délai actuel
+  et Reprendre ; une attente longue aura un sens avec les validations depuis le téléphone (étape 5).
+
+### Lu, non lu
+
+- Une tâche porte `read_at`. Elle est non lue quand elle a fini un tour (`ended`) après `read_at`.
+- La page marque lu quand l'utilisateur regarde la discussion : sa fenêtre prend le focus, ou le tour
+  se termine pendant qu'elle a le focus et n'est pas réduite (la même règle `looking` que pour les
+  notifications). Ouvrir l'entrée, ou la notification d'une tâche terminée, marque aussi lu.
+- Au premier démarrage de cette version, tout ce qui est déjà fini compte comme lu (`inbox_since` dans
+  la table `kv`) : la boîte ne s'ouvre pas sur tout l'historique.
+- **Tout marquer comme lu** par section ; **Ignorer** sur une entrée. Une validation en attente ne
+  s'ignore pas : on décide.
+- `S.attention` (pastilles des tâches réduites) laisse la place à ces marques : même sens, mais partagé
+  entre les pages et gardé au rechargement.
+- Les marques suivent la tâche et partent avec elle à la purge de l'historique.
+
+## Serveur
+
+- **`console/inbox.py`** : une fonction pure `entries(tasks, routines, notes, now, since)` qui rend la
+  liste triée, testable sans moteur. Identifiants stables : `valider:<tâche>:<validation>`,
+  `expiree:<tâche>:<validation>`, `fin:<tâche>`, `affichage:<tâche>:<clé>`,
+  `routine:<id>:<horodatage>`, `rappel:<note>`.
+- Forme d'une entrée :
+
+```json
+{"id": "valider:3fa2c1d0:9b1e", "section": "todo", "kind": "permission",
+ "ts": 1759561200.0, "expires": 1759563000.0,
+ "task_id": "3fa2c1d0", "title": "Relance des devis", "profile": "work", "color": "#ffb347",
+ "folder": "C:/Users/…/Ventes", "routine": {"id": "a1b2c3d4", "name": "Relances du matin"},
+ "summary": "Bash · npm install", "excerpt": "", "actions": ["approve", "deny", "open"]}
+```
+
+- **Moteur** ([console/engine.py](../console/engine.py)) :
+  - `_watchdog` note les validations expirées dans la tâche ;
+  - `present` et `display_answer` tiennent à jour les affichages en attente de la tâche
+    (`waiting_displays` : clé, titre) ; un message de l'utilisateur (`followup`) les vide ;
+  - `run_routine` marque `read: false` les exécutions non lancées, manquées ou reportées ;
+  - `state()` ajoute les compteurs `inbox: {todo, read, reminders}`. `state` part déjà à chaque
+    transition (`_event`) : la barre, le titre de la page et l'icône de notification les reçoivent sans
+    rien de plus ;
+  - un événement `inbox` (la liste entière, regroupée à 300 ms près) part quand une entrée change :
+    statut, validation, routine, note, marque.
+- **API** :
+  - `GET /api/inbox` : les entrées et les compteurs ;
+  - `POST /api/inbox/read` `{ids}` ou `{section}` : marquer lu ;
+  - `POST /api/inbox/dismiss` `{ids}` : ignorer ;
+  - `POST /api/tasks/{tid}/resume-expired` `{aid}` : Reprendre ;
+  - Approuver et Refuser : la route existante `/api/tasks/{tid}/approvals/{aid}`, avec `via: "boite"`
+    pour le journal (« par : utilisateur, depuis la boîte de réception »).
+- Calcul en mémoire sur les tâches chargées (2 000 au plus), à chaque changement et regroupé : aucune
+  requête à la base.
+
+## Interface
+
+### Le panneau
+
+Un panneau comme Historique ou Notes : un tiroir dans le navigateur et en *Une fenêtre JARVIS*, une
+fenêtre de l'OS (fenêtre cadre de [static/js/wm.js](../static/js/wm.js)) en *Intégré au bureau*,
+position et taille gardées.
+
+- En haut, **Aujourd'hui**, sans Claude : rappels à venir dans la journée, routines prévues, limites
+  des comptes si l'une dépasse 70 %. Puis le brief du jour s'il existe (voir plus bas).
+- Les trois sections, chacune avec son compteur ; filtres par compte et par projet ; « Tout marquer
+  comme lu ».
+- Chaque ligne : liseré compte × projet (`paint`), titre de la discussion, ce qui attend (outil et
+  cible, question, titre de l'affichage), âge, échéance d'une validation, boutons. Une validation
+  montre la raison donnée par la politique, comme la carte de la fenêtre.
+- L'extrait d'une réponse est du texte brut, borné à 300 caractères, sans liens ni images : il peut
+  venir d'un mail ou d'une page.
+- Les validations d'une même discussion se regroupent, comme les exécutions d'une même routine.
+- Au clavier : flèches pour se déplacer, Entrée pour ouvrir. Pas de touche pour approuver : un clic
+  sur le bouton, comme ailleurs.
+
+### Où on la trouve
+
+- **Barre du haut** (navigateur, *Une fenêtre JARVIS*) : un bouton Boîte de réception avec un badge (à
+  faire + à lire) ; un clic sur le compteur « à valider » l'ouvre aussi.
+- **Menu JARVIS** (*Intégré au bureau*, [static/js/bar.js](../static/js/bar.js)) : en tête du menu,
+  les trois entrées les plus urgentes et « Tout voir (n) » ; l'emblème de la barre porte le nombre
+  d'entrées à faire. Ctrl+Alt+J puis l'emblème suffit pour faire le tour.
+- **Icône de la zone de notification** (`updateTray` de [shell/main.js](../shell/main.js)) : info-bulle
+  et menu « 2 à valider · 3 à lire », avec « Boîte de réception ». La pastille de la barre des tâches
+  reste réservée aux validations : ce qui bloque.
+- **Ctrl+K** : « Boîte de réception ».
+- **Au retour** : après un verrouillage de la session ou une mise en veille (`powerMonitor`
+  d'Electron ; dans le navigateur, une page restée cachée plus de 15 min), si des entrées sont arrivées
+  entre-temps, une ligne au-dessus de la barre : « Pendant ton absence : 1 validation expirée,
+  2 résultats », avec Ouvrir. Une seule fois, sans son.
+
+### Notifications
+
+Rien ne change pour les validations (notification avec Approuver et Refuser) ni pour une discussion
+terminée qu'on ne regardait pas. Ouvrir une notification marque l'entrée lue. Une routine réglée sur
+« seulement les erreurs » ne notifie pas ses réussites (voir Routines).
+
+## Routines
+
+- Nouveau réglage **Dans la boîte de réception** : *chaque résultat* (par défaut) ou *seulement les
+  erreurs*. Une routine qui tourne toutes les 15 min n'inonde pas la boîte : une réussite y est
+  marquée lue d'office. Validations, questions et erreurs y arrivent toujours.
+- Une routine sans fenêtre (`open_window: false`) n'est plus perdue : son résultat attend dans la
+  boîte, avec son extrait.
+- Les exécutions non lancées, manquées ou reportées deviennent des entrées « à lire » qui disent
+  pourquoi : preset désactivé, console arrêtée à l'heure prévue, limite du compte.
+- Une routine peut être **en tête de la boîte** : son dernier résultat (son affichage, s'il en a un)
+  s'y montre en haut jusqu'à l'exécution suivante. C'est le principe du brief du matin.
+- Champs ajoutés à `Routine` ([console/routines.py](../console/routines.py)) : `inbox`
+  (`"always"` ou `"errors"`) et `headline` (booléen).
+
+## Brief du matin
+
+Une routine comme une autre, proposée comme modèle dans Nouvelle routine (Claude peut aussi la
+proposer avec `proposer` dans un projet) :
+
+- **Quand** : en semaine à 7:45, sans fenêtre, en tête de la boîte.
+- **Quoi** : les mails importants arrivés depuis la veille (MCP Office 365), les devis Odoo en attente
+  (MCP Odoo, en lecture), l'agenda du jour ; puis un seul affichage `presenter` d'id `brief` :
+  chiffres clés, chronologie pour l'agenda, tableau des devis, liste des mails. `afficher_resultat`
+  ouvre un mail tel quel, `afficher` un devis dans la fenêtre Odoo.
+- **Avec quoi** : preset Lecture seule, compte Travail, un modèle moyen et un effort faible : une
+  exécution par jour.
+- La boîte montre l'affichage en tête, replié sur ses chiffres clés ; Ouvrir le met dans sa fenêtre.
+  Ses choix et boutons marchent comme ailleurs : ils reviennent à la session de la routine.
+- **Sécurité** : la routine lit des mails, la porte d'entrée principale des injections. D'où le preset
+  Lecture seule : rien n'est écrit ni envoyé, et une proposition reste une carte à valider. Les mails
+  sont des données, pas des consignes (déjà dit à Claude dans le prompt système).
+
+La partie sans Claude (validations en attente, échecs de la nuit, rappels et routines du jour) est la
+boîte elle-même : elle ne coûte rien et reste là même si le brief est désactivé.
+
+## Actions du compte en boutons
+
+Aujourd'hui, seules les commandes et skills du dossier d'un projet deviennent des boutons
+(`project_tools.scan`, épinglés par empreinte). Celles du compte, dans son dossier de configuration
+(`commands/<nom>.md` et `skills/<nom>/SKILL.md` de `~/.claude-work` par exemple), ne se lancent qu'en
+les tapant après `/`.
+
+- **Mêmes règles que les actions de projet** : lues par la même fonction (`scan` sur un dossier de
+  base), épinglées par empreinte (`action_pins`, clé `compte:<profil>`). Une action nouvelle ou modifiée
+  montre son contenu avant de pouvoir être lancée. Modèle et effort réglables par action.
+- **Lancement** : une discussion normale `/nom arguments` sur ce compte, dans le dossier choisi dans la
+  barre. Si ce dossier est un projet, avec son preset, son modèle et son effort, sinon ceux du compte ;
+  le modèle et l'effort de l'action passent avant.
+- **Où** : Configuration → Profils → *compte* → Actions (liste, validation, réglages, case « Dans le
+  menu ») ; Ctrl+K ; une ligne de boutons dans le menu JARVIS pour celles cochées « Dans le menu » ;
+  l'onglet Actions d'un projet, section « Du compte » ; une routine peut en lancer une (bloquée si
+  l'action a changé depuis sa validation, comme pour un projet).
+- **Même nom dans le projet et dans le compte** : on ne sait pas d'avance laquelle Claude Code
+  exécutera. Le bouton ne part que si les deux sont validées, et la console signale le doublon.
+- **Hors champ** : les skills des plugins, gérées par Claude Code. `/` dans la barre reste comme
+  aujourd'hui (tout ce que propose Claude Code, sans épinglage : son fonctionnement normal).
+- `proposer` reste limité au projet : Claude ne propose pas d'action du compte, qui vaudrait pour tous
+  ses dossiers.
+
+## Sécurité
+
+- La boîte n'ajoute aucun moyen d'agir : Approuver, Refuser, Relancer et Reprendre sont les gestes des
+  fenêtres, par les mêmes routes, avec le même journal.
+- Claude ne lit pas la boîte et ne peut y marquer, ignorer ou décider quoi que ce soit.
+- Extraits en texte brut, bornés, sans liens actifs.
+- Reprendre envoie un message rédigé par la console, jamais un texte venu de Claude ou d'un contenu lu.
+- Une action du compte vaut pour tous les dossiers du compte : même validation par empreinte que pour
+  un projet, et Claude ne peut pas en proposer.
+
+## Étapes
+
+1. **Serveur** : `inbox.py`, marques de lecture, validations expirées, affichages en attente,
+   compteurs dans `state`, événement et API. Tests avec la fausse CLI (`ASK`, `TOOL Bash …` pour les
+   validations, `DEMO` pour un résultat), une routine sans fenêtre, une expiration avec un délai court.
+2. **Interface** : panneau (tiroir et fenêtre de l'OS), barre du haut, menu JARVIS, Ctrl+K, icône de
+   notification ; `S.attention` remplacé. Playwright sur le serveur de démo, dans le navigateur et
+   dans l'application (Linux, affichage virtuel), comme pour Electron.
+3. **Routines** : réglage « Dans la boîte de réception », exécutions non lancées et manquées,
+   Reprendre, routine en tête.
+4. **Brief du matin** : modèle de routine, section Aujourd'hui, affichage en tête.
+5. **Actions du compte** : lecture et épinglage, Configuration → Profils, Ctrl+K, menu JARVIS, onglet
+   Actions du projet, routines.
+6. **Finitions** : « Pendant ton absence », regroupements.
+
+Les étapes 1 à 3 font la boîte ; 4 et 5 peuvent suivre dans l'ordre qu'on veut. Les déclencheurs
+(étape 4 de la feuille de route) peuvent avancer en parallèle : une tâche déclenchée arrivera dans la
+boîte comme le résultat d'une routine.
+
+## Pour la suite
+
+- **Déclencheurs** (étape 4) : « fichier déposé dans Factures/ → /facture lancée » devient une entrée,
+  avec le même réglage de signalement que les routines.
+- **Téléphone** (étape 5) : la page mobile reprend `GET /api/inbox` et les décisions ; c'est là qu'une
+  attente de validation plus longue que 30 min aura un sens.
+- **Hub d'équipe** (étape 8) : les mentions dans le fil d'un projet.
+- **Routines claude.ai** : leurs exécutions restent dans le panneau Routines. Les faire entrer dans la
+  boîte demanderait d'interroger claude.ai régulièrement.
+
+## Ce qui ne change pas
+
+La politique d'autorisations, le délai de validation, les fenêtres des discussions, les notifications,
+l'historique, les notes et leurs rappels.
+
+## Questions ouvertes
+
+- Brief du matin : heure, compte, et ce qu'il couvre. Quels mails comptent comme importants ? Quels
+  devis Odoo sont « en attente » : envoyés et non confirmés, brouillons de plus de quelques jours ?
+- Approuver un appel d'outil directement depuis la boîte, comme depuis une notification, ou toujours
+  ouvrir la fenêtre ?
+- Actions du compte : pour les deux comptes, ou seulement Travail ?

@@ -1,7 +1,7 @@
 # Application de bureau : JARVIS intégré au bureau
 
-L'application de bureau (Electron, dossier `shell/`) est en place et validée sous Windows (installation,
-fenêtre JARVIS). Elle a trois objectifs :
+L'application de bureau (Electron, dossier `shell/`) est en place et validée sous Windows. Elle a trois
+objectifs :
 
 1. **Les fenêtres de JARVIS deviennent de vraies fenêtres de l'OS**, sans le « bureau » de la console
    (son fond) : une discussion, un aperçu ou un affichage se range à côté d'Excel ou d'Outlook,
@@ -325,8 +325,21 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
 
 ## Ce qui est vérifié
 
-**Sous Windows** (par l'utilisateur) : installation d'Electron par `start-app.bat`, ouverture de la
-fenêtre JARVIS, fenêtres natives et affichage intégré.
+**Sous Windows** (par l'utilisateur) :
+
+- installation d'Electron par `start-app.bat`, ouverture de la fenêtre JARVIS, fenêtres natives et
+  affichage intégré ;
+- installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
+  (Paramètres → Applications), démarrage avec la session qui suit l'application installée ;
+- barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J, clic ailleurs qui
+  la range ; menu JARVIS ;
+- fenêtres des panneaux et des modales : bandeau de titre sous les boutons natifs, taille des
+  questions, déplacement par le bandeau ;
+- notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
+  de la barre des tâches ;
+- fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
+  fenêtres surgissantes), téléchargements ;
+- glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native.
 
 **Sous Linux** (affichage virtuel, Electron 44, piloté par Playwright sur le serveur de démo) :
 
@@ -353,20 +366,9 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
   prend le relais de l'application lancée par `start-app.bat` ;
 - le mode navigateur ne change pas (scénarios rejoués dans Chromium).
 
-## Points à vérifier sous Windows
+## Pour la suite
 
-- Installateur : `build-app.bat`, raccourcis « JARVIS » (menu Démarrer, Bureau), désinstallation
-  (Paramètres → Applications), démarrage avec la session qui suit l'application installée.
-- Barre JARVIS : transparence et coins, position sur plusieurs écrans, Ctrl+Alt+J (pas de conflit
-  avec d'autres outils), clic ailleurs qui la range ; menu JARVIS.
-- Fenêtres des panneaux et des modales : bandeau de titre sous les boutons natifs, taille des
-  questions, glisser une fenêtre par son bandeau.
-- Notifications avec Approuver et Refuser (XML de notification, activation par protocole), pastille
-  de la barre des tâches.
-- Fenêtres de sites : connexion à Odoo, SharePoint, Outlook web (pages de connexion Microsoft,
-  fenêtres surgissantes), téléchargements.
-- Glisser-déposer de fichiers depuis l'Explorateur vers une fenêtre native.
-- Pour la suite : matériau Mica ou Acrylic, couleur de bordure native.
+- Matériau Mica ou Acrylic de Windows 11 pour la barre JARVIS, couleur de bordure native.
 
 ## Étapes
 
@@ -379,7 +381,7 @@ fenêtre JARVIS, fenêtres natives et affichage intégré.
 6. **Finitions** : fenêtre JARVIS qui reste cachée, rappels, pastille sur chaque fenêtre. *Fait.*
 7. **Plus de fenêtre principale** : menu JARVIS dans la barre, panneaux et modales en fenêtres de
    l'OS, bandeaux et rappels au-dessus de la barre. *Fait.*
-8. **Installateur**, signature, mises à jour de l'application. *Fait ; à essayer sous Windows.*
+8. **Installateur**, signature, mises à jour de l'application. *Fait, validé sous Windows.*
 
 ## Ce qui ne change pas
 
