@@ -70,7 +70,12 @@ directement.
   à part (même compte, dossier, modèle et autorisations que l'originale ; la demande d'origine est citée
   comme donnée). Le menu ⋯ règle une actualisation automatique (toutes les heures, chaque matin, en
   semaine) : une routine « Widget · titre » qui ne signale que ses erreurs dans la boîte ; détacher le
-  widget supprime sa routine.
+  widget supprime sa routine. En mode « Intégré au bureau » (Electron), où la page de JARVIS est cachée,
+  chaque widget est une fenêtre à lui sur le bureau de Windows : sans bordure, hors de la barre des tâches,
+  affichée sans prendre le clavier ; on la déplace par son en-tête et on la redimensionne par ses bords,
+  et sa place est retenue (préférences du bureau, `prefs.widgets`). « Ranger » et la superposition ne la touchent pas ;
+  Alt+F4 ne la ferme pas (on la détache par son menu). Electron ne sait pas la clouer sous toutes les
+  fenêtres : c'est une fenêtre ordinaire qui ne passe devant que si on clique dessus (Win+D la masque).
 - **Couleurs compte × projet** ([static/js/tint.js](../static/js/tint.js)) : une note générale
   prend la couleur de son compte. Dans un projet, une note, une fenêtre de session, ses aperçus
   et affichages, et les modales et le panneau du projet mêlent la couleur du compte et celle du

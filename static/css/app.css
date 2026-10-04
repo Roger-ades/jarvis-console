@@ -308,6 +308,10 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .wg-t small { font-size: 10.5px; color: var(--text-3); }
 .wg-body { overflow: auto; padding: 4px 12px 10px; font-size: 12.5px; scrollbar-width: thin; }
 .wg-body .dsp-widget { gap: 10px; }
+/* "Intégré au bureau": a widget is a frameless window of its own; its head moves it */
+.widget-doc .wg { height: 100%; max-height: none; box-sizing: border-box; border-radius: 0; border: 0; box-shadow: none; backdrop-filter: none; }
+.widget-doc .wg-head { -webkit-app-region: drag; app-region: drag; cursor: move; }
+.widget-doc .wg-head button { -webkit-app-region: no-drag; app-region: no-drag; }
 .home-grid { pointer-events: auto; width: min(920px, 100%); display: flex; flex-direction: column; gap: 18px; text-align: left; }
 .home-grid:empty { display: none; }
 .home-sec h3 { margin: 0 0 8px; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); font-weight: 700; }

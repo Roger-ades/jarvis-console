@@ -187,6 +187,20 @@ function frameOptions(f, hidden) {
   };
 }
 
+/** A widget ("Intégré au bureau"): a display of Claude pinned to the desktop of the OS, without frame nor
+ * taskbar entry, under the windows the user works in (it never takes the keyboard by itself). */
+function widgetOptions(f) {
+  const width = f.width || 380, height = f.height || 420;
+  const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width }) ? { x: f.left, y: f.top }
+    : (() => { const a = screen.getPrimaryDisplay().workArea; return { x: a.x + a.width - width - 16, y: a.y + 16 }; })();
+  return {
+    ...pos, width, height, minWidth: 260, minHeight: 140, frame: false, skipTaskbar: true, show: false,
+    maximizable: false, minimizable: false, fullscreenable: false, title: "Widget — JARVIS", icon: ICON,
+    backgroundColor: overlay.color, autoHideMenuBar: true,
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+  };
+}
+
 /** Bottom center of the screen where the mouse is: where the bar shows. */
 function barPlace(height) {
   const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
@@ -234,6 +248,9 @@ function openHandler({ url, frameName, features }) {
   if (url === "about:blank" && String(frameName).startsWith(`${WIN_PREFIX}cadre-`) && mode === "integre") {
     return { action: "allow", overrideBrowserWindowOptions: frameOptions(parseFeatures(features), /(^|,)\s*hidden=1\b/.test(String(features || ""))) };
   }
+  if (url === "about:blank" && String(frameName).startsWith(`${WIN_PREFIX}widget-`) && mode === "integre") {
+    return { action: "allow", overrideBrowserWindowOptions: widgetOptions(parseFeatures(features)) };
+  }
   if (url === "about:blank" && String(frameName).startsWith(WIN_PREFIX) && mode === "integre") {
     return { action: "allow", overrideBrowserWindowOptions: nativeOptions(parseFeatures(features)) };
   }
@@ -247,6 +264,7 @@ function adopt(win, details) {
   if (!id) return;
   if (id === "barre") { adoptBar(win); return; }
   children.set(id, win);
+  if (id.startsWith("widget-")) setImmediate(() => { if (!discreet && !win.isDestroyed()) win.showInactive(); });
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { e.preventDefault(); openOutside(url); });
   // closed by its own button: the page decides (a running discussion asks first), then closes it
@@ -723,7 +741,7 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     const height = Math.max(28, Math.min(64, Number(data?.height) || HEAD_H));
     const c = { color: String(data?.color || overlay.color), symbolColor: String(data?.symbolColor || overlay.symbolColor), height };
     // (the framed windows keep their own colors)
-    const targets = id ? [children.get(String(id))] : [...children].filter(([k]) => !k.startsWith("cadre-")).map(([, w]) => w);
+    const targets = id ? [children.get(String(id))] : [...children].filter(([k]) => !k.startsWith("cadre-") && !k.startsWith("widget-")).map(([, w]) => w);
     if (!id) overlay = { color: c.color, symbolColor: c.symbolColor };
     for (const w of targets) if (w && !w.isDestroyed() && !IS_MAC) { try { w.setTitleBarOverlay(c); w.setBackgroundColor(c.color); } catch { /* old platform */ } }
     return true;

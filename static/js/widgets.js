@@ -5,6 +5,7 @@ import { openDisplayWindow, renderDisplay, setDoc, unmount } from "./display.js"
 import { popupMenu } from "./taskwin.js";
 import { taskTint } from "./tint.js";
 import { $, fmtDate, h, toast } from "./util.js";
+import * as wm from "./wm.js";
 
 let ctx = { profiles: () => [], openTask: () => {} };
 let list = [];
@@ -74,11 +75,23 @@ function card(w) {
 }
 
 function render() {
-  const box = $("#widgets");
-  if (!box) return;
   for (const v of views) unmount(v);
   views.clear();
+  if (wm.isNative()) { renderNative(); return; }
+  const box = $("#widgets");
+  if (!box) return;
   box.replaceChildren(...list.map(card));
   box.hidden = !list.length;
   $("#desktop")?.classList.toggle("has-widgets", list.length > 0);
+}
+
+/** "Intégré au bureau": the JARVIS page is hidden; each widget is a window of its own on the desktop. */
+function renderNative() {
+  const ids = new Set(list.map((w) => w.id));
+  for (const id of wm.widgetWindowIds()) if (!ids.has(id)) wm.closeWidgetWindow(id);
+  let below = 0;
+  for (const w of list) {
+    wm.openWidgetWindow(w.id, card(w), { below, onGone: () => setTimeout(render, 500) });
+    below += 432;
+  }
 }

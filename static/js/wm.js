@@ -580,6 +580,51 @@ export function focusPanel(el) {
   return true;
 }
 
+// ------------------------------------------------------------ widgets on the desktop of the OS ("Intégré au bureau")
+const WIDGET = "widget-";   // window.open name: jarvis-win:widget-<id>
+const widgetWins = new Map(); // id -> {doc, onGone}
+
+/** A widget (widgets.js) in a window of its own on the desktop, where the user left it (else stacked on the
+ * right of the screen, under `below` px of the ones before). Returns its document, or null. */
+export function openWidgetWindow(id, el, { below = 0, onGone = null } = {}) {
+  if (!NATIVE) return null;
+  const old = widgetWins.get(id);
+  if (old) { old.doc.body.replaceChildren(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" })); return old.doc; }
+  const p = prefs().widgets?.[id];
+  const s = window.screen, w = p?.w || 380, hgt = p?.h || 420;
+  const x = p ? p.x : (s.availLeft || 0) + s.availWidth - w - 16, y = p ? p.y : (s.availTop || 0) + 16 + below;
+  const win = window.open("about:blank", `jarvis-win:${WIDGET}${id}`, `width=${w},height=${hgt},left=${Math.round(x)},top=${Math.round(y)}`);
+  if (!win) return null;
+  const doc = nativeDocument(win, ["widget-doc"]);
+  doc.title = "Widget — JARVIS";
+  doc.body.append(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
+  widgetWins.set(id, { doc, onGone });
+  addLookupDocument(doc);
+  docInits.forEach((fn) => fn(doc));
+  doc.addEventListener("pointerdown", () => { lastDoc = doc; }, true);
+  return doc;
+}
+
+export function closeWidgetWindow(id) {
+  const x = widgetWins.get(id);
+  if (!x) return;
+  widgetWins.delete(id);
+  removeLookupDocument(x.doc);
+  if (lastDoc === x.doc) lastDoc = barDoc || document;
+  bridge.win("close", WIDGET + id);
+}
+
+export const widgetWindowIds = () => [...widgetWins.keys()];
+
+function widgetEvent(id, type, b) {
+  const x = widgetWins.get(id);
+  if (!x) return;
+  if (type === "bounds" && b) savePrefs({ widgets: { ...(prefs().widgets || {}), [id]: { x: b.x, y: b.y, w: b.width, h: b.height } } });
+  else if (type === "focus") lastDoc = x.doc;
+  else if (type === "closed") { widgetWins.delete(id); removeLookupDocument(x.doc); x.onGone?.(); }   // (a crash)
+  // (close-request, Alt+F4: it stays; detaching is in its menu)
+}
+
 /** Tout fermer: the panels and the dialogs' windows too. */
 export function closeFrames() {
   for (const f of [...frames.values()]) (f.onClose || (() => closeFrame(f.id)))();
@@ -628,6 +673,7 @@ export function retheme() {
   const theme = document.documentElement.getAttribute("data-theme") || "sombre";
   barDoc?.documentElement.setAttribute("data-theme", theme);
   for (const f of frames.values()) { f.doc.documentElement.setAttribute("data-theme", theme); setTimeout(() => frameColors(f), 50); }
+  for (const x of widgetWins.values()) x.doc.documentElement.setAttribute("data-theme", theme);
   if (NATIVE) bridge.win("theme", null, theme);
   for (const [id, w] of wins) {
     if (!w.win) continue;
@@ -640,6 +686,7 @@ export function retheme() {
 if (NATIVE) {
   bridge.onWin(({ id, type, bounds: b }) => {
     if (String(id).startsWith(FRAME)) { frameEvent(String(id).slice(FRAME.length), type, b); return; }
+    if (String(id).startsWith(WIDGET)) { widgetEvent(String(id).slice(WIDGET.length), type, b); return; }
     const w = wins.get(id);
     if (!w) return;
     if (type === "focus") markFocus(id);
