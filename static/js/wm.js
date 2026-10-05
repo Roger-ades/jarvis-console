@@ -582,14 +582,19 @@ export function focusPanel(el) {
 
 // ------------------------------------------------------------ widgets on the desktop of the OS ("Intégré au bureau")
 const WIDGET = "widget-";   // window.open name: jarvis-win:widget-<id>
-const widgetWins = new Map(); // id -> {doc, onGone}
+const widgetWins = new Map(); // id -> {doc, onClose, onGone}
 
 /** A widget (widgets.js) in a window of its own on the desktop, where the user left it (else stacked on the
- * right of the screen, under `below` px of the ones before). Returns its document, or null. */
-export function openWidgetWindow(id, el, { below = 0, onGone = null } = {}) {
+ * right of the screen, under `below` px of the ones before). onClose: what closing it from Windows does
+ * (Alt+F4, the window's menu). Returns its document, or null. */
+export function openWidgetWindow(id, el, { below = 0, onClose = null, onGone = null } = {}) {
   if (!NATIVE) return null;
   const old = widgetWins.get(id);
-  if (old) { old.doc.body.replaceChildren(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" })); return old.doc; }
+  if (old) {
+    Object.assign(old, { onClose, onGone });
+    old.doc.body.replaceChildren(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
+    return old.doc;
+  }
   const p = prefs().widgets?.[id];
   const s = window.screen, w = p?.w || 380, hgt = p?.h || 420;
   const x = p ? p.x : (s.availLeft || 0) + s.availWidth - w - 16, y = p ? p.y : (s.availTop || 0) + 16 + below;
@@ -598,7 +603,7 @@ export function openWidgetWindow(id, el, { below = 0, onGone = null } = {}) {
   const doc = nativeDocument(win, ["widget-doc"]);
   doc.title = "Widget — JARVIS";
   doc.body.append(el, h("div", { id: "modal-root" }), h("div", { id: "toasts", class: "toasts", "aria-live": "polite" }));
-  widgetWins.set(id, { doc, onGone });
+  widgetWins.set(id, { doc, onClose, onGone });
   addLookupDocument(doc);
   docInits.forEach((fn) => fn(doc));
   doc.addEventListener("pointerdown", () => { lastDoc = doc; }, true);
@@ -621,8 +626,8 @@ function widgetEvent(id, type, b) {
   if (!x) return;
   if (type === "bounds" && b) savePrefs({ widgets: { ...(prefs().widgets || {}), [id]: { x: b.x, y: b.y, w: b.width, h: b.height } } });
   else if (type === "focus") lastDoc = x.doc;
+  else if (type === "close-request") x.onClose?.();
   else if (type === "closed") { widgetWins.delete(id); removeLookupDocument(x.doc); x.onGone?.(); }   // (a crash)
-  // (close-request, Alt+F4: it stays; detaching is in its menu)
 }
 
 /** Tout fermer: the panels and the dialogs' windows too. */

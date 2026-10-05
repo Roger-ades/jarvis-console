@@ -43,6 +43,8 @@ function tintOfWidget(w) {
   return taskTint({ color: p?.color, workdir: w.workdir });
 }
 
+const detach = (w) => call(`/api/widgets/${w.id}`, "DELETE", undefined, "Widget retiré du bureau.");
+
 function card(w) {
   setDoc(w.task, { key: w.key, rev: w.rev, ...w.doc });
   const color = tintOfWidget(w);
@@ -60,7 +62,7 @@ function card(w) {
         k ? `Claude l'actualisera ${label.toLowerCase()} (Routines).` : "Actualisation automatique arrêtée."),
     })),
     "-",
-    { label: "Détacher du bureau", danger: true, run: () => call(`/api/widgets/${w.id}`, "DELETE") },
+    { label: "Détacher du bureau", danger: true, run: () => detach(w) },
   ]));
   const when = [account && ctx.profiles().length > 1 ? account.name : "", `à jour ${fmtDate(w.updated)}`,
     w.auto ? w.auto_label : ""].filter(Boolean).join(" · ");
@@ -70,7 +72,8 @@ function card(w) {
       h("div", { class: "wg-t" }, h("b", { title: w.doc.titre }, w.doc.titre), h("small", {}, when)),
       btn("retry", "Actualiser maintenant : Claude refait l'affichage avec les données du moment",
         () => call(`/api/widgets/${w.id}/refresh`, "POST", {}, "Claude actualise le widget…")),
-      more),
+      more,
+      btn("close", "Retirer du bureau", () => detach(w))),
     h("div", { class: "wg-body" }, view));
 }
 
@@ -91,7 +94,7 @@ function renderNative() {
   for (const id of wm.widgetWindowIds()) if (!ids.has(id)) wm.closeWidgetWindow(id);
   let below = 0;
   for (const w of list) {
-    wm.openWidgetWindow(w.id, card(w), { below, onGone: () => setTimeout(render, 500) });
+    wm.openWidgetWindow(w.id, card(w), { below, onClose: () => detach(w), onGone: () => setTimeout(render, 500) });
     below += 432;
   }
 }

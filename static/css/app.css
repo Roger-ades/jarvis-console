@@ -308,8 +308,11 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .wg-t small { font-size: 10.5px; color: var(--text-3); }
 .wg-body { overflow: auto; padding: 4px 12px 10px; font-size: 12.5px; scrollbar-width: thin; }
 .wg-body .dsp-widget { gap: 10px; }
-/* "Intégré au bureau": a widget is a frameless window of its own; its head moves it */
-.widget-doc .wg { height: 100%; max-height: none; box-sizing: border-box; border-radius: 0; border: 0; box-shadow: none; backdrop-filter: none; }
+/* "Intégré au bureau": a widget is a transparent frameless window of its own, the card drawn inside it with room
+   for its shadow (nothing behind it to blur: a more solid surface); its head moves it */
+html.native-doc.widget-doc, html.native-doc.widget-doc body { background: transparent; }
+.widget-doc .wg { position: fixed; inset: 6px; max-height: none; background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .3); backdrop-filter: none; }
 .widget-doc .wg-head { -webkit-app-region: drag; app-region: drag; cursor: move; }
 .widget-doc .wg-head button { -webkit-app-region: no-drag; app-region: no-drag; }
 .home-grid { pointer-events: auto; width: min(920px, 100%); display: flex; flex-direction: column; gap: 18px; text-align: left; }

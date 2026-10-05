@@ -188,7 +188,8 @@ function frameOptions(f, hidden) {
 }
 
 /** A widget ("Intégré au bureau"): a display of Claude pinned to the desktop of the OS, without frame nor
- * taskbar entry, under the windows the user works in (it never takes the keyboard by itself). */
+ * taskbar entry, under the windows the user works in (it never takes the keyboard by itself). Transparent:
+ * the page draws the card (rounded corners, border, shadow) as on the JARVIS desktop. */
 function widgetOptions(f) {
   const width = f.width || 380, height = f.height || 420;
   const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width }) ? { x: f.left, y: f.top }
@@ -196,7 +197,7 @@ function widgetOptions(f) {
   return {
     ...pos, width, height, minWidth: 260, minHeight: 140, frame: false, skipTaskbar: true, show: false,
     maximizable: false, minimizable: false, fullscreenable: false, title: "Widget — JARVIS", icon: ICON,
-    backgroundColor: overlay.color, autoHideMenuBar: true,
+    transparent: true, backgroundColor: "#00000000", hasShadow: false, autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
   };
 }
