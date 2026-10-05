@@ -30,7 +30,7 @@ from . import display as display_mod
 from . import documents as docs_mod
 from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
-from . import project_tools
+from . import odoo_link, office_link, project_nav, project_tools
 from . import regard as regard_mod
 from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
@@ -153,7 +153,9 @@ DOCS_SPEC = {
         },
     },
 }
-CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL}
+PROJECT_TOOL = f"mcp__{CONSOLE_MCP}__projet"
+PROJECT_SPEC = {"_meta": ALWAYS_LOAD, **project_nav.SPEC}
+CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL}
 DOCS_RESCAN = 15 * 60  # the document folders are walked again this often (only changed files are read)
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
@@ -359,6 +361,7 @@ class Engine:
         self._cli_override = cli_command
         self._lock = threading.RLock()
         self._warm_checked = 0.0
+        self._archive_checked = time.time()  # the startup pass runs with the purge
         self._warming: set[str] = set()
         self._wake = threading.Event()
         self._stop = False
@@ -527,6 +530,7 @@ class Engine:
             if n:
                 self.tasks = {k: v for k, v in self.tasks.items() if k in alive}
         self.changes.sweep(alive)
+        self.auto_archive()
 
     def shutdown(self):
         self._stop = True
@@ -583,7 +587,8 @@ class Engine:
                     routine: dict | None = None, closed: bool = False, team: bool = False,
                     attachments: list[str] | None = None, context: list[dict] | None = None,
                     extra_dirs: list[str] | None = None, not_before: float | None = None,
-                    regard: dict | None = None) -> dict:
+                    regard: dict | None = None, marks: dict | None = None) -> dict:
+        """marks: fields of the console's own on the task (ephemeral: its session is not kept by Claude Code)."""
         if self.emergency:
             raise TaskError("Arrêt d'urgence actif : réactive la console avant de lancer une tâche.", 423)
         cfg = self.cfg
@@ -642,7 +647,7 @@ class Engine:
             "status": "queued", "created": now, "started": None, "ended": None,
             "session_id": str(uuid.uuid4()), "session_started": False, "turns": 0,
             "cost_usd": 0.0, "duration_ms": 0, "result": "", "error": "", "is_error": False,
-            "pinned": False, "closed": bool(closed), "retry_of": retry_of, "pending": [], "mcp": [],
+            "pinned": False, "closed": bool(closed), "archived": 0, "retry_of": retry_of, "pending": [], "mcp": [],
             "todos": [], "usage": {}, "output_bytes": 0, "truncated": False, "model_resolved": "",
             "queued_messages": [att.message(text + (f"\n\n{seen_block}" if seen_block else ""), files)],
             "origin": origin, "routine": routine, "regard": seen,
@@ -658,6 +663,7 @@ class Engine:
                      "max_turns": pre.max_turns or cfg.general.max_turns,
                      "team": {"agents": team_agents, "prompt": team_prompt,
                               "subagent_default": cfg.team.subagent_default} if team_agents else None},
+            **(marks or {}),
         }
         if resume:
             t["session_id"], t["session_started"] = resume, True
@@ -895,6 +901,8 @@ class Engine:
                     run.policy.ctx.add_dirs.append(adir)  # the live session may read it at once
             seen, seen_block = self._regard(regard, tid, t["profile"])
             t.pop("waiting_displays", None)  # the user said something: the displays no longer wait for a click
+            if t.get("archived"):
+                self._unarchive(t, "un message")
             notes = self._change_notes(t)
             sent = att.message(text + "".join(f"\n\n{b}" for b in (seen_block, notes) if b), files)
             if compact:
@@ -923,7 +931,7 @@ class Engine:
 
     def _deliver(self, tid: str, t: dict, run: Run | None, messages: list[str]):
         """Into the live session, else queued for the next run (which resumes the session)."""
-        if run and run.proc and not run.stdin_closed and t["status"] in ("running", "awaiting"):
+        if run and run.proc and not run.stdin_closed and t["status"] in ("running", "awaiting") and not t.get("move_to"):
             for m in messages:
                 self._send_user(run, m)
             return
@@ -1029,7 +1037,7 @@ class Engine:
     # -------------------------------------------------------- inbox (console/inbox.py, docs/boite-de-reception.md)
     def _inbox_entries(self, light: bool = False) -> list[dict]:
         with self._lock:
-            tasks = list(self.tasks.values())
+            tasks = [t for t in self.tasks.values() if not t.get("archived")]  # put away: nothing left to read
             routines = [r.model_dump() for r in self.routines.values()]
         profiles = {p.id: {"name": p.name, "color": p.color} for p in self.cfg.profiles}
         return inbox_mod.entries(tasks, routines, self.store.list_notes(), now=time.time(), since=self._inbox_since,
@@ -1178,7 +1186,8 @@ class Engine:
         out = []
         for t in tasks:
             if t["id"] in found:
-                out.append({k: t.get(k) for k in ("id", "title", "profile", "profile_name", "color", "status", "created", "workdir", "not_before")}
+                out.append({k: t.get(k) for k in ("id", "title", "profile", "profile_name", "color", "status", "created", "workdir",
+                                                  "not_before", "archived")}
                            | self._live_profile(t)
                            | {"snippet": found[t["id"]]})
             if len(out) >= limit:
@@ -1413,6 +1422,8 @@ class Engine:
             proj.mails = old.mails
         if old and "brief" not in data:
             proj.brief = old.brief
+        if old and "odoo" not in data:
+            proj.odoo = old.odoo
         cfg.projects = [p for p in cfg.projects if norm(p.folder) != norm(folder)] + [proj]
         self.cfg_store.save(cfg, f"projet {proj.name}")
         self.bus.publish("projects", {"projects": self.projects()})
@@ -1753,8 +1764,9 @@ class Engine:
             prop = self._proposal(tid, (msg.get("params") or {}).get("arguments") or {})
         except TaskError as exc:
             return reply("Rien de proposé : " + exc.message, True)
-        what = {"action": "une action", "routine": "une routine", "consigne": "une consigne"}.get(prop["quoi"], "quelque chose")
-        verb = "remplacer" if prop["quoi"] == "consigne" and prop.get("remplace") is True else "ajouter"
+        what = {"action": "une action", "routine": "une routine", "consigne": "une consigne",
+                "odoo": "un lien vers Odoo"}.get(prop["quoi"], "quelque chose")
+        verb = "remplacer" if prop["quoi"] in ("consigne", "odoo") and prop.get("remplace") is True else "ajouter"
         appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=PROPOSE_TOOL, input=prop,
                         reason=f"Claude propose de {verb} {what} au projet « {prop['projet']} ».")
 
@@ -1767,6 +1779,77 @@ class Engine:
             except TaskError as exc:
                 reply("Acceptée, mais pas enregistrée : " + exc.message, True)
         self._park(tid, run, appr, answer)
+
+    # -------------------------------------------------------- the project follows the conversation (project_nav.py)
+    def _account_projects(self, pid: str) -> list:
+        return [p for p in self.cfg.projects if not p.profile or p.profile == pid]
+
+    def _project_tool(self, tid: str, run: Run, rid: str, msg: dict):
+        """Tool "projet": `ouvrir` shows the panel at once; `rattacher` waits for the user's click on a card,
+        then the discussion moves at the end of the turn."""
+        mid = msg.get("id")
+
+        def reply(text: str, failed: bool = False):
+            self._respond(run, rid, {"mcp_response": {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": text}], "isError": failed}}})
+
+        args = (msg.get("params") or {}).get("arguments") or {}
+        args = args if isinstance(args, dict) else {}
+        t = self._get(tid)
+        action = str(args.get("action") or "").strip().lower()
+        if action not in ("ouvrir", "rattacher"):
+            return reply("« action » vaut ouvrir ou rattacher.", True)
+        projects = self._account_projects(t["profile"])
+        proj, many = project_nav.find(str(args.get("nom") or ""), projects)
+        if not proj:
+            known = many or projects
+            names = ", ".join(f"« {p.name} »" for p in known[:15])
+            return reply(("Plusieurs projets correspondent : " if many else "Projet introuvable. Projets du compte : ")
+                         + (names or "aucun") + ".", True)
+        here = norm(t.get("workdir") or "") == norm(proj.folder)
+        if action == "ouvrir":
+            self.bus.publish("project_open", {"folder": proj.folder, "profile": t["profile"], "task_id": tid, "asked": True})
+            return reply(f"Panneau du projet « {proj.name} » ouvert à côté de la discussion."
+                         + ("" if here else " Cette discussion reste dans son dossier ; pour qu'elle continue dans le "
+                                            "projet, propose-le avec l'action rattacher."))
+        if here:
+            return reply(f"Cette discussion est déjà dans le projet « {proj.name} ».")
+        rules = len([r for r in self.cfg.project_rules if norm(r.folder) == norm(proj.folder)])
+        cur = self._project(t.get("workdir") or "")
+        prop = {"quoi": "rattacher", "projet": proj.name, "dossier": proj.folder, "couleur": proj.color,
+                "actuel": cur.name if cur else "", "dossier_actuel": t.get("workdir") or "", "regles": rules,
+                "preset": t.get("preset_name") or ""}
+        appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=PROJECT_TOOL, input=prop,
+                        reason=f"Claude propose de passer cette discussion dans le projet « {proj.name} ».")
+
+        def answer(a: Approval):
+            if a.decision != "allow":
+                return reply("L'utilisateur garde la discussion où elle est" + (f" : {a.message}" if a.message else ".")
+                             + " N'insiste pas.")
+            with self._lock:
+                t["move_to"] = proj.folder
+                self._save(t)
+            self._audit("discussion rattachée à un projet", {"projet": proj.name, "dossier": proj.folder}, t)
+            reply(f"Accepté : la discussion passera dans le projet « {proj.name} » ({proj.folder}) à la fin de ce tour. "
+                  "Termine ta réponse maintenant ; la suite de la discussion continuera dans ce dossier.")
+        self._park(tid, run, appr, answer)
+
+    def _move_after_turn(self, t: dict):
+        """A move the user accepted (tool projet, rattacher): done once the turn is over."""
+        dest = t.pop("move_to", None)
+        if not dest:
+            return
+        started = t.get("session_started")
+        try:
+            self.move_task(t["id"], dest)
+        except TaskError as exc:
+            self._event(t["id"], "info", {"text": f"Discussion non déplacée dans le projet : {exc.message}"})
+            self._save(t)
+            return
+        if not started:  # (a started session says it itself, see move_session)
+            proj = self._project(dest)
+            self._event(t["id"], "info", {"text": f"Discussion passée dans le projet « {proj.name if proj else dest} » ({dest})."})
+        self.bus.publish("project_open", {"folder": dest, "profile": t["profile"], "task_id": t["id"]})
 
     def _proposal(self, tid: str, args: dict) -> dict:
         t = self._get(tid)
@@ -1795,6 +1878,16 @@ class Engine:
                 out["remplace"] = True
                 out["actuelle"] = (proj.mails.instructions or "").strip()
             return out
+        if quoi == "odoo":
+            links = odoo_link.links_of(args.get("projets_odoo"))
+            if not links:
+                raise TaskError("« projets_odoo » attend au moins un projet Odoo, avec son id et son nom lus dans Odoo.")
+            if len(links) > 10:
+                raise TaskError("dix projets Odoo au plus.")
+            flag = args.get("remplace")
+            replace = flag is True or str(flag or "").strip().lower() in ("1", "true", "oui", "vrai")
+            return {**base, "nom": "lien", "projets_odoo": [x.model_dump() for x in links],
+                    "actuels": [x.model_dump() for x in proj.odoo], **({"remplace": True} if replace else {})}
         if quoi == "action":
             name = text("nom", 40, True).lower()
             if not project_tools.NAME.match(name):
@@ -1809,7 +1902,7 @@ class Engine:
             return {**base, "nom": name, "libelle": label, "parametre": hint, "consigne": body, "fichier": str(path),
                     "remplace": old, "contenu": project_tools.command_file(name, label, base["description"], hint, body)}
         if quoi != "routine":
-            raise TaskError("« quoi » vaut action, routine ou consigne.")
+            raise TaskError("« quoi » vaut action, routine, consigne ou odoo.")
         from .routines import Schedule
         action = text("action", 40).lower().lstrip("/")
         if action:
@@ -1837,6 +1930,11 @@ class Engine:
         t = self._get(tid)
         if prop["quoi"] == "consigne":
             return self._apply_consigne(t, prop)
+        if prop["quoi"] == "odoo":
+            proj = self.link_odoo(prop["dossier"], prop["projets_odoo"], replace=prop.get("remplace") is True, task=t)
+            names = ", ".join(f"« {x['name']} »" for x in proj["odoo"])
+            return (f"Projets Odoo liés au projet « {proj['name']} » : {names}. Leurs tâches et sous-tâches s'affichent "
+                    "dans l'onglet Suivi du panneau Projet ; la console les lit maintenant.")
         if prop["quoi"] == "action":
             path = Path(prop["fichier"])
             now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
@@ -2083,6 +2181,12 @@ class Engine:
             if now - self._warm_checked >= 30:
                 self._warm_checked = now
                 self._keep_warm_tick(now)
+            if now - self._archive_checked >= 3600:
+                self._archive_checked = now
+                try:
+                    self.auto_archive(now)
+                except Exception:  # noqa: BLE001 - the watchdog must keep running; the next pass retries
+                    pass
             for tid, run in runs:
                 waiting = run.awaiting_total + ((now - run.awaiting_since) if run.awaiting_since else 0)
                 if run.stop_status is None and now - run.started - waiting > g.task_timeout_min * 60:
@@ -2138,7 +2242,8 @@ class Engine:
                                 routines=self.project_routines(proj.folder) if proj else None,
                                 apps=mcp.web_apps(prof, t["workdir"]),
                                 facts=brief_mod.session_lines(proj) if proj else None,
-                                documents=self.cfg.documents.enabled)
+                                documents=self.cfg.documents.enabled,
+                                projects=project_nav.prompt_line(self._account_projects(prof.id)))
         system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
                              if x and x.strip())
         if team.get("agents"):
@@ -2168,6 +2273,8 @@ class Engine:
         else:
             t["session_id"] = str(uuid.uuid4())
             args += ["--session-id", t["session_id"]]
+        if t.get("ephemeral"):
+            args.append("--no-session-persistence")
         name = re.sub(r"[^\w .,:'-]", "", f"JARVIS - {t['title']}")[:80]
         args += ["--name", name]
         return args
@@ -2282,6 +2389,8 @@ class Engine:
                 self._event(tid, "status", {"status": status})
             self._audit("tâche terminée", {"statut": status, "coût_usd": round(t.get("cost_usd", 0), 4),
                                            "tours": t.get("turns", 0), "erreur": err}, t)
+            if t.get("move_to"):
+                self._move_after_turn(t)   # before a queued message starts the next turn
             if t.get("queued_messages") and status not in ("cancelled",) and not self.emergency:
                 t["status"] = "queued"
                 self.queue.append(tid)
@@ -2289,6 +2398,14 @@ class Engine:
             self._save(t)
             if t.get("routine"):
                 self._routine_done(t)
+        if t.get("odoo_sync"):
+            self._odoo_tasks_done(t)
+        elif t.get("odoo_edit"):
+            self._odoo_edit_done(t)
+        elif t.get("office_sync"):
+            self._office_done(t)
+        elif t.get("odoo_search") and t["status"] in TERMINAL:
+            self._forget_reader(t["id"], 600)   # (a search nobody came back for)
         self.bus.publish("state", self.state())
         self._wake.set()
 
@@ -2694,8 +2811,10 @@ class Engine:
                                     "turns": msg.get("num_turns"), "denials": denials})
         if run.results >= run.sent:
             with self._lock:
-                more = list(t.get("queued_messages") or [])
-                t["queued_messages"] = []
+                # a move accepted (tool projet): the session ends here, what waits starts in the new folder
+                more = [] if t.get("move_to") else list(t.get("queued_messages") or [])
+                if not t.get("move_to"):
+                    t["queued_messages"] = []
             for m in more:
                 self._send_user(run, m)
             if not more and not run.background:
@@ -2805,9 +2924,12 @@ class Engine:
 
         if sub == "mcp_message":
             message = req.get("message") or {}
-            if (req.get("server_name") == CONSOLE_MCP and message.get("method") == "tools/call"
-                    and (message.get("params") or {}).get("name") == PROPOSE_SPEC["name"]):
-                return self._propose(tid, run, rid, message)
+            if req.get("server_name") == CONSOLE_MCP and message.get("method") == "tools/call":
+                name = (message.get("params") or {}).get("name")
+                if name == PROPOSE_SPEC["name"]:
+                    return self._propose(tid, run, rid, message)
+                if name == PROJECT_SPEC["name"]:
+                    return self._project_tool(tid, run, rid, message)
             return self._respond(run, rid, {"mcp_response": self._console_mcp(tid, req.get("server_name"), message)})
 
         self._respond(run, rid, error=f"Requête non prise en charge par la console : {sub}")
@@ -2827,7 +2949,7 @@ class Engine:
                        "serverInfo": {"name": CONSOLE_MCP, "version": "1.0.0"}})
         if method == "tools/list":
             # (listed only when the user indexes documents: every tool weighs in every discussion's context)
-            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC,
+            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC,
                                  *([DOCS_SPEC] if self.cfg.documents.enabled else [])]})
         if method == "tools/call":
             if silent:
@@ -2840,8 +2962,8 @@ class Engine:
                 text, failed = self.show_result(tid, args)
             elif params.get("name") == PRESENT_SPEC["name"]:
                 text, failed = self.present(tid, args)
-            elif params.get("name") == PROPOSE_SPEC["name"]:
-                text, failed = "La proposition passe par la fenêtre de la discussion.", True  # (see _propose)
+            elif params.get("name") in (PROPOSE_SPEC["name"], PROJECT_SPEC["name"]):
+                text, failed = "Cet outil passe par la fenêtre de la discussion.", True  # (see _propose, _project_tool)
             elif params.get("name") == DOCS_SPEC["name"]:
                 text, failed = self.search_documents(tid, args)
             else:
@@ -3328,6 +3450,8 @@ class Engine:
 
     # -------------------------------------------------------- misc actions
     def update_task(self, tid: str, patch: dict) -> dict:
+        if "archived" in patch:
+            self.archive_tasks([tid], bool(patch["archived"]))
         with self._lock:
             t = self._get(tid)
             if "pinned" in patch:
@@ -3336,6 +3460,8 @@ class Engine:
                 t["closed"] = bool(patch["closed"])
                 if t["closed"] and t.get("keep_warm_until"):
                     self._stop_warm(t, "fenêtre fermée")
+                if not t["closed"] and t.get("archived"):
+                    self._unarchive(t, "la fenêtre rouverte")
             if "title" in patch and str(patch["title"]).strip():
                 t["title"] = str(patch["title"]).strip()[:120]
             self.tasks[tid] = t
@@ -3569,6 +3695,66 @@ class Engine:
             raise TaskError(res.get("error") or "Claude n'a pas proposé de titre.", 502)
         self._audit("tâche renommée par Claude", {"titre": title, "ancien": t["title"]}, t)
         return self.update_task(tid, {"title": title})
+
+    # -------------------------------------------------------- archiving (docs/ihm.md, « Archivage des discussions »)
+    def archive_tasks(self, ids: list[str], on: bool = True) -> dict:
+        """Archive (or bring back) discussions: an archived one leaves the current lists and its window closes;
+        it stays in the history, the project's list and Ctrl+K, and its session can still be resumed."""
+        done, skipped = [], []
+        now = time.time()
+        with self._lock:
+            picked = [self._get(str(ids[0]))] if len(ids or []) == 1 else \
+                [t for t in (self.tasks.get(str(tid)) for tid in dict.fromkeys(ids or [])) if t]
+            for t in picked:
+                if on and (t["status"] in ACTIVE or t["id"] in self.runs):
+                    if len(picked) == 1:
+                        raise TaskError("Une discussion en cours ne s'archive pas : attends la fin du tour ou annule-le.", 409)
+                    skipped.append(t["id"])
+                    continue
+                if bool(t.get("archived")) == on:
+                    continue
+                if on:
+                    t["archived"], t["closed"] = now, True
+                    if t.get("keep_warm_until"):
+                        self._stop_warm(t, "discussion archivée")
+                else:
+                    t["archived"] = 0
+                self._save(t)
+                done.append(t)
+        if done:
+            self._audit("discussions archivées" if on else "discussions désarchivées",
+                        {"nombre": len(done), "titres": [t["title"] for t in done[:20]]}, done[0] if len(done) == 1 else None)
+            self._inbox_changed()
+        return {"changed": [t["id"] for t in done], "skipped": skipped,
+                "tasks": [self.public(t) for t in done]}
+
+    def _unarchive(self, t: dict, why: str):
+        """Writing in an archived discussion, or opening its window again, brings it back."""
+        t["archived"] = 0
+        self._event(t["id"], "info", {"text": f"Discussion désarchivée ({why})."})
+
+    def _archivable(self, t: dict, widget_tasks: set) -> bool:
+        return not (t.get("archived") or t["status"] in ACTIVE or t["id"] in self.runs or t.get("pinned")
+                    or t.get("pending") or t.get("waiting_displays") or t.get("keep_warm_until")
+                    or t.get("origin") == "widget" or t["id"] in widget_tasks or t.get("not_before"))
+
+    def auto_archive(self, now: float | None = None) -> int:
+        """Archive the discussions inactive for `history.auto_archive_days` (0: never). Never one that runs,
+        waits for a validation or a click, is kept warm, pinned, or shown by a widget."""
+        days = self.cfg.history.auto_archive_days
+        if not days:
+            return 0
+        cutoff = (now or time.time()) - days * 86400
+        widget_tasks = {str(w.get("task") or "") for w in self.widgets}
+        with self._lock:
+            old = [t["id"] for t in self.tasks.values() if self._archivable(t, widget_tasks)
+                   and max(t.get("ended") or 0, t.get("started") or 0, t.get("created") or 0) < cutoff]
+        if not old:
+            return 0
+        res = self.archive_tasks(old, True)
+        if res["changed"]:
+            self._audit("archivage automatique", {"nombre": len(res["changed"]), "inactives_depuis_jours": days})
+        return len(res["changed"])
 
     def delete_task(self, tid: str):
         with self._lock:
@@ -4416,6 +4602,297 @@ class Engine:
         users = brief_mod.parse_users(t.get("result") or "")
         return {"status": "done", "users": users,
                 **({} if users else {"error": "Aucun utilisateur lu dans Odoo : le serveur Odoo du compte répond-il ?"})}
+
+    # -------------------------------------------------------- Odoo projects linked to a project (odoo_link.py)
+    def _odoo_scope(self, folder: str, what: str = "Odoo"):
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable : donne d'abord un nom à ce dossier.", 404)
+        pid = proj.profile or self.cfg.general.default_profile
+        if not self.cfg.profile(pid):
+            raise TaskError(f"Aucun compte pour lire {what} : choisis le compte du projet dans ses réglages.")
+        return proj, pid
+
+    def _odoo_reader(self, proj, pid: str, prompt: str, mark: str) -> dict:
+        """A short read-only discussion of the project's account, without a window: its answer is read by the
+        console, then the discussion is deleted."""
+        return self.create_task(prompt, profile=pid, model=odoo_link.MODEL, preset=odoo_link.PRESET, workdir=proj.folder,
+                                effort="low", confirmed=True, origin="reglage", closed=True,
+                                marks={mark: proj.folder, "ephemeral": True})
+
+    def _forget_reader(self, tid: str, delay: float = 2.0):
+        """Delete a reader once read (later: the end of its run is still being written)."""
+        def drop():
+            if self._stop:
+                return
+            try:
+                self.delete_task(tid)
+            except TaskError:
+                pass
+        timer = threading.Timer(delay, drop)
+        timer.daemon = True
+        timer.start()
+
+    def _odoo_apps(self, pid: str, folder: str) -> tuple[dict, str]:
+        """The addresses of the account's Odoo servers by name, and the one to use when a link names none."""
+        prof = self.cfg.profile(pid)
+        apps = [a for a in mcp.web_apps(prof, folder) if a["kind"] == "odoo"] if prof else []
+        return {a["name"]: a["url"] for a in apps}, (apps[0]["url"] if len(apps) == 1 else "")
+
+    def link_odoo(self, folder: str, links: list, replace: bool = False, task: dict | None = None) -> dict:
+        """Link Odoo projects to a project (the user's click: the tab, or a proposal's card)."""
+        from .config import OdooLink
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        try:
+            new = [x if isinstance(x, OdooLink) else OdooLink.model_validate(x) for x in links or []]
+        except ValueError as exc:
+            raise TaskError(f"Projet Odoo invalide : {exc}") from exc
+        current = [] if replace else list(proj.odoo)
+        merged = current + [x for x in new if all((x.app, x.id) != (c.app, c.id) for c in current)]
+        if len(merged) > 10:
+            raise TaskError("Dix projets Odoo au plus par projet.")
+        data = proj.model_dump()
+        data["odoo"] = [x.model_dump() for x in merged]
+        saved = self.save_project(data)
+        self._audit("projets Odoo liés", {"projet": saved["name"], "odoo": [f"{x.name} ({x.id})" for x in merged]}, task)
+        self._odoo_after_change(saved["folder"])
+        return saved
+
+    def unlink_odoo(self, folder: str, odoo_id: int, app: str = "") -> dict:
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        keep = [x for x in proj.odoo if not (x.id == odoo_id and x.app == (app or ""))]
+        if len(keep) == len(proj.odoo):
+            raise TaskError("Ce projet Odoo n'est pas lié.", 404)
+        data = proj.model_dump()
+        data["odoo"] = [x.model_dump() for x in keep]
+        saved = self.save_project(data)
+        self._audit("projet Odoo délié", {"projet": saved["name"], "odoo": odoo_id})
+        self._odoo_after_change(saved["folder"])
+        return saved
+
+    def _odoo_after_change(self, folder: str):
+        key = odoo_link.kv_key(norm(folder))
+        proj = self._project(folder)
+        if proj and proj.odoo:
+            cache = self.store.kv_get(key, {}) or {}
+            ids = {x.id for x in proj.odoo}
+            cache["tasks"] = [t for t in cache.get("tasks") or [] if t.get("project") in ids]
+            cache.pop("task_id", None)
+            self.store.kv_set(key, cache)
+            try:
+                self.odoo_tasks_refresh(folder)
+            except TaskError:
+                pass
+        else:
+            self.store.kv_set(key, {})
+            self.bus.publish("odoo_tasks", {"folder": folder})
+
+    def odoo_projects_search(self, folder: str, query: str) -> dict:
+        proj, pid = self._odoo_scope(folder)
+        t = self._odoo_reader(proj, pid, odoo_link.search_prompt(query), "odoo_search")
+        return {"task_id": t["id"]}
+
+    def odoo_projects_result(self, folder: str, tid: str) -> dict:
+        t = self.tasks.get(tid)
+        if not t or t.get("origin") != "reglage" or norm(t.get("odoo_search") or "") != norm(folder):
+            raise TaskError("Recherche introuvable.", 404)
+        if t["status"] in ACTIVE:
+            return {"status": "running"}
+        text = t.get("result") or ""
+        failed = t["status"] != "done"
+        self._forget_reader(tid)
+        if failed:
+            return {"status": "error", "error": t.get("error") or "La recherche n'a pas abouti."}
+        found = odoo_link.parse_projects(text)
+        err = odoo_link.error_of(text)
+        return {"status": "done", "projects": found,
+                **({} if found else {"error": err or "Aucun projet trouvé dans Odoo : le serveur Odoo du compte répond-il ?"})}
+
+    def odoo_tasks_refresh(self, folder: str) -> dict:
+        proj, pid = self._odoo_scope(folder)
+        if not proj.odoo:
+            raise TaskError("Aucun projet Odoo n'est lié à ce projet.")
+        key = odoo_link.kv_key(norm(proj.folder))
+        cache = self.store.kv_get(key, {}) or {}
+        running = self.tasks.get(cache.get("task_id") or "")
+        if running and running["status"] in ACTIVE:
+            return self.odoo_tasks(folder)
+        t = self._odoo_reader(proj, pid, odoo_link.tasks_prompt(proj.odoo), "odoo_sync")
+        cache["task_id"] = t["id"]
+        self.store.kv_set(key, cache)
+        self.bus.publish("odoo_tasks", {"folder": proj.folder})
+        return self.odoo_tasks(folder)
+
+    def odoo_tasks(self, folder: str) -> dict:
+        """The linked Odoo projects and their last read tasks, with the page of each in Odoo."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        cache = self.store.kv_get(odoo_link.kv_key(norm(proj.folder)), {}) or {}
+        reader = self.tasks.get(cache.get("task_id") or "")
+        apps, only = self._odoo_apps(proj.profile or self.cfg.general.default_profile, proj.folder)
+        base = {x.id: apps.get(x.app) or (only if not x.app else "") for x in proj.odoo}
+        links = [{**x.model_dump(), "url": mcp.odoo_record_url(base[x.id], "project.project", x.id) if base[x.id] else ""}
+                 for x in proj.odoo]
+        tasks = [{**t, "url": mcp.odoo_record_url(base[t["project"]], "project.task", t["id"])
+                  if base.get(t.get("project")) else ""} for t in cache.get("tasks") or []]
+        updated = cache.get("updated") or 0
+        return {"folder": proj.folder, "links": links, "tasks": tasks, "updated": updated,
+                "error": cache.get("error") or "", "running": bool(reader and reader["status"] in ACTIVE),
+                "stale": bool(proj.odoo) and time.time() - updated > odoo_link.STALE}
+
+    def _odoo_tasks_done(self, t: dict):
+        if t["status"] not in TERMINAL:
+            return
+        folder = t["odoo_sync"]
+        key = odoo_link.kv_key(norm(folder))
+        cache = self.store.kv_get(key, {}) or {}
+        if cache.get("task_id") == t["id"]:
+            proj = self._project(folder)
+            text = t.get("result") or ""
+            err = ""
+            if t["status"] != "done":
+                err = t.get("error") or "La lecture d'Odoo n'a pas abouti."
+            else:
+                err = odoo_link.error_of(text)
+                tasks = odoo_link.parse_tasks(text, {x.id for x in proj.odoo} if proj else set())
+                if not err and not tasks and not re.search(r"\[\s*\]", text):
+                    err = "Réponse d'Odoo illisible : réessaie, ou vérifie le serveur Odoo du compte."
+                if not err:
+                    cache.update(tasks=tasks, updated=time.time())
+            cache["error"] = err
+            cache.pop("task_id", None)
+            self.store.kv_set(key, cache)
+            self.bus.publish("odoo_tasks", {"folder": folder})
+        self._forget_reader(t["id"])
+
+    def odoo_task_read(self, folder: str, task_id: int) -> dict:
+        """Read one task's text and its project's stage names (read-only, no window)."""
+        proj, pid = self._odoo_scope(folder)
+        self._odoo_known_task(proj.folder, task_id)
+        t = self._odoo_reader(proj, pid, odoo_link.task_prompt(task_id), "odoo_task")
+        t["odoo_task_id"] = int(task_id)
+        self._save(t)
+        return {"task_id": t["id"]}
+
+    def odoo_task_detail(self, folder: str, tid: str) -> dict:
+        t = self.tasks.get(tid)
+        if not t or t.get("origin") != "reglage" or norm(t.get("odoo_task") or "") != norm(folder):
+            raise TaskError("Lecture introuvable.", 404)
+        if t["status"] in ACTIVE:
+            return {"status": "running"}
+        text = t.get("result") or ""
+        failed = t["status"] != "done"
+        task_id = int(t.get("odoo_task_id") or 0)
+        self._forget_reader(tid)
+        if failed:
+            return {"status": "error", "error": t.get("error") or "La lecture de la tâche n'a pas abouti."}
+        detail = odoo_link.parse_task(text, task_id)
+        err = odoo_link.error_of(text)
+        if not detail:
+            return {"status": "error", "error": err or "Réponse d'Odoo illisible : réessaie."}
+        return {"status": "done", "task": detail}
+
+    def odoo_task_write(self, folder: str, task_id: int, name: str, stage: str, done: bool,
+                        description: str | None) -> dict:
+        """Change this task in Odoo. The account's preset validates the write; the discussion stays visible."""
+        proj, pid = self._odoo_scope(folder)
+        self._odoo_known_task(proj.folder, task_id)
+        name = " ".join(str(name or "").split())[:200]
+        stage = " ".join(str(stage or "").split())[:60]
+        if not name:
+            raise TaskError("Le titre de la tâche est vide.")
+        if not stage:
+            raise TaskError("Le statut de la tâche est vide.")
+        if description is not None:
+            description = str(description).replace("\r\n", "\n")[:8000]
+        prof = self.cfg.profile(pid)
+        preset = prof.default_preset if prof and prof.default_preset != "lecture" else "assiste"
+        edit = {"folder": proj.folder, "id": int(task_id), "name": name, "stage": stage, "done": bool(done)}
+        t = self.create_task(odoo_link.write_prompt(task_id, name, stage, bool(done), description),
+                             profile=pid, model=odoo_link.MODEL, preset=preset, workdir=proj.folder,
+                             effort="low", origin="", marks={"odoo_edit": edit})
+        return {"task_id": t["id"]}
+
+    def _odoo_known_task(self, folder: str, task_id: int):
+        cache = self.store.kv_get(odoo_link.kv_key(norm(folder)), {}) or {}
+        if not any(t.get("id") == int(task_id) for t in cache.get("tasks") or []):
+            raise TaskError("Cette tâche n'est pas dans le suivi de ce projet.", 404)
+
+    def _odoo_edit_done(self, t: dict):
+        """The write finished: the list shows the new title, stage and state when Odoo accepted it."""
+        if t["status"] not in TERMINAL:
+            return
+        edit = t.get("odoo_edit") or {}
+        if t["status"] != "done" or odoo_link.error_of(t.get("result") or ""):
+            return
+        key = odoo_link.kv_key(norm(edit.get("folder") or ""))
+        cache = self.store.kv_get(key, {}) or {}
+        changed = False
+        for row in cache.get("tasks") or []:
+            if row.get("id") == edit.get("id"):
+                row["name"] = edit["name"]
+                row["stage"] = edit["stage"]
+                row["done"] = bool(edit["done"])
+                changed = True
+        if changed:
+            self.store.kv_set(key, cache)
+            self.bus.publish("odoo_tasks", {"folder": edit["folder"]})
+
+    # -------------------------------------------------------- Office 365 of a project (office_link.py)
+    def office_refresh(self, folder: str) -> dict:
+        """Read the project's Office 365 drafts and follow-ups (read-only, nothing is sent). To Do is not read."""
+        proj, pid = self._odoo_scope(folder, "Office 365")
+        key = office_link.kv_key(norm(proj.folder))
+        cache = self.store.kv_get(key, {}) or {}
+        running = self.tasks.get(cache.get("task_id") or "")
+        if running and running["status"] in ACTIVE:
+            return self.office_state(folder)
+        t = self._odoo_reader(proj, pid, office_link.read_prompt(proj), "office_sync")
+        cache["task_id"] = t["id"]
+        self.store.kv_set(key, cache)
+        self.bus.publish("office_suivi", {"folder": proj.folder})
+        return self.office_state(folder)
+
+    def office_state(self, folder: str) -> dict:
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        cache = self.store.kv_get(office_link.kv_key(norm(proj.folder)), {}) or {}
+        reader = self.tasks.get(cache.get("task_id") or "")
+        updated = cache.get("updated") or 0
+        return {"folder": proj.folder, "tasks": cache.get("tasks") or [], "drafts": cache.get("drafts") or [],
+                "followups": cache.get("followups") or [], "updated": updated, "error": cache.get("error") or "",
+                "running": bool(reader and reader["status"] in ACTIVE),
+                "stale": time.time() - updated > office_link.STALE}
+
+    def _office_done(self, t: dict):
+        if t["status"] not in TERMINAL:
+            return
+        folder = t["office_sync"]
+        key = office_link.kv_key(norm(folder))
+        cache = self.store.kv_get(key, {}) or {}
+        if cache.get("task_id") == t["id"]:
+            text = t.get("result") or ""
+            err = ""
+            if t["status"] != "done":
+                err = t.get("error") or "La lecture d'Office 365 n'a pas abouti."
+            else:
+                err = office_link.error_of(text)
+                parsed = office_link.parse_answer(text)
+                if not err and not office_link.recognized(text):
+                    err = "Réponse d'Office 365 illisible : réessaie, ou vérifie le connecteur du compte."
+                if not err:
+                    cache.update(parsed, updated=time.time())
+            cache["error"] = err
+            cache.pop("task_id", None)
+            self.store.kv_set(key, cache)
+            self.bus.publish("office_suivi", {"folder": folder})
+        self._forget_reader(t["id"])
 
     def _routine_loop(self):
         tick = 0

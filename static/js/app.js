@@ -7,7 +7,8 @@ import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
 import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
-import { projectActionsChanged, projectFollow, toggleProject } from "./project.js";
+import { projectActionsChanged, projectFollow, projectSuiviChanged, projectTasksChanged, showProject, toggleProject } from "./project.js";
+import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
@@ -35,6 +36,12 @@ const S = {
   profile: null, lastRecall: -1, routines: [],
 };
 const input = $("#cmd-input");
+/** In the floating bar the field has a fixed height and scrolls. Growing it on each keystroke resized the
+ *  window: on Windows that growth drops the bottom edge, which is what moved the bar while typing. */
+function growCmd() {
+  if (input.ownerDocument.documentElement.classList.contains("bar-doc")) return;
+  autoGrow(input, 220);
+}
 const suggest = $("#suggest");
 const MAX_HISTORY = 100;
 
@@ -87,6 +94,12 @@ async function boot() {
     inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
     account_actions: () => loadAccountActions(profiles()),
     widgets: widgetsChanged,
+    odoo_tasks: projectSuiviChanged,
+    office_suivi: projectSuiviChanged,
+    // Claude opened a project (tool projet), or a discussion just moved into one
+    project_open: ({ folder, asked }) => {
+      if (folder && (asked || S.config?.ui?.open_project !== false)) showProject(panelCtx, { folder, tab: "tasks" });
+    },
   }, () => $("#banner").dataset.down === "1" && renderBanner(false), () => renderBanner(true));
   input.focus();
   checkVersion();
@@ -331,6 +344,9 @@ wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
 function selectProfile(id, remember = true) {
   const p = profile(id);
   if (!p) return;
+  // another account chosen: the recognized project no longer applies; the configuration reloaded: found again
+  if (remember) dropMention();
+  else if (mention) { mention = null; renderMention(); queueMicrotask(detectMention); }
   S.profile = p.id;
   contextPicker.profileChanged();
   queueMicrotask(projectFollow);
@@ -367,6 +383,7 @@ function selectProfile(id, remember = true) {
 const $$pbtn = () => Array.from($("#cmd-profiles").querySelectorAll(".pbtn"));
 
 $("#opt-workdir").addEventListener("change", async (e) => {
+  dropMention();
   if (e.target.value !== "__other__") {
     lastWorkdir = e.target.value;
     const proj = projectFor(currentFolder());
@@ -457,6 +474,62 @@ function useProject(p) {
   chooseWorkdir(p.folder);
 }
 
+// « On va travailler dans le projet Network »: a project named in the request fills the bar like a choice
+// made by hand (account, folder, preset, model); its chip undoes it. The bar as it was is kept to go back.
+let mention = null, dismissed = "";
+const BAR_FIELDS = ["#opt-workdir", "#opt-model", "#opt-preset", "#opt-effort"];
+
+function detectMention() {
+  const text = input.value;
+  if (!text.trim()) dismissed = "";
+  const p = projectMention(text, projects());
+  const key = p ? dirKey(p.folder) : "";
+  if (key && key === dismissed) return;
+  if (mention && dirKey(mention.project.folder) === key) return;
+  if (mention) undoMention();
+  if (!p) return;
+  const prev = { profile: S.profile, fields: BAR_FIELDS.map((s) => $(s).value) };
+  useProject(p);
+  mention = { project: p, prev };
+  renderMention();
+}
+
+/** The bar goes back to what it was before the project was recognized. */
+function undoMention() {
+  const { prev } = mention;
+  mention = null;
+  if (prev.profile !== S.profile) selectProfile(prev.profile);
+  const [wd, ...rest] = prev.fields;
+  if (wd && ![...$("#opt-workdir").options].some((o) => o.value === wd)) $("#opt-workdir").insertBefore(folderOption(wd), $("#opt-workdir").lastChild);
+  $("#opt-workdir").value = wd;
+  lastWorkdir = wd;
+  BAR_FIELDS.slice(1).forEach((s, i) => { if ([...$(s).options].some((o) => o.value === rest[i])) $(s).value = rest[i]; });
+  updateProjectButton();
+  updateSummary();
+  projectFollow();
+  renderMention();
+}
+
+/** The folder chosen by hand while a project is recognized: the choice stays, the chip goes. */
+function dropMention() {
+  if (!mention) return;
+  dismissed = dirKey(mention.project.folder);
+  mention = null;
+  renderMention();
+}
+
+function renderMention() {
+  const box = $("#cmd-project");
+  box.hidden = !mention;
+  if (!mention) { box.replaceChildren(); return; }
+  const p = mention.project;
+  box.replaceChildren(h("div", { class: "att ok project", style: { "--pc": p.color || "var(--accent)" },
+    title: `Reconnu dans la demande : elle partira dans ${p.folder}` },
+  h("span", { class: "att-ic", svg: "folder" }), h("span", { class: "att-name" }, h("b", {}, "Projet : "), p.name),
+  h("button", { type: "button", class: "att-x", title: "Ne pas utiliser ce projet", "aria-label": "Ne pas utiliser ce projet", svg: "x",
+    on: { click: () => { dismissed = dirKey(p.folder); undoMention(); input.focus(); } } })));
+}
+
 function updateProjectButton() {
   const p = projectFor(currentFolder());
   const b = $("#btn-project");
@@ -493,7 +566,7 @@ function renderHome() {
   if (!home) return;
   const pinned = projects().filter((p) => p.pinned);
   const touched = (t) => Math.max(t.created || 0, t.started || 0, t.ended || 0);
-  const recent = [...S.tasks.values()].sort((a, b) => touched(b) - touched(a)).slice(0, 6);
+  const recent = [...S.tasks.values()].filter((t) => !t.archived).sort((a, b) => touched(b) - touched(a)).slice(0, 6);
   const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
     on: { click: () => { useProject(p); focusInput(); } } },
     h("b", {}, p.name),
@@ -580,6 +653,8 @@ async function submit(extra = {}) {
   const context = contextPicker.sources();
   if (!prompt && !files.length && !context.length && !attacher.busy()) return;
   if (!attacher.ready()) return;
+  detectMention();
+  const named = mention?.project || null;
   const wd = $("#opt-workdir").value;
   const seen = regard.get();
   const body = {
@@ -590,9 +665,11 @@ async function submit(extra = {}) {
   const checked = await limitGuard(body);
   if (!checked) return; // cancelled: the text stays in the bar
   Object.assign(body, checked);
+  // the bar stays in the project, the chip goes
+  if (mention) { mention = null; dismissed = ""; renderMention(); }
   // Clear at once so the next request can be typed while this one is sent.
   input.value = "";
-  autoGrow(input, 220);
+  growCmd();
   hideSuggest();
   S.lastRecall = -1;
   if (prompt) {
@@ -601,8 +678,11 @@ async function submit(extra = {}) {
     store.set("jarvis.prompts", hist.slice(0, MAX_HISTORY));
   }
   const t = await launch("/api/tasks", body);
-  if (t) { rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); barSent(); }
-  else if (!input.value.trim()) { input.value = prompt; autoGrow(input, 220); }
+  if (t) {
+    rememberWorkdir(body.profile, body.workdir); attacher.sent(files); contextPicker.clear(); regard.sent(seen); barSent();
+    // a project named in the request: its panel opens beside the discussion
+    if (named && dirKey(t.workdir) === dirKey(named.folder) && S.config?.ui?.open_project !== false) showProject(panelCtx, { tab: "tasks" });
+  } else if (!input.value.trim()) { input.value = prompt; growCmd(); }
 }
 
 /** Before a launch on an account at (or near) its limit: another account, later, or anyway. */
@@ -673,7 +753,8 @@ function setTeam(on, remember = true) {
 }
 $("#opt-team").addEventListener("click", () => setTeam($("#opt-team").getAttribute("aria-pressed") !== "true"));
 
-input.addEventListener("input", () => { autoGrow(input, 220); updateSuggest(); });
+const detectSoon = debounce(detectMention, 200);
+input.addEventListener("input", () => { growCmd(); updateSuggest(); detectSoon(); });
 input.addEventListener("keydown", (e) => {
   if (!suggest.hidden) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); moveSuggest(e.key === "ArrowDown" ? 1 : -1); return; }
@@ -688,12 +769,12 @@ input.addEventListener("keydown", (e) => {
     e.preventDefault();
     S.lastRecall += 1;
     input.value = hist[S.lastRecall];
-    autoGrow(input, 220);
+    growCmd();
   } else if (e.key === "ArrowDown" && S.lastRecall >= 0 && !input.value.slice(input.selectionStart).includes("\n")) {
     e.preventDefault();
     S.lastRecall -= 1;
     input.value = S.lastRecall >= 0 ? history()[S.lastRecall] : "";
-    autoGrow(input, 220);
+    growCmd();
   }
 });
 
@@ -745,6 +826,7 @@ const winCtx = {
   retry: (id) => launch(`/api/tasks/${id}/retry`, {}),
   duplicate: (id, pid) => launch(`/api/tasks/${id}/duplicate`, { profile: pid }),
   onClosed: (id) => { const t = S.tasks.get(id); if (t) t.closed = true; closeWindow(id); renderHistory(); },
+  archive: (id) => archiveTasks([id]),
   onFocus: (id) => markTasksRead([id]),   // the user looks at the discussion: its end is read
   onAttention: (id, kind) => attention(id, kind),
   autoImages: () => !!S.config?.ui?.auto_images,
@@ -795,9 +877,27 @@ function openTask(id) {
   if (!wm.isNative()) $("#history").hidden = true;
 }
 
+/** Archive discussions (or bring them back): they leave the current lists, their windows close. */
+async function archiveTasks(ids, on = true) {
+  try {
+    const r = await api("/api/tasks/archive", { method: "POST", body: { ids, archived: on } });
+    for (const t of r.tasks) onTask(t);
+    const n = r.changed.length, s = n > 1 ? "s" : "";
+    if (r.skipped.length) toast(`${r.skipped.length} discussion${r.skipped.length > 1 ? "s" : ""} en cours non archivée${r.skipped.length > 1 ? "s" : ""}.`, "warn");
+    else if (n) toast(on ? `${n} discussion${s} archivée${s} : Historique → « Archivées », ou Ctrl+K.` : `${n} discussion${s} désarchivée${s}.`, "ok");
+    return r;
+  } catch (e) { toast(e.message, "err"); return null; }
+}
+
 function onTask(t, fresh = false) {
   const prev = S.tasks.get(t.id);
   S.tasks.set(t.id, t);
+  if (!!t.archived !== !!prev?.archived && prev) {
+    if (t.archived) closeWindow(t.id);
+    queueMicrotask(renderHome);
+  }
+  // the Discussions tab of the project panel: a new discussion, its status, its folder (moved into a project)
+  if (!prev || prev.status !== t.status || prev.workdir !== t.workdir || !!t.archived !== !!prev.archived) tasksChanged();
   // a turn that ends under the user's eyes is read (its end is set now: the mark comes after it)
   if (prev && ACTIVE.has(prev.status) && !ACTIVE.has(t.status) && looking(t.id)) markTasksRead([t.id], true);
   if (!prev) queueMicrotask(renderHome);
@@ -811,6 +911,7 @@ function onTask(t, fresh = false) {
 }
 
 const actionRunsChanged = debounce(() => projectActionsChanged(), 400);
+const tasksChanged = debounce(() => projectTasksChanged(), 300);
 
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
@@ -1173,13 +1274,14 @@ const panelCtx = {
     if (wm.isNative()) window.jarvis.win("bar-show", null, { select: false });
     selectProfile(pid);
     input.value = text;
-    autoGrow(input, 220);
+    growCmd();
     input.focus();
     input.setSelectionRange(text.length, text.length);
   },
   models: () => [...$("#opt-model").options].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
   tasks: () => [...S.tasks.values()],
   openTask: (id) => { closeDrawers(); openTask(id); },
+  archive: (ids, on) => archiveTasks(ids, on),
   addContext: (t) => addContext(t),
   fork: (t) => forkTask(t),
   sessions: () => toggleSessions(panelCtx),
@@ -1189,7 +1291,7 @@ const panelCtx = {
     const before = input.value.slice(0, at), after = input.value.slice(at);
     const piece = `${before && !/\s$/.test(before) ? " " : ""}${text} `;
     input.value = before + piece + after;
-    autoGrow(input, 220);
+    growCmd();
     input.focus();
     input.setSelectionRange(before.length + piece.length, before.length + piece.length);
   },
@@ -1283,7 +1385,8 @@ function openDisplayOf(taskId, key, color) {
 }
 $("#btn-history").addEventListener("click", () => {
   closeDrawers("history");
-  toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask });
+  toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask,
+    archive: (ids, on) => archiveTasks(ids, on) });
 });
 $("#btn-sessions").addEventListener("click", () => toggleSessions(panelCtx));
 $("#btn-routines").addEventListener("click", () => toggleRoutines(panelCtx));

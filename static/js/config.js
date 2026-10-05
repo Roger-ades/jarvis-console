@@ -581,7 +581,9 @@ function tabInterface() {
       select("Rangement par défaut", "ui.arrange", [["cascade", "Cascade"], ["mosaique", "Mosaïque"]]),
       check("Sons de notification", "ui.sounds"),
       check("Joindre ce que je regarde", "ui.regard",
-        { help: "L'aperçu ou l'affichage au premier plan et le texte sélectionné partent avec ton message (une puce « Regard » le montre, sa croix le retire)." }))),
+        { help: "L'aperçu ou l'affichage au premier plan et le texte sélectionné partent avec ton message (une puce « Regard » le montre, sa croix le retire)." }),
+      check("Ouvrir le projet avec ses discussions", "ui.open_project",
+        { help: "« On va travailler dans le projet Network » : la barre reconnaît le projet avant l'envoi (une puce « Projet » le montre, sa croix le retire), et le panneau du projet s'ouvre à côté de la discussion, sur l'onglet Discussions. Décoché : la puce reste, le panneau ne s'ouvre pas." }))),
     section("Briefs", "Le brief du matin du compte et le brief de chaque projet.", grid(
       check("Afficher le rapport dans une fenêtre", "ui.brief_show",
         { help: "À la fin d'un brief, son rapport s'ouvre tout seul. Décoché : il reste en tête de la boîte de réception. Un projet peut forcer oui ou non." }))),
@@ -697,7 +699,10 @@ function tabDocuments() {
 function tabHistory() {
   return [
     section("Historique des tâches", "Tâches, flux et journal d'audit sont conservés sur ce poste (data/console.db).", grid(
-      num("Durée de conservation (jours)", "history.retention_days", { min: 1, max: 3650, help: "Purge automatique au démarrage." })),
+      num("Archiver les discussions inactives depuis (jours)", "history.auto_archive_days", { min: 0, max: 3650,
+        help: "0 : jamais. Vérifié au démarrage puis toutes les heures. Jamais une discussion en cours, en attente d'une validation ou d'un clic, gardée au chaud, épinglée ou affichée par un widget. Une archivée reste dans l'historique (filtre « Archivées ») et dans Ctrl+K ; y écrire la désarchive." }),
+      num("Durée de conservation (jours)", "history.retention_days", { min: 1, max: 3650,
+        help: "Purge automatique au démarrage : les discussions terminées plus anciennes sont supprimées, archivées comprises." })),
       h("div", { class: "row" },
         h("button", { type: "button", class: "btn", on: { click: () => download("/api/history/export", "historique.json") } }, "Exporter l'historique (JSON)"),
         h("button", { type: "button", class: "btn", on: { click: () => purge(draft.history.retention_days) } }, "Purger au-delà de la durée"),

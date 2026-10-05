@@ -272,7 +272,8 @@ def test_proposals_that_are_refused_at_once(engine, tmp_path):
              ({"quoi": "routine", "nom": "R", "description": "d", "action": "absente"}, "pas d'action « /absente »"),
              ({"quoi": "routine", "nom": "R", "description": "d", "consigne": "x", "planification": {"jours": ["jamais"]}},
               "planification invalide"),
-             ({"quoi": "autre", "nom": "R", "description": "d"}, "action, routine ou consigne")]
+             ({"quoi": "autre", "nom": "R", "description": "d"}, "action, routine, consigne ou odoo"),
+             ({"quoi": "odoo", "description": "d", "projets_odoo": [{"nom": "Sans id"}]}, "au moins un projet Odoo")]
     for args, why in cases:
         t = engine.create_task(propose(args), profile="work", preset="lecture", workdir=folder)
         settle(engine, t["id"])

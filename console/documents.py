@@ -206,7 +206,7 @@ def _xlsx(path: Path) -> str:
 def _pdf(path: Path) -> str:
     try:
         from pypdf import PdfReader
-        from pypdf.errors import PdfReadError
+        from pypdf.errors import DependencyError, PdfReadError
     except ImportError as exc:
         raise Unreadable("lecture des PDF indisponible (module pypdf absent : relance start.bat)") from exc
     try:
@@ -226,6 +226,8 @@ def _pdf(path: Path) -> str:
                 break
     except Unreadable:
         raise
+    except DependencyError as exc:   # (AES: the cryptography module)
+        raise Unreadable("PDF chiffré illisible (module cryptography absent : relance start.bat)") from exc
     except (PdfReadError, ValueError, KeyError, TypeError, AttributeError, IndexError, RecursionError) as exc:
         raise Unreadable(f"PDF illisible ({exc.__class__.__name__})") from exc
     if not "".join(out).strip():
@@ -360,7 +362,7 @@ class DocIndex:
                 title, text = extract(path)
             except Unreadable as exc:
                 note = str(exc)
-            except (OSError, MemoryError, RecursionError) as exc:
+            except Exception as exc:  # noqa: BLE001 - one odd file never stops the indexing
                 note = f"lecture impossible ({exc.__class__.__name__})"
         # (page, passage): the page of a PDF from 1, 0 for the other documents
         pages = text.split(PAGE_BREAK) if kind == "pdf" else [text]

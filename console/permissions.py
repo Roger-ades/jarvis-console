@@ -255,15 +255,22 @@ def match_command(spec: str, command: str, ci: bool = False) -> bool:
 
 
 def _tool_matches(name: str, tool: str, broad: bool = False) -> bool:
-    """Tool-name match. `broad` (deny and ask rules): an MCP pattern such as
-    mcp__*__send* also catches the verb in the middle of a name (gmail_send_draft)."""
+    """Tool-name match.
+
+    `broad` (deny and ask rules): an MCP pattern such as mcp__*__send* also
+    catches the verb in the middle of a name (gmail_send_draft). An allow rule
+    does the same only for a read verb (outlook_email_search): the caller still
+    refuses the match when the name hides a write verb the pattern does not name.
+    """
     if fnmatch.fnmatchcase(tool, name):
         return True
-    if broad and is_mcp(tool) and name.startswith("mcp__"):
-        srv_pat, _, act_pat = name[5:].partition("__")
-        m = re.fullmatch(r"\*?([a-z]+)\*", act_pat.lower())
-        return bool(m) and fnmatch.fnmatchcase(mcp_parts(tool)[0], srv_pat) and m.group(1) in name_words(tool)
-    return False
+    if not (is_mcp(tool) and name.startswith("mcp__")):
+        return False
+    srv_pat, _, act_pat = name[5:].partition("__")
+    m = re.fullmatch(r"\*?([a-z]+)\*", act_pat.lower())
+    if not (m and fnmatch.fnmatchcase(mcp_parts(tool)[0], srv_pat) and m.group(1) in name_words(tool)):
+        return False
+    return broad or m.group(1) in READ_VERBS
 
 
 def _vouches(name: str, tool: str) -> bool:
@@ -316,7 +323,12 @@ def summarize_target(tool: str, inp: dict) -> str:
         return ", ".join(str(x) for x in inp.get("fichiers") or [])[:300]
     if tool == "mcp__jarvis__afficher_resultat":
         return " · ".join(str(inp[k]) for k in ("outil", "contient", "id") if inp.get(k))[:200] or "dernier résultat"
+    if tool == "mcp__jarvis__projet":
+        return f"{inp.get('action') or inp.get('quoi') or ''} {inp.get('nom') or inp.get('projet') or ''}".strip()[:200]
     if tool == "mcp__jarvis__proposer":
+        if inp.get("quoi") == "odoo":
+            return "Odoo : " + ", ".join(str(p.get("name") or p.get("nom") or "") for p in inp.get("projets_odoo") or []
+                                          if isinstance(p, dict))[:190]
         return str(inp.get("nom") or inp.get("description") or "")[:200]
     if tool == "mcp__jarvis__presenter":
         return str(inp.get("titre") or "")[:200] or "affichage"

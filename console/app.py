@@ -470,6 +470,13 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def patch_task(tid: str, body: dict = Body(...)):
         return engine.update_task(tid, body)
 
+    @app.post("/api/tasks/archive")
+    def archive_tasks(body: dict = Body(...)):
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 1000:
+            return _err(400, "« ids » : la liste des discussions (1 000 au plus).")
+        return engine.archive_tasks([str(x) for x in ids], body.get("archived", True) is not False)
+
     @app.post("/api/tasks/{tid}/keep-warm")
     def task_keep_warm(tid: str, body: dict = Body(default={})):
         return engine.keep_warm(tid, body.get("hours") or 0)
@@ -574,6 +581,65 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.post("/api/projects/brief/run")
     def project_brief_run(body: dict = Body(...)):
         return engine.run_project_brief(str(body.get("folder") or ""))
+
+    @app.get("/api/projects/odoo")
+    def project_odoo(folder: str):
+        return engine.odoo_tasks(folder)
+
+    @app.post("/api/projects/odoo/link")
+    def project_odoo_link(body: dict = Body(...)):
+        return engine.link_odoo(str(body.get("folder") or ""), body.get("links") or [])
+
+    @app.post("/api/projects/odoo/unlink")
+    def project_odoo_unlink(body: dict = Body(...)):
+        try:
+            oid = int(body.get("id"))
+        except (TypeError, ValueError):
+            return _err(400, "Projet Odoo invalide.")
+        return engine.unlink_odoo(str(body.get("folder") or ""), oid, str(body.get("app") or ""))
+
+    @app.post("/api/projects/odoo/refresh")
+    def project_odoo_refresh(body: dict = Body(...)):
+        return engine.odoo_tasks_refresh(str(body.get("folder") or ""))
+
+    @app.post("/api/projects/odoo/search")
+    def project_odoo_search(body: dict = Body(...)):
+        return engine.odoo_projects_search(str(body.get("folder") or ""), str(body.get("q") or ""))
+
+    @app.get("/api/projects/odoo/search/{tid}")
+    def project_odoo_search_result(tid: str, folder: str):
+        return engine.odoo_projects_result(folder, tid)
+
+    @app.post("/api/projects/odoo/task/read")
+    def project_odoo_task_read(body: dict = Body(...)):
+        try:
+            tid = int(body.get("id"))
+        except (TypeError, ValueError):
+            return _err(400, "Tâche Odoo invalide.")
+        return engine.odoo_task_read(str(body.get("folder") or ""), tid)
+
+    @app.get("/api/projects/odoo/task/read/{tid}")
+    def project_odoo_task_detail(tid: str, folder: str):
+        return engine.odoo_task_detail(folder, tid)
+
+    @app.post("/api/projects/odoo/task")
+    def project_odoo_task_write(body: dict = Body(...)):
+        try:
+            tid = int(body.get("id"))
+        except (TypeError, ValueError):
+            return _err(400, "Tâche Odoo invalide.")
+        description = body.get("description")
+        return engine.odoo_task_write(str(body.get("folder") or ""), tid, str(body.get("name") or ""),
+                                      str(body.get("stage") or ""), body.get("done") is True,
+                                      None if description is None else str(description))
+
+    @app.get("/api/projects/office")
+    def project_office(folder: str):
+        return engine.office_state(folder)
+
+    @app.post("/api/projects/office/refresh")
+    def project_office_refresh(body: dict = Body(...)):
+        return engine.office_refresh(str(body.get("folder") or ""))
 
     @app.post("/api/projects/follow")
     def project_follow(body: dict = Body(...)):

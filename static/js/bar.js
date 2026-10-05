@@ -5,7 +5,7 @@
 // to pick up again. Above the bar: what the console has to say (connection lost, emergency stop, update)
 // and the reminders of the notes. Ctrl+Alt+J or the notification area bring it where the mouse is;
 // Échap, a request sent or a click elsewhere put it away, unless it is pinned. The window grows upward
-// with what opens above the bar.
+// for the menu and the notices. The prompt scrolls inside its field, so typing does not move the window.
 import { animateWith, logo } from "./logo.js";
 import { h, iconBtn, setNoticeHost, toast } from "./util.js";
 import * as wm from "./wm.js";
@@ -34,14 +34,16 @@ export function setupBar({ dock, popups, menu, notices }) {
     title: "Menu JARVIS : projets, reprendre, historique, notes, routines, configuration…", on: { click: () => toggleMenu() } },
   logo("bar-logo"), menuCount = h("span", { class: "bj-count", hidden: true }));
   dock.querySelector(".composer-bar")?.prepend(menuBtn);
+  const field = dock.querySelector("#cmd-input");
+  if (field) field.style.height = "";   // a grown inline height would keep resizing the window on each keystroke
   animateWith(doc.defaultView);   // (the page's window is hidden)
   // a choice in the menu closes it (not the account pills, which show their limits, nor the sub-menus)
   menuEl.addEventListener("click", (e) => {
     const b = e.target.closest("button, a");
     if (b && !b.closest(".bm-status") && !b.matches("#btn-claudeai, #btn-arrange")) toggleMenu(false);
   });
-  // The bar's own window measures it: a ResizeObserver reports when the window that created it renders, and
-  // the page's window is hidden (it rarely renders: the bar kept its size, the menu barely showed).
+  // The bar's own window measures it. The prompt field does not change this height: counting it resized the
+  // window on every keystroke, and on Windows the pinned bar walked off the bottom of the screen.
   const view = doc.defaultView;
   let timer = 0;
   const fit = () => {

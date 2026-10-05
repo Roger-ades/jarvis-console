@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from . import odoo_link
 from .config import Brief, MailCriteria, Profile, Project
 
 PRESET = "lecture"          # the default: a brief reads mails, the main way in for an injection
@@ -92,14 +93,18 @@ def session_lines(proj) -> list[str]:
         sources.append("les tâches Office 365")
     if b.calendar:
         sources.append("le calendrier, aujourd'hui et les sept prochains jours")
+    odoo = odoo_link.brief_names(proj)
     if b.odoo:
-        if b.odoo_projects:
-            sources.append("Odoo, projets " + ", ".join(f"« {x} »" for x in b.odoo_projects))
+        if odoo:
+            sources.append("Odoo, projets " + ", ".join(f"« {x} »" for x in odoo))
         else:
             sources.append("Odoo, cherché par le nom du dossier")
-        if b.odoo_projects:
-            names = ", ".join(f"« {x} »" for x in b.odoo_projects)
-            lines.append(f"- Une tâche Odoo créée pour ce dossier va dans le projet {names} (project_id).")
+    linked = odoo_link.session_line(proj)
+    if linked:
+        lines.append(linked)
+    elif b.odoo_projects:
+        names = ", ".join(f"« {x} »" for x in b.odoo_projects)
+        lines.append(f"- Une tâche Odoo créée pour ce dossier va dans le projet {names} (project_id).")
     if sources:
         lines.append("- Sources du point : " + " ; ".join(sources) + ".")
     crit = _criteria(proj.mails, "  ")
@@ -306,11 +311,12 @@ def project_prompt(proj: Project, profile_name: str, now: float, last_run: float
         n += 1
         lines.append(f"{n}. Calendrier : les rendez-vous liés à ce projet, aujourd'hui et les sept prochains jours, "
                      "avec l'heure et les participants.")
+    odoo = odoo_link.brief_names(proj)
     if b.odoo:
         n += 1
-        if b.odoo_projects:
-            names = ", ".join(f"« {x} »" for x in b.odoo_projects)
-            lines.append(f"{n}. Odoo : les projets {names} et leurs tâches (état, échéance, responsable). "
+        if odoo:
+            names = ", ".join(f"« {x} »" for x in odoo)
+            lines.append(f"{n}. Odoo : les projets {names}, leurs tâches et sous-tâches (état, échéance, responsable). "
                          "Les autres projets Odoo ne comptent pas.")
         else:
             lines.append(f"{n}. Odoo : les tâches et activités qui concernent ce dossier (cherchées par son nom). "

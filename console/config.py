@@ -364,6 +364,18 @@ class ToolRule(BaseModel):
         return v
 
 
+class OdooLink(BaseModel):
+    """An Odoo project linked to a console project (its tasks and subtasks show in the panel)."""
+    id: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=120)
+    app: str = Field("", max_length=80)   # the Odoo MCP server, when the account has several
+
+    @field_validator("name", "app")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        return " ".join(str(v or "").split())
+
+
 class Project(BaseModel):
     """A named working folder, like a claude.ai Project: its defaults apply when it is chosen."""
     folder: str
@@ -377,6 +389,17 @@ class Project(BaseModel):
     created: float = 0
     mails: ProjectMails = Field(default_factory=ProjectMails)   # "Mails à suivre" (the morning briefs)
     brief: ProjectBrief = Field(default_factory=ProjectBrief)  # this project's own brief (docs/ihm.md)
+    odoo: list[OdooLink] = Field(default_factory=list, max_length=10)  # linked Odoo projects (odoo_link.py)
+
+    @field_validator("odoo")
+    @classmethod
+    def _odoo(cls, v: list[OdooLink]) -> list[OdooLink]:
+        seen, out = set(), []
+        for link in v:
+            if (link.app, link.id) not in seen:
+                seen.add((link.app, link.id))
+                out.append(link)
+        return out
 
     @field_validator("color")
     @classmethod
@@ -471,6 +494,8 @@ class UISettings(BaseModel):
     link_preview: bool = True
     auto_images: bool = False
     regard: bool = True  # "Ce que je regarde": the preview or selected text goes with the message
+    # a project named in the bar (or opened by Claude, tool projet) opens its panel at launch, tab Discussions
+    open_project: bool = True
     # a finished brief opens its report in a window; a project can force yes or no (ProjectBrief.show)
     brief_show: bool = False
     # desktop app (shell/): native windows on the OS desktop, or the whole console in one window
@@ -479,6 +504,7 @@ class UISettings(BaseModel):
 
 class History(BaseModel):
     retention_days: int = Field(90, ge=1, le=3650)
+    auto_archive_days: int = Field(0, ge=0, le=3650)  # archive the discussions inactive that long (0: never)
 
 
 class DocFolder(BaseModel):

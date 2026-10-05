@@ -33,6 +33,13 @@ def test_read_only_cannot_write_or_run(tmp_path):
     assert d(pol, "mcp__odoo__create_record", {"model": "sale.order", "values": {}}) == "deny"
     assert d(pol, "Read", {"file_path": str(wd / "a.txt")}) == "allow"
     assert d(pol, "mcp__odoo__search_records", {"model": "res.partner"}) == "allow"
+    # Microsoft 365 puts the verb at the end (outlook_email_search), not first.
+    assert d(pol, "mcp__claude_ai_Microsoft_365__outlook_email_search", {"query": "projet"}) == "allow"
+    assert d(pol, "mcp__claude_ai_Microsoft_365__read_resource", {}) == "allow"
+    assert d(pol, "mcp__claude_ai_Microsoft_365__outlook_create_draft", {}) == "deny"
+    assert d(pol, "mcp__claude_ai_Microsoft_365__outlook_update_draft", {}) == "deny"
+    assert d(pol, "mcp__claude_ai_Microsoft_365__outlook_create_reply_draft", {}) == "deny"
+    assert d(pol, "mcp__claude_ai_Microsoft_365__outlook_modify_labels", {}) != "allow"
 
 
 def test_read_only_flags_restrict_the_cli_itself(tmp_path):

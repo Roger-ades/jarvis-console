@@ -7,11 +7,13 @@ import { fmtSize } from "./attach.js";
 import { pickFolder } from "./folderpicker.js";
 import { mdElement } from "./md.js";
 import { allNotes, renderProjectNotes } from "./notes.js";
+import { officeChanged, renderOffice } from "./office.js";
+import { odooChanged, renderOdoo } from "./odoo.js";
 import { projectTint } from "./tint.js";
 import { $, STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
 
-const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
+const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["suivi", "Suivi"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const join = (a, b) => (a ? `${a}/${b}` : b);
@@ -28,13 +30,36 @@ export function toggleProject(context) {
   load();
 }
 
+/** Open the panel on a project (named in the bar, or opened by Claude with the tool projet), on a tab.
+ * folder: shown without changing the request bar's folder; null: the bar's folder. */
+export function showProject(context, { folder = null, tab: on = "tasks" } = {}) {
+  ctx = context;
+  const d = el();
+  if (d.hidden) { ctx.closeDrawers?.("project"); d.hidden = false; }
+  tab = on;
+  note = null;
+  if (folder && ws && fkey(ws.folder) === fkey(folder)) { render(); return; }
+  load(folder, false);
+}
+
 /** The request bar changed account or folder: follow it while open. */
 export function projectFollow() { if (ctx && !el().hidden) load(); }
 
-/** Projects or routines changed (an action added or validated, a routine accepted): the Actions tab follows. */
-export function projectActionsChanged() { if (ctx && ws && !el().hidden && tab === "actions") render(); }
+/** Projects or routines changed (an action added or validated, a routine accepted): the Actions tab follows,
+ * and the Suivi tab (an Odoo project linked from a discussion). */
+export function projectActionsChanged() { if (ctx && ws && !el().hidden && (tab === "actions" || tab === "suivi")) render(); }
+/** A discussion was archived or brought back: the Discussions tab follows. */
+export function projectTasksChanged() { if (ctx && ws && !el().hidden && tab === "tasks") render(); }
 
-async function load(folder = null) {
+/** The console read again what the Suivi tab shows (Odoo tasks, or Office 365). */
+export function projectSuiviChanged({ folder } = {}) {
+  if (!ctx || !ws) return;
+  const shown = !el().hidden && tab === "suivi" && fkey(folder) === fkey(ws.folder);
+  odooChanged(folder, shown, render);
+  officeChanged(folder, shown, render);
+}
+
+async function load(folder = null, follow = true) {
   loading = true;
   render();
   const f = folder ?? ctx.workdir();
@@ -44,7 +69,7 @@ async function load(folder = null) {
   if (f) q.set("folder", f);
   try {
     ws = await api(`/api/workspace?${q}`);
-    if (folder !== null) ctx.setWorkdir(ws.folder, ws.folder === ws.folders[0]);
+    if (folder !== null && follow) ctx.setWorkdir(ws.folder, ws.folder === ws.folders[0]);
   } catch (e) { toast(e.message, "err"); ws = null; }
   sub = "";
   note = null;
@@ -103,12 +128,29 @@ function render() {
     on: { click: () => { tab = id; note = null; render(); } } }, label, id === "memory" && ws.memory.files.length ? h("span", { class: "cnt" }, String(ws.memory.files.length))
       : id === "rules" && ws.rules?.length ? h("span", { class: "cnt" }, String(ws.rules.length))
       : id === "actions" && toReview ? h("span", { class: "cnt warn", title: "Actions à valider" }, String(toReview))
-      : id === "notes" && notesHere(ws.folder) ? h("span", { class: "cnt" }, String(notesHere(ws.folder))) : null)));
+      : id === "notes" && notesHere(ws.folder) ? h("span", { class: "cnt" }, String(notesHere(ws.folder)))
+      : id === "suivi" && proj?.odoo?.length ? h("span", { class: "cnt" }, String(proj.odoo.length)) : null)));
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick), h("small", { title: ws.folder }, ws.folder)), tabs, body);
   ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules,
-    actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes })[tab](body);
+    actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,
+    suivi: renderSuivi })[tab](body);
+}
+
+/** Odoo and Office 365 of this project: tasks, drafts, follow-ups. */
+function renderSuivi(body) {
+  const proj = ctx.project(ws.folder);
+  const again = () => { if (tab === "suivi") render(); };
+  if (!proj) {
+    body.append(h("p", { class: "pj-lead pad" }, "Le suivi d'un projet réunit ses tâches Odoo et, dans Office 365, "
+      + "ce qu'il y a à faire, les brouillons et les relances. Donne d'abord un nom à ce dossier."),
+      h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small primary",
+        on: { click: async () => { if (await ctx.editProject(ws.folder, ws.profile)) render(); } } }, "En faire un projet")));
+    return;
+  }
+  renderOdoo(body, ws.folder, { isProject: true, tint: tint(), rerender: again, makeProject: async () => {} });
+  renderOffice(body, ws.folder, { rerender: again });
 }
 
 // ------------------------------------------------------------ instructions
@@ -266,9 +308,14 @@ async function resumeHere(r) {
   if (text && text.trim()) ctx.launch(`/api/sessions/${r.profile}/${r.id}/resume`, { prompt: text.trim(), fork: false });
 }
 
+let showArchived = false;
+
 function renderTasks(body) {
-  const mine = ctx.tasks().filter((t) => t.profile === ws.profile && sameFolder(t.workdir, ws.folder))
+  const all = ctx.tasks().filter((t) => t.profile === ws.profile && sameFolder(t.workdir, ws.folder) && t.origin !== "reglage")
     .sort((a, b) => (b.created || 0) - (a.created || 0));
+  const archived = all.filter((t) => t.archived);
+  const mine = showArchived ? archived : all.filter((t) => !t.archived);
+  const idle = (t) => !["queued", "running", "awaiting"].includes(t.status);
   body.append(h("p", { class: "pj-lead pad" }, "Discussions de ce dossier : celles de la console, puis celles de Claude Desktop et de la CLI. ",
     "« Contexte » joint une discussion à ta prochaine demande ; « Copie » repart de tout son contexte dans une nouvelle fenêtre."),
   h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small primary", on: { click: bringSession } },
@@ -276,13 +323,25 @@ function renderTasks(body) {
   const btn = (label, title, fn, disabled = false) => h("button", { type: "button", class: "btn small ghost", title, disabled,
     on: { click: (e) => { e.stopPropagation(); fn(); } } }, label);
   const others = h("div", { class: "drawer-list flat" });
-  body.append(h("div", { class: "drawer-list flat" }, ...(mine.length ? mine.map((t) => h("div", { class: "hrow", style: { "--pc": t.color },
+  const done = mine.filter((t) => !t.archived && idle(t));
+  const bar = archived.length || done.length ? h("div", { class: "row pad" },
+    archived.length || showArchived ? h("button", { type: "button", class: `btn small${showArchived ? " primary" : ""}`,
+      title: "Les discussions archivées restent ici, dans l'historique et dans Ctrl+K",
+      on: { click: () => { showArchived = !showArchived; render(); } } },
+    showArchived ? "Retour aux discussions" : `Archivées (${archived.length})`) : null,
+    !showArchived && done.length > 1 ? btn("Archiver les terminées", "Archiver toutes les discussions terminées de ce dossier",
+      () => ctx.archive(done.map((t) => t.id), true)) : null) : null;
+  body.append(...[bar, h("div", { class: "drawer-list flat" }, ...(mine.length ? mine.map((t) => h("div", { class: "hrow", style: { "--pc": t.color },
     on: { click: () => ctx.openTask(t.id) } },
-    h("div", { class: "hm" }, h("div", { class: "ht" }, t.title), h("div", { class: "hs" }, [STATUS[t.status], fmtDate(t.created), t.preset_name].filter(Boolean).join(" · "))),
+    h("div", { class: "hm" }, h("div", { class: "ht" }, t.title), h("div", { class: "hs" }, [STATUS[t.status], fmtDate(t.created), t.preset_name,
+      t.archived ? `archivée ${fmtDate(t.archived)}` : ""].filter(Boolean).join(" · "))),
     btn("Contexte", "Joindre cette discussion à ta prochaine demande", () => ctx.addContext(t), !t.resumable),
-    btn("Copie", "Nouvelle discussion à partir de celle-ci", () => ctx.fork(t), !t.resumable)))
-    : [h("div", { class: "empty-row" }, "Aucune discussion de la console dans ce dossier.")])),
-  others,
+    btn("Copie", "Nouvelle discussion à partir de celle-ci", () => ctx.fork(t), !t.resumable),
+    t.archived ? btn("Désarchiver", "Remettre cette discussion dans les listes courantes", () => ctx.archive([t.id], false))
+      : btn("Archiver", idle(t) ? "Ranger cette discussion : elle reste dans « Archivées » et dans Ctrl+K" : "Une discussion en cours ne s'archive pas",
+        () => ctx.archive([t.id], true), !idle(t))))
+    : [h("div", { class: "empty-row" }, showArchived ? "Aucune discussion archivée dans ce dossier." : "Aucune discussion de la console dans ce dossier.")])),
+  showArchived ? null : others].filter(Boolean),
   h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small", on: { click: () => ctx.sessions() } },
     "Toutes les sessions du compte…")));
   // sessions of this folder not driven by the console (Claude Desktop, CLI)

@@ -51,16 +51,21 @@ export function openPalette(ctx) {
     const groups = [];
     const acts = ctx.actions().filter((a) => has(a.label, a.keywords || ""));
     const projs = ctx.projects().filter((p) => has(p.name, p.folder));
-    const localTasks = ctx.tasks().filter((t) => has(t.title, t.prompt)).sort((a, b) => (b.created || 0) - (a.created || 0));
-    const taskIds = new Set(localTasks.map((t) => t.id));
-    const tasks = [...localTasks.slice(0, q ? 8 : 5).map((t) => ({ t, snippet: "" })),
-      ...server.tasks.filter((t) => !taskIds.has(t.id)).map((t) => ({ t, snippet: t.snippet }))];
+    const localAll = ctx.tasks().filter((t) => has(t.title, t.prompt)).sort((a, b) => (b.created || 0) - (a.created || 0));
+    const localTasks = localAll.filter((t) => !t.archived);
+    const taskIds = new Set(localAll.map((t) => t.id));
+    const found = server.tasks.filter((t) => !taskIds.has(t.id)).map((t) => ({ t, snippet: t.snippet }));
+    const tasks = [...localTasks.slice(0, q ? 8 : 5).map((t) => ({ t, snippet: "" })), ...found.filter(({ t }) => !t.archived)];
+    // archived ones only when searching: they come last, still one Enter away
+    const shelved = q ? [...localAll.filter((t) => t.archived).slice(0, 8).map((t) => ({ t, snippet: "" })), ...found.filter(({ t }) => t.archived)] : [];
+    const taskItem = ({ t, snippet }) => ({
+      icon: "list", color: t.color, title: t.title, snippet,
+      sub: [t.profile_name, ctx.projectName(t.workdir) || baseName(t.workdir), statusLabel(t),
+        t.archived ? `archivée ${fmtDate(t.archived)}` : fmtDate(t.created)].filter(Boolean).join(" · "),
+      run: () => ctx.openTask(t.id) });
     if (projs.length) groups.push(["Projets", projs.slice(0, 6).map((p) => ({
       icon: "book", color: p.color, title: p.name, sub: baseName(p.folder), run: () => ctx.useProject(p) }))]);
-    if (tasks.length) groups.push(["Discussions", tasks.slice(0, 12).map(({ t, snippet }) => ({
-      icon: "list", color: t.color, title: t.title, snippet,
-      sub: [t.profile_name, ctx.projectName(t.workdir) || baseName(t.workdir), statusLabel(t), fmtDate(t.created)].filter(Boolean).join(" · "),
-      run: () => ctx.openTask(t.id) }))]);
+    if (tasks.length) groups.push(["Discussions", tasks.slice(0, 12).map(taskItem)]);
     if (server.sessions.length) groups.push(["Sessions Claude Code", server.sessions.slice(0, 10).map((s) => ({
       icon: "retry", color: s.color, title: s.title, snippet: s.snippet,
       sub: [s.profile_name, ORIGIN[s.origin] || s.origin, baseName(s.cwd), fmtDate(s.updated)].filter(Boolean).join(" · "),
@@ -70,6 +75,7 @@ export function openPalette(ctx) {
       sub: [KIND[d.kind] || d.kind, d.title && d.title !== baseName(d.path).replace(/\.[^.]+$/, "") ? d.title : "", parentName(d.path), fmtDate(d.mtime)].filter(Boolean).join(" · "),
       run: () => openPreview({ doc: true, path: d.path, focus: { text: d.snippet, words: (d.snippet.match(/\x02[^\x03]*\x03/g) || []).map((w) => w.slice(1, -1)), page: d.page || 0 } }) }))]);
     if (acts.length) groups.push(["Actions", acts.slice(0, q ? 8 : 10).map((a) => ({ icon: a.icon || "sparkle", title: a.label, sub: a.hint || "", run: a.run }))]);
+    if (shelved.length) groups.push(["Archivées", shelved.slice(0, 10).map(taskItem)]);
     items = groups.flatMap(([, xs]) => xs);
     index = Math.min(index, Math.max(0, items.length - 1));
     let k = 0;

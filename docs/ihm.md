@@ -1,6 +1,6 @@
 # IHM : améliorations possibles (conception)
 
-Note de travail : ce qui est en place est décrit d'abord ; les pistes ne sont pas commencées. L'objectif est
+Note de travail : ce qui est en place est décrit d'abord, puis ce qui est en cours et à venir, chacun avec son statut. L'objectif est
 une IHM puissante, où Claude se sert de la console comme d'un outil et ne la subit pas.
 
 Principe retenu, déjà appliqué par `presenter` : **Claude dit ce qu'il veut montrer ou
@@ -177,7 +177,7 @@ Les notifications à boutons Approuver et Refuser restent celles des validations
 
 ### Ce qui reste pour la suite de ce brief
 
-La synchro qui crée ou clôt la tâche dans Office 365 ou Odoo sans repasser par Claude. Le bouton « Terminée » écrit la ligne dans `BRIEF.md` tout de suite ; si le brief n'est pas en lecture seule, il redemande à Claude de la clôturer, avec les validations du preset. Les priorités et les échéances sont déjà demandées dans le rapport ; les porter dans une liste de tâches de Jarvis viendra avec cette synchro.
+La synchro qui crée ou clôt la tâche dans Office 365 ou Odoo sans repasser par Claude. Le bouton « Terminée » écrit la ligne dans `BRIEF.md` tout de suite ; si le brief n'est pas en lecture seule, il redemande à Claude de la clôturer, avec les validations du preset. Les tâches Office 365, les brouillons et les relances d'un projet se lisent déjà dans l'onglet Suivi ; le même fil pour le compte, hors projet, reste à faire.
 
 ## Bloc formulaire
 
@@ -185,15 +185,180 @@ En place. Claude prépare une feuille (un mail, un devis) avec `presenter`, bloc
 
 Un mail lu reste une donnée. Les champs proposés se corrigent ici, puis le clic Valider les renvoie. Claude ne change ni la configuration, ni les permissions, ni les domaines approuvés.
 
+## Claude et JARVIS ne font qu'un (à venir)
+
+Direction actuelle : un chef d'entreprise qui a beaucoup à gérer parle à JARVIS, et JARVIS ouvre,
+range, retrouve et relie lui-même. Statuts et ordre dans [feuille-de-route.md](feuille-de-route.md)
+(axe 0). Règle : un geste d'interface sans conséquence (ouvrir une fenêtre) se fait tout de suite ;
+ce qui s'enregistre (rattacher, lier, synchroniser) passe par une carte d'approbation.
+
+### Le projet suit la conversation
+
+*Fait.* « On va travailler dans le projet Network » tapé dans la barre JARVIS :
+
+1. **Avant l'envoi, sans modèle** (`static/js/mention.js`). La barre reconnaît le nom ou le dossier
+   d'un projet connu dans la demande, après « projet », « dossier » ou « dans » (« projet Network »,
+   « dans le dossier network », sans accents ni majuscules ; le plus long nom l'emporte, un nom
+   ambigu ne propose rien). Une puce « Projet : Network » apparaît, à la couleur du projet, avec une
+   croix pour la retirer : elle remplit le sélecteur de dossier comme un choix à la main (compte,
+   preset, modèle du projet). La croix remet la barre comme avant et écarte le projet pour ce texte ;
+   choisir un autre dossier ou un autre compte à la main garde ce choix. Pas de token, pas de délai.
+2. **Au lancement.** La fenêtre de la session s'ouvre dans le dossier du projet, et le panneau du
+   projet s'ouvre à côté, sur l'onglet Discussions où la nouvelle apparaît en tête. Réglable :
+   Configuration → Interface → « Ouvrir le projet avec ses discussions » (le panneau ne s'ouvre que
+   pour un projet nommé dans la demande, pas pour un dossier choisi à la main).
+3. **Mention implicite ou en cours de discussion.** Claude passe par l'outil `projet`
+   (`console/project_nav.py`, `Engine._project_tool`) :
+   - `ouvrir` (nom du projet) : ouvre le panneau du projet, tout de suite, même si le réglage
+     ci-dessus est coupé (c'est demandé) ;
+   - `rattacher` (nom du projet) : une carte « Passer cette discussion dans le projet Network »
+     (dossier, règles du projet qui s'appliqueront) ; au clic, la console déplace la session à la fin
+     du tour (`Engine.move_task` : une discussion en cours ne se déplace pas), puis la suite continue
+     dans le dossier du projet. La discussion garde son preset : elle n'obtient jamais plus de droits.
+     Un message de suite envoyé entre-temps attend le déplacement, puis part dans le nouveau dossier.
+
+   La liste des projets (noms, dossiers) est dans la section « JARVIS » du prompt système, fixe tant
+   que les projets ne changent pas, pour garder le cache.
+
+### L'activité du projet
+
+*À faire.* « Sur quel fichier on a travaillé en dernier dans le projet Network ? » : l'outil `projet`
+(`activite`) répond à partir des données de la console, sans fouiller le dossier ni lancer de
+commande :
+
+- les dernières discussions du projet (titre, date, état, compte) ;
+- les fichiers modifiés par Claude (`console/changes.py`), avec la discussion et l'heure ;
+- les fichiers ouverts en aperçu ou affichés (`afficher`), et ceux joints à une demande ;
+- les fichiers du dossier récemment modifiés sur le disque (l'index des documents connaît leur date).
+
+Le résultat est une donnée, filtrée par les autorisations de la discussion comme une lecture (un
+chemin interdit n'apparaît pas). Claude peut enchaîner avec `afficher` ; la console peut aussi
+montrer la réponse en cartes (`presenter`) avec « Ouvrir » et « Reprendre la discussion ».
+
+### Odoo relié au projet
+
+*Fait (`console/odoo_link.py`, `static/js/odoo.js`).* Deux chemins pour lier un projet Odoo :
+
+- **En le demandant à Claude**, dans une discussion du projet (« lie le projet Odoo Network V2 à ce
+  projet ») : Claude cherche le projet dans Odoo (lecture, `project.project`), puis le propose avec
+  `proposer` (`quoi: "odoo"`, `projets_odoo` : identifiant et nom lus dans Odoo, `remplace` pour
+  remplacer les liens existants). La carte montre les projets à lier, ceux déjà liés (ou ceux qui ne
+  le seront plus) ; rien n'est enregistré avant le clic, et rien ne change dans Odoo.
+- **Depuis l'onglet « Suivi » du panneau Projet** : « Lier un projet Odoo… » cherche par nom (ou les
+  plus récents) et liste les projets trouvés, avec client et nombre de tâches ; on coche, on lie.
+  « Délier » retire un lien. L'onglet s'appelait « Odoo » ; il réunit maintenant Odoo et Office 365.
+
+Les liens sont enregistrés dans `Project.odoo` (identifiant, nom, serveur Odoo du compte s'il y en a
+plusieurs ; dix au plus). Le brief du projet et chaque discussion du projet les connaissent : une
+tâche Odoo créée depuis le dossier va dans l'un d'eux.
+
+L'onglet « Suivi » montre les tâches et sous-tâches (`parent_id`) des projets liés, en arbre : étape,
+échéance (en rouge si dépassée), responsables, priorité ; les terminées sont masquées par défaut.
+Un clic ouvre la tâche dans Odoo (site connecté), un clic droit la montre à Claude (Regard). La
+lecture se fait à l'ouverture de l'onglet si les tâches datent de plus de 6 heures, ou avec
+« Actualiser ».
+
+La console n'a pas de client Odoo à elle : elle lit par une courte discussion sans fenêtre du compte
+du projet (Haiku, preset lecture, sans session gardée), dont elle lit la réponse JSON, puis la
+supprime. Ces discussions de réglage n'apparaissent pas dans les discussions du projet. La réponse
+est une donnée : ce qui ne ressemble pas à une tâche est écarté.
+
+Créer, modifier ou clôturer une tâche Odoo reste une demande à Claude, sous les validations du
+preset (le bouton « Terminée » du brief en est le modèle).
+
+### Office 365 dans le suivi
+
+*En cours (`console/office_link.py`, `static/js/office.js`).* Le même onglet **Suivi** montre, sous
+les tâches Odoo, ce qu'il y a à faire pour ce projet dans Office 365 : tâches, mails laissés en
+brouillon, relances. La console n'a pas de client Microsoft à elle : elle lit par une courte
+discussion sans fenêtre du compte du projet (Haiku, preset lecture), comme pour Odoo. Un brouillon
+n'est jamais envoyé. Le clic ouvre la page quand l'adresse est connue ; le clic droit la montre à
+Claude.
+
+Ce fil existe d'abord dans un projet. Le même, pour le compte entier et hors projet, reste à faire.
+Créer ou clôturer une tâche dans Office 365 sans repasser par Claude aussi.
+
+### Un dossier du projet synchronisé avec OneDrive ou SharePoint
+
+*À faire.* La synchronisation reste le travail du client OneDrive de Windows : il gère le hors-ligne,
+les conflits et les suppressions. JARVIS ne recopie jamais de fichiers par Microsoft Graph.
+
+- **Voir.** La console reconnaît les dossiers synchronisés (racines OneDrive et SharePoint déclarées
+  par le client dans le registre de l'utilisateur) : le panneau Projet indique « Synchronisé avec
+  OneDrive · Ades » ou « Sur ce PC seulement » pour le dossier du projet et ses dossiers ajoutés.
+- **Demander.** « Synchronise le dossier Devis avec le Drive » : Claude propose (`proposer`,
+  `quoi: "lien"`) l'une des deux voies, sur une carte :
+  - le dossier est sur le PC seulement : le déplacer dans OneDrive (la carte montre la destination ;
+    le déplacement est fait par la console après le clic, le projet suit son nouveau chemin) ;
+  - le dossier est dans une bibliothèque SharePoint ou un OneDrive partagé : la console ouvre le lien
+    de synchronisation du client OneDrive (`odopen://`), puis ajoute le dossier local au projet une
+    fois qu'il apparaît.
+- Un fichier « en ligne seulement » reste reconnu par l'index (seul son nom est indexé).
+
+## Regard partout
+
+*Partiel.* Aujourd'hui, une sélection compte dans une fenêtre de discussion, un aperçu lu par la
+console (texte, Markdown, Word, Excel, mail `.eml`) et un affichage (dans la discussion, sa fenêtre,
+la modale ou un widget). Ce qui manque, et comment :
+
+- **Les panneaux et fenêtres de la console** (Projet, Notes, Historique, boîte de réception, Ctrl+K,
+  fenêtres de dialogue) : toute sélection devient un regard « texte sélectionné dans Notes » (son
+  origine pour titre), au lieu d'être ignorée (`sourceOf` dans
+  [static/js/regard.js](../static/js/regard.js)). Un résultat de Ctrl+K désigné devient le fichier,
+  la discussion ou la note qu'il montre.
+- **Les cadres** : PDF, pages web, mails HTML. La console ne lit pas ce qui y est sélectionné :
+  - les pages et mails HTML servis par l'origine des aperçus reçoivent un petit script de la console
+    qui envoie la sélection (bornée, texte seul) par `postMessage` à la fenêtre parente, qui ne
+    l'accepte que de ce cadre ;
+  - les PDF passent par pdf.js (une couche de texte) au lieu du lecteur du navigateur : la sélection
+    devient lisible, avec la page, et le passage surligné par `afficher` reste possible ;
+  - à défaut, dans l'application de bureau, Ctrl+C dans un cadre puis la barre propose « Joindre le
+    texte copié » (le presse-papiers n'est lu qu'à ce clic).
+- **En mode intégré**, la puce se montre dans la barre JARVIS quelle que soit la fenêtre où le texte
+  a été sélectionné (aujourd'hui, seulement dans la barre de la fenêtre qui a le focus), et Ctrl+Alt+J
+  ouvre la barre avec la puce déjà prête.
+- Un clic droit sur une sélection propose « Demander à Claude à propos de ceci », comme pour un
+  élément désigné.
+
+Ce qui ne change pas : la sélection est citée comme une donnée, bornée, et jamais dans le prompt
+système ; le regard ne donne aucun droit sur le fichier.
+
+## Archivage des discussions
+
+*Fait, sauf la purge (à trancher).* L'historique et la liste des discussions d'un projet grossissent vite.
+
+- **Archiver** : « Archiver » dans le menu ⋯ de la fenêtre ; dans l'historique, une case par ligne
+  puis « Archiver (n) » ; dans l'onglet Discussions du projet, « Archiver » sur la ligne ou « Archiver
+  les terminées ». La discussion quitte les listes courantes, l'écran d'accueil (« Reprendre »), la
+  boîte de réception et la barre des tâches ; sa fenêtre se ferme. Une discussion en cours ne
+  s'archive pas.
+- **Retrouver** : le filtre « Courantes / Archivées / Toutes » de l'historique, le bouton « Archivées
+  (n) » de l'onglet Discussions du projet (avec la date d'archivage et « Désarchiver »), et Ctrl+K,
+  qui les trouve dès qu'on tape (groupe « Archivées », après les autres). Les sessions de Claude ne
+  sont pas touchées : rouvrir une discussion archivée ou y écrire la désarchive, et la reprise
+  continue la même session.
+- **Archivage automatique** : Configuration → Historique, « Archiver les discussions inactives depuis
+  N jours » (0 = jamais, par défaut ; 14 jours conseillé). La passe tourne au démarrage, après la
+  purge, puis toutes les heures. Jamais une discussion en cours, en attente d'une validation ou d'un
+  clic, gardée au chaud, épinglée, programmée, ni celle d'un widget. Chaque passe est inscrite au
+  journal d'audit.
+- **La purge** (`history.retention_days`, 90 jours aujourd'hui) supprime toujours les discussions
+  terminées, archivées comprises. À trancher : avec l'archivage, ne plus purger que les archives, et
+  seulement sur demande (« Supprimer les archives de plus de N jours », désactivé par défaut).
+- Côté serveur : un champ `archived` (date, 0 sinon) sur la tâche, `PATCH /api/tasks/{id}`
+  (`archived`) pour une, `POST /api/tasks/archive` (`ids`, `archived`) pour plusieurs ; la recherche
+  renvoie `archived` ; l'événement `task` met à jour toutes les pages.
+
 ## Pistes, de la plus utile à la plus ambitieuse
 
-Le brief de projet, ci-dessus, est le chantier en cours.
+Le brief de projet, ci-dessus, est le chantier en cours ; « Claude et JARVIS ne font qu'un », Regard
+partout et l'archivage sont les suivants.
 
 | Piste | Ce que ça apporte | Points d'attention |
 |---|---|---|
 | **`demander_validation`** : aperçu ou différences, relié aux validations existantes | Une décision claire avant une action sensible, au lieu d'un refus brut. | Ne doit jamais permettre de valider à la place de l'utilisateur. |
 | **Vue « Consommation »** : par compte, projet et discussion, cache lu et écrit, compactions, part des sous-agents | Voir où partent les tokens. L'analyse du 2 octobre l'a montré : c'est le mode équipe qui coûte, pas la console. | Les données viennent des transcriptions (`<config>/projects/…`) : pas de nouvel appel. |
-| **Signaler ce qui fait perdre le cache** : pause de plus d'une heure, compaction automatique | Comprendre une consommation inattendue. Proposer « Garder au chaud » sur une discussion importante. | La compaction est normale : il s'agit d'informer, pas d'alarmer. |
+| **Signaler ce qui fait perdre le cache** : pause de plus d'une heure, compaction automatique | Comprendre une consommation inattendue. « Garder au chaud » existe (à la main) ; l'étape suivante, garder au chaud ou compacter automatiquement avant l'expiration, est chiffrée dans [feuille-de-route.md](feuille-de-route.md#reprise-dune-discussion-inactive--faut-il-compacter-avant-lexpiration-du-cache-). | La compaction est normale : il s'agit d'informer, pas d'alarmer. Compacter n'est rentable que si la discussion est reprise. |
 | **`notifier` / progression** dans la barre des tâches | Les tâches longues en arrière-plan tiennent l'utilisateur au courant. | Limiter la fréquence des notifications. |
 | **Coordination entre discussions** : voir les autres, leur écrire, proposer une discussion qui s'ouvre dans sa propre fenêtre | Un vrai poste multi-agents, et non des sous-agents invisibles. | La piste la plus puissante, mais aussi la plus coûteuse en tokens. Lancer une discussion reste soumis à validation. |
 | **Proposer une note de projet** (consignes, mémoire), que l'utilisateur valide | Les routines et les actions se proposent déjà : il reste le texte du projet. | Toujours une proposition, montrée en différences, jamais une écriture directe. |
@@ -295,8 +460,10 @@ proposées, une nouvelle discussion demande sa validation.
 1. ~~« Ce que je regarde »~~ (fait, avec les différences et l'annulation des fichiers).
 2. Brief de projet (en cours, voir plus haut) : lancé seul, sources mails (objet et corps), tâches Office 365, calendrier, projets Odoo, fichier `BRIEF.md`, suivi d'un interlocuteur depuis un mail, affichage du rapport en fenêtre.
 3. ~~Bloc `formulaire`~~ (fait).
-4. Vue « Consommation » et signalement des pertes de cache.
-5. `demander_validation`, puis la coordination entre discussions.
+4. Claude et JARVIS ne font qu'un (en cours) : le projet suit la conversation (fait), l'activité du projet, puis Regard partout, Odoo relié au projet (fait, onglet Suivi), Office 365 dans ce même onglet (lecture commencée : tâches, brouillons, relances), dossier OneDrive.
+5. Archivage des discussions (fait ; reste à trancher la purge des archives).
+6. Vue « Consommation », signalement des pertes de cache et reprise des discussions inactives.
+7. `demander_validation`, puis la coordination entre discussions.
 
 La feuille de route d'ensemble (déclencheurs, boîte de réception, validations depuis le téléphone,
 Electron…) est dans [feuille-de-route.md](feuille-de-route.md).

@@ -49,7 +49,6 @@ let cascade = 0;
 let bar = null;
 let barPinned = false;                   // stays when the user clicks elsewhere
 let barHold = false;                     // a file picker of the bar is open: it does not hide meanwhile
-let barH = 190;
 const BAR_W = 820;
 // started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
 // shortcut, launcher); the windows the page opens meanwhile wait hidden
@@ -202,14 +201,29 @@ function widgetOptions(f) {
   };
 }
 
-/** Bottom center of the screen where the mouse is: where the bar shows. */
-function barPlace(height) {
-  const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  return { x: Math.round(a.x + (a.width - BAR_W) / 2), y: Math.round(a.y + a.height - height - 12) };
+let barH = 190;
+
+/** Bottom of the work area. Called when what is above the prompt actually changes size (menu, notices),
+ *  never while typing: the field does not grow. */
+function setBarBounds(area, height, x) {
+  if (!bar || bar.isDestroyed()) return;
+  const h = Math.max(90, Math.min(Math.round(height), 720, Math.max(90, area.height - 24)));
+  const y = Math.max(area.y, Math.round(area.y + area.height - 12 - h));
+  x = Math.round(x === undefined ? area.x + (area.width - BAR_W) / 2 : Math.min(Math.max(x, area.x), area.x + area.width - BAR_W));
+  const b = bar.getBounds();
+  if (b.x === x && b.y === y && b.width === BAR_W && b.height === h) return;
+  barH = h;
+  bar.setBounds({ x, y, width: BAR_W, height: h });
+}
+
+function placeBar(area) {
+  setBarBounds(area, barH);
 }
 
 function barOptions() {
-  return { ...barPlace(barH), width: BAR_W, height: barH, frame: false, transparent: true, backgroundColor: "#00000000",
+  const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  return { x: Math.round(a.x + (a.width - BAR_W) / 2), y: Math.round(a.y + a.height - barH - 12), width: BAR_W, height: barH,
+    frame: false, transparent: true, backgroundColor: "#00000000",
     hasShadow: false, resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
     alwaysOnTop: true, show: false, title: "JARVIS — nouvelle demande", icon: ICON,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } };
@@ -229,7 +243,7 @@ function adoptBar(win) {
 function showBar({ select = true, menu = false } = {}) {
   if (!bar || bar.isDestroyed() || mode !== "integre") { revealHub(true); return; }
   wake();
-  if (!bar.isVisible()) bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
+  if (!bar.isVisible()) placeBar(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
   bar.show();
   bar.focus();
   const cmd = menu ? "menu" : select ? "nouvelle-demande" : "";
@@ -773,10 +787,10 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     if (op === "bar-ready") {
       // the bar is there: no JARVIS window any more (it showed the start of the console)
       if (hub && !hub.isDestroyed()) hub.hide();
-      if (!discreet) { bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH }); bar.showInactive(); }
+      if (!discreet) { placeBar(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea); bar.showInactive(); }
     }
     else if (op === "bar-reveal" && !discreet && !bar.isVisible()) {   // a reminder above it: without the keyboard
-      bar.setBounds({ ...barPlace(barH), width: BAR_W, height: barH });
+      placeBar(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
       bar.showInactive();
     }
     else if (op === "bar-hide") bar.hide();
@@ -784,10 +798,8 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     else if (op === "bar-pin") barPinned = !!data;
     else if (op === "bar-hold") barHold = !!data;
     else if (op === "bar-fit" && Number.isFinite(data?.height)) {
-      // the bar grows upward (a list, a menu, a message above it): its bottom stays where it is
-      barH = Math.max(90, Math.min(720, Math.round(data.height)));
       const b = bar.getBounds();
-      bar.setBounds({ x: b.x, y: b.y + b.height - barH, width: BAR_W, height: barH });
+      setBarBounds(screen.getDisplayMatching(b).workArea, data.height, b.x);
     }
     return true;
   }

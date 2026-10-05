@@ -1052,6 +1052,8 @@ export class TaskWindow {
   /** Claude proposes an action or a routine for the project: shown in full, written or saved only on a click. */
   proposalCard(p) {
     const x = p.input || {};
+    if (x.quoi === "odoo") return this.odooCard(p);
+    if (x.quoi === "rattacher") return this.attachCard(p);
     const action = x.quoi === "action";
     const consigne = x.quoi === "consigne";
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
@@ -1093,6 +1095,58 @@ export class TaskWindow {
       consigne && x.remplace === true && x.actuelle ? h("details", {}, h("summary", { class: "muted" }, "Consigne actuelle, qui sera remplacée"),
         h("pre", { class: "prop-code" }, x.actuelle)) : null,
     ].filter(Boolean));
+    return el;
+  }
+
+  /** Claude proposes to link Odoo projects to the discussion's project (proposer, quoi « odoo »). */
+  odooCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const name = (l) => `${l.name} (n° ${l.id}${l.app ? `, ${l.app}` : ""})`;
+    const now = x.projets_odoo || [], before = x.actuels || [];
+    const replace = x.remplace === true;
+    const kept = replace ? [] : before;
+    const field = (k, v) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", {}, v)) : null);
+    el.append(...[
+      this.apprHead("link", replace ? "Liens Odoo à remplacer" : "Lien vers Odoo proposé", `Projet « ${x.projet || ""} »`),
+      h("div", { class: "appr-reason" }, x.description || p.reason),
+      h("div", { class: "prop-fields" }, ...[
+        field(now.length > 1 ? "Projets Odoo" : "Projet Odoo", now.map(name).join(", ")),
+        kept.length ? field("Déjà liés", kept.map(name).join(", ")) : null,
+        replace && before.length ? field("Ne seront plus liés", before.map(name).join(", ")) : null,
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, "Leurs tâches et sous-tâches s'afficheront dans l'onglet Suivi du panneau Projet, et le brief du projet "
+        + "les suivra. Rien ne change dans Odoo ; rien n'est enregistré avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },
+          replace ? "Remplacer les liens" : now.length > 1 ? "Lier ces projets" : "Lier ce projet")),
+    ]);
+    return el;
+  }
+
+  /** Claude proposes that the discussion continue in a project (tool projet, rattacher): it moves at the end of the turn. */
+  attachCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v, title) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", { title }, v)) : null);
+    const rules = Number(x.regles) || 0;
+    el.append(
+      this.apprHead("folder", "Passer dans un projet", h("span", { class: "pj-name", style: { "--pc": x.couleur || "var(--accent)" } }, x.projet || "")),
+      h("div", { class: "appr-reason" }, `Passer cette discussion dans le projet « ${x.projet || ""} » ?`),
+      h("div", { class: "prop-fields" }, ...[
+        field("Aujourd'hui", x.actuel ? `projet « ${x.actuel} »` : x.dossier_actuel, x.dossier_actuel),
+        field("Ensuite", x.dossier, x.dossier),
+        field("Règles du projet", rules ? `${rules} règle${rules > 1 ? "s" : ""} s'appliqueront` : "aucune"),
+        field("Autorisations", x.preset ? `garde les siennes (${x.preset})` : "garde les siennes"),
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, "C'est la même discussion : elle continue dans le dossier du projet, avec ses consignes et sa mémoire, "
+        + "une fois la réponse en cours terminée. Rien ne bouge avant ton choix."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Garder ici"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } }, "Passer dans le projet")));
     return el;
   }
 
@@ -1292,6 +1346,7 @@ export class TaskWindow {
       { label: "Renommer avec l'IA", disabled: this.renaming, run: () => this.aiRename() },
       { label: this.inspOpen ? "Masquer le panneau" : "Afficher le panneau", run: () => this.toggleInspector() },
       "-",
+      { label: "Archiver", disabled: ACTIVE.has(t.status), run: () => this.ctx.archive(this.id) },
       { label: "Supprimer de l'historique", danger: true, disabled: ACTIVE.has(t.status), run: async () => {
         if (!(await confirmDialog("Supprimer la tâche ?", "Sa sortie et son flux seront effacés. Le journal d'audit est conservé.", "Supprimer", "danger"))) return;
         try { await api(`/api/tasks/${this.id}`, { method: "DELETE" }); } catch (e) { toast(e.message, "err"); }
