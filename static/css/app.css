@@ -1462,7 +1462,7 @@ th[data-sort="asc"] .dsp-sort::after { content: "▲"; }
 th[data-sort="desc"] .dsp-sort::after { content: "▼"; }
 
 /* charts */
-.dsp-plot { position: relative; min-width: 0; }
+.dsp-plot { display: block; position: relative; min-width: 0; }
 .dsp-plot svg { display: block; overflow: visible; }
 .dsp-plot .grid line { stroke: var(--border-2); stroke-width: 1; shape-rendering: crispEdges; }
 .dsp-plot .grid line.zero { stroke: var(--border-3); }

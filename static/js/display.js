@@ -1162,7 +1162,6 @@ function dashboard(b, e, i) {
     paintChrome();
     const notes = [];
     if (b.tronque) notes.push(`Jeu limité aux ${num.format(b.lignes.length)} premières lignes.`);
-    stage.querySelectorAll(".dsp-chart").forEach((n) => n.dispatchEvent(new Event("jarvis-drop")));
     const base = b.lignes.filter((r) => passes(r, commercial ? dateCol.id : null));
     if (commercial) paintCommercial(base, notes);
     else paintGeneric(base, notes);
@@ -1230,9 +1229,22 @@ function niceTicks(lo, hi, count = 5) {
   return out;
 }
 
+/** A chart's drawing area: it follows its width from the window it is in. In the desktop app ("Intégré au
+ * bureau") a window is a document of its own while this page stays hidden, and an observer made here would
+ * never be told: the observer comes from the element's window, made again when the element changes window. */
+class Plot extends HTMLElement {
+  connectedCallback() {
+    this.ro?.disconnect();
+    this.ro = new this.ownerDocument.defaultView.ResizeObserver(() => this.draw?.());
+    this.ro.observe(this);
+  }
+  disconnectedCallback() { this.ro?.disconnect(); this.ro = null; }
+}
+if (!customElements.get("jarvis-plot")) customElements.define("jarvis-plot", Plot);
+
 function chart(b) {
   const wrap = h("div", { class: "dsp-chart" });
-  const plot = h("div", { class: "dsp-plot" });
+  const plot = h("jarvis-plot", { class: "dsp-plot" });
   const tip = h("div", { class: "dsp-tip", role: "status" });
   const legend = b.forme === "secteurs"
     ? h("ul", { class: "dsp-legend pie" }, ...pieRows(b).map((r) => h("li", { class: `s${r.k + 1}` }, h("i"), h("span", {}, r.label), h("b", {}, fmt(r.v, b.unite)), h("small", {}, `${num.format(Math.round(r.pct * 10) / 10)} %`))))
@@ -1248,7 +1260,7 @@ function chart(b) {
   data.hidden = true;
   plot.append(tip);
   let lastW = 0;
-  const draw = () => {
+  plot.draw = () => {
     const w = Math.round(plot.clientWidth);
     if (!w || w === lastW) return;
     lastW = w;
@@ -1256,9 +1268,6 @@ function chart(b) {
     const g = b.forme === "secteurs" ? drawPie(b, w, tip) : drawXY(b, w, tip);
     plot.prepend(g);
   };
-  const ro = new ResizeObserver(draw);
-  ro.observe(plot);
-  wrap.addEventListener("jarvis-drop", () => ro.disconnect(), { once: true });
   wrap.append(h("div", { class: "dsp-ctools" }, b.unite ? h("span", { class: "muted" }, `En ${b.unite}`) : h("span"), toggle), plot, legend, data);
   return wrap;
 }
