@@ -39,14 +39,55 @@ def _version_key(p: Path) -> tuple:
 
 
 def _bundled(root: Path, name: str) -> list[Path]:
-    """CLIs shipped with the desktop apps: claude-code/<ver>/<exe> (before 2.1.286) or claude-code/<ver>/<hash>/<exe>."""
-    return [p for pat in (f"Claude*/claude-code/*/{name}", f"Claude*/claude-code/*/*/{name}")
-            for p in root.glob(pat) if p.is_file()]
+    """CLIs shipped with the desktop apps: claude-code/<ver>/<exe> (before 2.1.286), claude-code/<ver>/<hash>/<exe>,
+    or on macOS inside an app bundle (claude-code/<ver>/…/Contents/MacOS/claude)."""
+    pats = [f"Claude*/claude-code/*/{name}", f"Claude*/claude-code/*/*/{name}"]
+    if MAC:
+        pats += [f"Claude*/claude-code/*/*.app/Contents/MacOS/{name}", f"Claude*/claude-code/*/*/*.app/Contents/MacOS/{name}"]
+    return [p for pat in pats for p in root.glob(pat) if p.is_file() and os.access(p, os.X_OK)]
+
+
+_login_path: str | None = None
+
+
+def _login_shell_path() -> str:
+    """The PATH a Terminal window gets (zsh/bash profile: nvm, Homebrew, npm prefix…). Apps opened from the
+    Finder or at login only get /usr/bin:/bin:/usr/sbin:/sbin. Asked once, then cached."""
+    global _login_path
+    if _login_path is None:
+        _login_path = ""
+        shell = os.environ.get("SHELL") or ("/bin/zsh" if MAC else "/bin/bash")
+        try:
+            out = subprocess.run([shell, "-ilc", 'printf "__JARVIS_PATH__%s" "$PATH"'], capture_output=True,
+                                 text=True, timeout=10, stdin=subprocess.DEVNULL).stdout
+            if "__JARVIS_PATH__" in out:
+                _login_path = out.rsplit("__JARVIS_PATH__", 1)[1].strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return _login_path
+
+
+def _node_manager_bins() -> list[str]:
+    """bin folders of nvm, fnm and volta, newest Node first: an npm-installed claude lives there."""
+    home = Path.home()
+    found = [p for pat in (".nvm/versions/node/*/bin", ".local/share/fnm/node-versions/*/installation/bin",
+                           "Library/Application Support/fnm/node-versions/*/installation/bin")
+             for p in home.glob(pat) if p.is_dir()]
+    def node_version(p: Path) -> tuple:
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", p.as_posix())
+        return tuple(int(x) for x in m.groups()) if m else (0,)
+    found.sort(key=node_version, reverse=True)
+    return [str(p) for p in found] + [str(home / ".volta/bin")]
 
 
 def _search_path() -> str:
-    parts = os.environ.get("PATH", "").split(os.pathsep)
-    return os.pathsep.join(parts + [p for p in EXTRA_PATHS if p not in parts]) if not WIN else os.environ.get("PATH", "")
+    if WIN:
+        return os.environ.get("PATH", "")
+    parts = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    for extra in _login_shell_path().split(os.pathsep) + EXTRA_PATHS + _node_manager_bins():
+        if extra and extra not in parts:
+            parts.append(extra)
+    return os.pathsep.join(parts)
 
 
 def find_cli(configured: str = "") -> str | None:

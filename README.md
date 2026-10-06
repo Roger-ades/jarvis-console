@@ -53,7 +53,9 @@ Pour qu'il démarre tout seul : Routines → « Lancer la console à l'ouverture
 ### Sur Mac
 
 Prérequis : Python 3.10+ (python.org ou Homebrew), Claude Code (`claude` dans le terminal)
-et Chrome de préférence. Une seule fois, dans Terminal, dans le dossier du projet :
+et Chrome de préférence. La console reprend le PATH de ton shell (`~/.zshrc`, nvm, Homebrew…)
+et trouve aussi la CLI de l'app Claude Desktop (`~/Library/Application Support/Claude*/claude-code/`) ;
+sinon indique le chemin donné par `which claude` dans Configuration → Général. Une seule fois, dans Terminal, dans le dossier du projet :
 
 ```bash
 chmod +x start.command

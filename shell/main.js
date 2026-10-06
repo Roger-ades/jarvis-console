@@ -380,9 +380,10 @@ function showBarShield() {
     });
     barShield.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(
       "<!doctype html><body style='margin:0;height:100vh;background:rgba(0,0,0,.02)'></body>"));
+    // The layer always goes (left up, it would take every click on the screens); the bar only if not pinned.
     const away = () => {
-      if (barPinned || barHold) return;
       hideBarShield();
+      if (barPinned || barHold) return;
       if (bar && !bar.isDestroyed() && bar.isVisible()) bar.hide();
     };
     barShield.on("focus", () => { if (shieldArmed) away(); });
@@ -975,7 +976,7 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     }
     else if (op === "bar-hide") { hideBarShield(); bar.hide(); }
     else if (op === "bar-sent" && !barPinned) { hideBarShield(); bar.hide(); }
-    else if (op === "bar-pin") barPinned = !!data;
+    else if (op === "bar-pin") { barPinned = !!data; if (barPinned) hideBarShield(); }   // pinned: no click to catch
     else if (op === "bar-hold") { barHold = !!data; if (barHold) hideBarShield(); }
     else if (op === "bar-fit" && Number.isFinite(data?.height)) {
       if (data.place === "haut" || data.place === "bas") barPlace = data.place;
