@@ -494,7 +494,7 @@ class Engine:
             "inbox": inbox_mod.counts(self._inbox_entries(light=True)),
             "cli": {"path": cli[-1] if cli else None,
                     "version": claude_cli.cli_version(cli[0]) if cli and not self._cli_override else "test"},
-            "probes": {pid: {k: p.get(k) for k in ("ok", "logged_in", "account", "checked", "error")}
+            "probes": {pid: {k: p.get(k) for k in ("ok", "logged_in", "account", "identity", "checked", "error")}
                        for pid, p in self.probes.items()},
         }
 
@@ -2467,9 +2467,9 @@ class Engine:
         r = resp.get("response") or {}
         if resp.get("subtype") != "success" or not r:
             return
-        acc = r.get("account") or {}
-        src = acc.get("tokenSource")
-        logged = bool(src and src != "none") or bool(acc.get("email") or acc.get("emailAddress"))
+        prof = self.cfg.profile(t["profile"])
+        cd = expand_path(prof.config_dir) if prof else ""
+        acc, ident = claude_cli.describe_login(r.get("account") or {}, cd or str(Path.home() / ".claude"))
         cached = self.probes.setdefault(t["profile"], {})
         cached.update({
             "commands": [{"name": c.get("name"), "description": c.get("description", ""),
@@ -2478,8 +2478,9 @@ class Engine:
             "models": [{"value": m.get("value"), "label": m.get("displayName") or m.get("value"),
                         "resolved": m.get("resolvedModel"), "efforts": m.get("supportedEffortLevels") or []}
                        for m in r.get("models") or []],
-            "logged_in": logged,
-            "account": {k: v for k, v in acc.items() if "token" not in k.lower() or k == "tokenSource"},
+            "logged_in": ident["logged_in"],
+            "account": acc,
+            "identity": ident,
         })
         self.store.kv_set("probes", self.probes)
         self.bus.publish("probe", {"profile": t["profile"], "probe": cached})
@@ -3818,15 +3819,16 @@ class Engine:
             raise TaskError("Claude Code introuvable.", 404)
         wd = expand_path(prof.workdir)
         Path(wd).mkdir(parents=True, exist_ok=True)
+        config_dir = expand_path(prof.config_dir) or str(Path.home() / ".claude")
         mfile = mcp.write_config(prof, self.runtime, f"probe-{pid}-{secrets.token_hex(3)}")
         try:
             res = claude_cli.probe(cli, claude_cli.build_env(prof, self.cfg.general), wd,
-                                   mcp_config=mfile, strict=prof.mcp.strict)
+                                   mcp_config=mfile, strict=prof.mcp.strict, config_dir=config_dir)
         finally:
             mcp.remove_config(mfile)
         res["cli"] = {"path": cli[-1],
                       "version": "test" if self._cli_override else claude_cli.cli_version(cli[0])}
-        res["config_dir"] = expand_path(prof.config_dir) or str(Path.home() / ".claude")
+        res["config_dir"] = config_dir
         self.probes[pid] = res
         self.store.kv_set("probes", self.probes)
         self._audit("test de connexion", {"profil": prof.name, "connecté": res.get("logged_in"),

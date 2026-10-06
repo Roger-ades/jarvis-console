@@ -319,13 +319,17 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     # -------------------------------------------------------- config
     def meta() -> dict:
         cfg = cfg_store.config
+        accounts = claude_cli.profile_accounts(cfg.profiles)
         return {
             "mode_labels": MODE_LABELS, "base_models": BASE_MODELS, "data_dir": str(data_dir),
             "locked_rules": [r.model_dump() for r in LOCKED_RULES],
-            "profiles": {p.id: {"config_dir": expand_path(p.config_dir) or str(Path.home() / ".claude"),
+            "profiles": {p.id: {"config_dir": accounts[p.id]["config_dir"],
                                 "workdir": expand_path(p.workdir),
                                 "desktop_config": expand_path(p.mcp.desktop_config),
-                                "desktop_config_exists": bool(p.mcp.desktop_config) and Path(expand_path(p.mcp.desktop_config)).is_file()}
+                                "desktop_config_exists": bool(p.mcp.desktop_config) and Path(expand_path(p.mcp.desktop_config)).is_file(),
+                                "account": accounts[p.id]["account"],
+                                "shared_with": accounts[p.id]["shared_with"],
+                                "also": accounts[p.id]["also"]}
                          for p in cfg.profiles},
             "cli_detected": claude_cli.find_cli(""),
         }

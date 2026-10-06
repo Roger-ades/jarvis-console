@@ -55,7 +55,8 @@ export function openSetup(ctx) {
       const status = h("span", { class: "muted" });
       const show = (pr) => {
         const known = pr && (pr.checked || pr.logged_in !== undefined);
-        status.replaceChildren(!known ? "pas encore testé" : pr.logged_in ? h("b", { class: "ok-t" }, `connecté${pr.account?.email ? ` · ${pr.account.email}` : ""}`)
+        const who = pr?.identity?.label || pr?.account?.email || pr?.account?.emailAddress || "";
+        status.replaceChildren(!known ? "pas encore testé" : pr.logged_in ? h("b", { class: "ok-t" }, `connecté${who ? ` · ${who}` : ""}`)
           : h("b", { class: "ko-t" }, pr.error || "non connecté"));
       };
       show(ctx.probes()[p.id]);
@@ -70,7 +71,7 @@ export function openSetup(ctx) {
       } } }, "Se connecter");
       return h("div", { class: "su-acc", style: { "--pc": p.color } }, h("span", { class: "sw" }), h("b", {}, p.name), status, h("span", { class: "grow" }), login, test);
     });
-    return [para("Chaque compte a sa propre connexion Claude (par exemple Travail sur le forfait de l'entreprise, Perso sur le tien)."), ...rows,
+    return [para("Chaque compte a sa propre connexion Claude. Deux adresses : un dossier par adresse. Deux forfaits sur la même adresse (Pro et Team) : un dossier par forfait, la même adresse, l'organisation choisie à la connexion."), ...rows,
       h("p", { class: "muted" }, "« Se connecter » ouvre la connexion Claude dans une petite fenêtre ; une seule fois par compte.")];
   }
 

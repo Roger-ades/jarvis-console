@@ -212,8 +212,26 @@ def test_probe_reports_account_skills_and_mcp_without_secrets(engine):
     res = engine.probe("work")
     assert res["ok"] and res["logged_in"], res
     assert res["account"]["email"] == "test@example.com"
+    assert res["identity"]["label"] == "test@example.com"
     assert res["commands"][0]["name"] == "deep-research"
     assert res["mcp"][0]["name"] == "odoo" and res["mcp"][0]["status"] == "connected"
+    assert "SECRET" not in json.dumps(res)
+
+
+def test_probe_adds_the_plan_saved_in_the_config_folder(engine):
+    from pathlib import Path
+    cd = Path(engine.cfg.profile("work").config_dir)
+    cd.mkdir(parents=True, exist_ok=True)
+    (cd / ".claude.json").write_text(json.dumps({"oauthAccount": {
+        "emailAddress": "test@example.com", "organizationName": "Atelier",
+        "organizationType": "claude_team", "accessToken": "SECRET",
+    }}), encoding="utf-8")
+    (cd / ".credentials.json").write_text(json.dumps({
+        "claudeAiOauth": {"accessToken": "SECRET", "subscriptionType": "team"},
+    }), encoding="utf-8")
+    res = engine.probe("work")
+    assert res["identity"]["label"] == "test@example.com · forfait Team · Atelier"
+    assert res["logged_in"] is True
     assert "SECRET" not in json.dumps(res)
 
 

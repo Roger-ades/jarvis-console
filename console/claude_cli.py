@@ -116,9 +116,143 @@ def kill_tree(pid: int):
         pass
 
 
+# Fields safe to show. Anything else in the credential files (access tokens) stays on disk.
+_ACCOUNT_KEYS = ("email", "emailAddress", "organizationName", "orgName",
+                 "subscriptionType", "organizationType", "seatTier", "displayName",
+                 "tokenSource", "authMethod", "loggedIn")
+_PLANS = {"pro": "Pro", "max": "Max", "team": "Team", "enterprise": "Entreprise"}
+_ORG_TYPES = {"claude_pro": "pro", "claude_max": "max", "claude_team": "team", "claude_enterprise": "enterprise"}
+
+
+def _public_fields(acc: dict | None) -> dict:
+    """One flat account, from the CLI payload or from oauthAccount. No tokens."""
+    if not isinstance(acc, dict):
+        return {}
+    nested = acc.get("oauthAccount") if isinstance(acc.get("oauthAccount"), dict) else {}
+    out: dict = {}
+    for src in (nested, acc):
+        for k in _ACCOUNT_KEYS:
+            v = src.get(k)
+            if isinstance(v, str) and v.strip():
+                out[k] = v.strip()
+            elif isinstance(v, bool) and k == "loggedIn":
+                out[k] = v
+    return out
+
+
+def _plan_code(fields: dict) -> str:
+    sub = str(fields.get("subscriptionType") or "").lower()
+    if sub in _PLANS:
+        return sub
+    org = _ORG_TYPES.get(str(fields.get("organizationType") or "").lower(), "")
+    if org:
+        return org
+    seat = str(fields.get("seatTier") or "").lower()
+    return "team" if seat.startswith("team") else ""
+
+
+def account_identity(raw: dict | None) -> dict:
+    """Email, active plan and organization. One Claude folder keeps a single active plan."""
+    fields = _public_fields(raw)
+    email = fields.get("email") or fields.get("emailAddress") or ""
+    org = fields.get("organizationName") or fields.get("orgName") or ""
+    plan = _plan_code(fields)
+    source = fields.get("tokenSource") or ""
+    method = (fields.get("authMethod") or "").lower()
+    logged = fields.get("loggedIn")
+    if logged is False or source in ("none", "missing"):
+        logged_in = False
+    else:
+        logged_in = bool(logged is True or email or plan or org or source
+                         or method in ("claude.ai", "console"))
+    bits = []
+    if email:
+        bits.append(email)
+    if plan:
+        bits.append(f"forfait {_PLANS[plan]}")
+    if org:
+        bits.append(org)
+    return {"logged_in": logged_in, "email": email, "plan": plan,
+            "plan_label": _PLANS.get(plan, ""), "organization": org,
+            "label": " · ".join(bits)}
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _local_fields(config_dir: str) -> dict:
+    """Account saved in this Claude config folder. Credentials only contribute the plan, never the token."""
+    base = Path(expand_path(config_dir) or str(Path.home() / ".claude"))
+    fields = _public_fields(_read_json(base / ".claude.json").get("oauthAccount"))
+    cred = _read_json(base / ".credentials.json")
+    oauth = cred.get("claudeAiOauth") if isinstance(cred.get("claudeAiOauth"), dict) else {}
+    plan = oauth.get("subscriptionType")
+    if isinstance(plan, str) and plan.strip():
+        fields["subscriptionType"] = plan.strip()
+    return fields
+
+
+def read_local_account(config_dir: str) -> dict:
+    return account_identity(_local_fields(config_dir))
+
+
+def describe_login(account: dict | None, config_dir: str = "") -> tuple[dict, dict]:
+    """CLI account completed with the folder's saved plan and organization.
+
+    A second plan on the same address lives in another folder: this one only describes the plan
+    that was chosen at login. Tokens are dropped.
+    """
+    cli = _public_fields(account)
+    if cli.get("tokenSource") in ("none", "missing") or cli.get("loggedIn") is False:
+        return cli, account_identity({"loggedIn": False})
+    local = _local_fields(config_dir) if config_dir else {}
+    cli_email = (cli.get("email") or cli.get("emailAddress") or "").lower()
+    local_email = (local.get("email") or local.get("emailAddress") or "").lower()
+    # the folder still holds a previous address: don't attach its plan to the new login
+    merged = {} if cli_email and local_email and cli_email != local_email else dict(local)
+    for k, v in cli.items():
+        if v not in ("", None):
+            merged[k] = v
+    return _public_fields(merged), account_identity(merged)
+
+
+def profile_accounts(profiles) -> dict[str, dict]:
+    """Who is logged in in each profile's folder, and which profiles share a folder or an address."""
+    groups: dict[str, list] = {}
+    rows = []
+    for p in profiles:
+        folder = expand_path(getattr(p, "config_dir", "") or "") or str(Path.home() / ".claude")
+        key = os.path.normcase(os.path.normpath(folder))
+        acc = read_local_account(folder)
+        groups.setdefault(key, []).append(p)
+        rows.append((p, folder, key, acc))
+    by_email: dict[str, list] = {}
+    for p, folder, key, acc in rows:
+        email = (acc.get("email") or "").lower()
+        if email:
+            by_email.setdefault(email, []).append((p, acc))
+    out = {}
+    for p, folder, key, acc in rows:
+        email = (acc.get("email") or "").lower()
+        also = [{"id": o.id, "name": o.name, "plan": oacc.get("plan") or "",
+                 "plan_label": oacc.get("plan_label") or ""}
+                for o, oacc in by_email.get(email, []) if o.id != p.id] if email else []
+        out[p.id] = {
+            "config_dir": folder,
+            "account": acc,
+            "shared_with": [o.name for o in groups[key] if o.id != p.id],
+            "also": also,
+        }
+    return out
+
+
 def _safe_account(acc: dict) -> dict:
-    return {k: v for k, v in (acc or {}).items()
-            if "token" not in k.lower() or k == "tokenSource"}
+    return _public_fields(acc)
 
 
 def _safe_mcp(entry: dict) -> dict:
@@ -133,7 +267,7 @@ def _safe_mcp(entry: dict) -> dict:
 
 
 def probe(cli: list[str], env: dict, cwd: str, mcp_config: str | None = None, strict: bool = False,
-          timeout: float = 40, mcp_wait: float = 20) -> dict:
+          timeout: float = 40, mcp_wait: float = 20, config_dir: str = "") -> dict:
     """Connection test: initialize + mcp_status over the control protocol.
 
     No user message is sent, so no token is spent.
@@ -187,12 +321,12 @@ def probe(cli: list[str], env: dict, cwd: str, mcp_config: str | None = None, st
             result["error"] = (init or {}).get("error") or "La CLI n'a pas répondu à l'initialisation."
         else:
             r = init.get("response") or {}
-            acc = _safe_account(r.get("account") or {})
-            src = acc.get("tokenSource")
+            acc, ident = describe_login(r.get("account") or {}, config_dir)
             result.update({
                 "ok": True,
-                "logged_in": bool(src and src != "none") or bool(acc.get("email") or acc.get("emailAddress")),
+                "logged_in": ident["logged_in"],
                 "account": acc,
+                "identity": ident,
                 "models": [{"value": m.get("value"), "label": m.get("displayName") or m.get("value"),
                             "resolved": m.get("resolvedModel"), "description": m.get("description", ""),
                             "efforts": m.get("supportedEffortLevels") or []} for m in r.get("models") or []],

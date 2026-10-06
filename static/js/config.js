@@ -129,7 +129,7 @@ function probeView(pid) {
   const p = probes[pid];
   if (!p || !p.checked) return h("div", { class: "probe" }, "Pas encore testé.");
   const acc = p.account || {};
-  const who = acc.email || acc.emailAddress || acc.organization || acc.organizationName || "";
+  const who = p.identity?.label || acc.email || acc.emailAddress || acc.organizationName || acc.orgName || "";
   const box = h("div", { class: `probe ${p.ok && p.logged_in ? "ok" : "ko"}` },
     h("div", {}, h("b", {}, !p.ok ? "Échec du test" : p.logged_in ? "Connecté" : "Non connecté"),
       who ? ` · ${who}` : "", ` · testé à ${fmtDate(p.checked)}`,
@@ -226,8 +226,22 @@ function tabGeneral() {
   ];
 }
 
+function accountNote(p) {
+  const m = meta.profiles?.[p.id] || {};
+  const a = m.account || {};
+  const parts = [];
+  if (a.logged_in && a.label) parts.push(`Compte dans ce dossier : ${a.label}.`);
+  else parts.push("Aucun compte connecté dans ce dossier.");
+  if (m.shared_with?.length) parts.push(`Même dossier que ${m.shared_with.join(", ")} : un seul forfait est actif à la fois.`);
+  if (m.also?.length) {
+    const bits = m.also.map((o) => `${o.name}${o.plan_label ? ` (forfait ${o.plan_label})` : ""}`);
+    parts.push(`Même adresse aussi dans ${bits.join(", ")}.`);
+  }
+  return h("p", { class: "muted" }, parts.join(" "));
+}
+
 function tabProfiles() {
-  const out = [section("Comptes Claude", "Chaque profil a son propre dossier de configuration Claude Code : connexion, MCP, mémoire, skills et CLAUDE.md restent séparés. Les consignes additionnelles sont dans l'onglet « Modèles et consignes ».")];
+  const out = [section("Comptes Claude", "Chaque profil lit le compte du dossier indiqué : adresse, forfait actif (Pro, Max, Team, Entreprise) et organisation. Deux adresses mail : un dossier par adresse. Deux forfaits sur la même adresse : un dossier par forfait, en choisissant l'organisation à la connexion. Un dossier ne garde qu'un forfait actif.")];
   draft.profiles.forEach((p, i) => {
     const base = `profiles.${i}`;
     const probeBox = h("div", {}, probeView(p.id));
@@ -250,7 +264,7 @@ function tabProfiles() {
         check("Claude in Chrome", `${base}.chrome`, { help: "--chrome" }),
         lines("Dossiers supplémentaires autorisés", `${base}.add_dirs`, { rows: 3, help: "Passés avec --add-dir. Un par ligne." }),
         kv("Variables d'environnement", `${base}.env`),
-      ), probeBox, briefBox(p, i), accountActionsBox(p, i));
+      ), accountNote(p), probeBox, briefBox(p, i), accountActionsBox(p, i));
     out.push(card);
   });
   out.push(h("button", { type: "button", class: "btn", on: { click: addProfile } }, "Ajouter un profil"));

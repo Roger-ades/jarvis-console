@@ -251,8 +251,9 @@ function renderPills() {
     const known = pr && (pr.checked || pr.logged_in !== undefined);
     const cls = !known ? "" : pr.logged_in ? "ok" : "ko";
     const label = !known ? "connexion non testée" : pr.logged_in ? "connecté" : "non connecté";
+    const who = pr?.identity?.label || "";
     const pill = h("button", { type: "button", class: "ppill", style: { "--pc": p.color },
-      title: `${limitsTitle(p.id, p.name)} · ${label}`,
+      title: `${limitsTitle(p.id, p.name)} · ${label}${who ? ` · ${who}` : ""}`,
       on: { click: () => openLimits(pill, p, { onConfig: () => showConfig("profiles") }) } },
       h("span", { class: "sw" }), h("span", { class: "pn" }, p.name), gauges(p.id), h("span", { class: `st ${cls}` }));
     return pill;
