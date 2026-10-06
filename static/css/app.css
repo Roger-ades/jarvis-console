@@ -1518,6 +1518,55 @@ tr.regard-pick > td, tr.regard-pick > th { background: color-mix(in srgb, var(--
 .dsp-kpi strong { font: 650 22px var(--font-display); letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--text); overflow-wrap: anywhere; }
 .dsp-ke { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dsp-kpi small { font-size: 11px; color: var(--text-3); }
+
+/* dashboard: filter card, KPI row, charts and comparison tables */
+.dsp-dash { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.dsp-dash .dsp-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 12px 14px; min-width: 0; }
+.dsp-dash .dsp-card-t { margin: 0 0 10px; font-size: 12.5px; font-weight: 650; color: var(--text-2); }
+.dsp-dash .dsp-filters { display: flex; flex-direction: column; gap: 10px; }
+.dsp-dash-bar, .dsp-dash-filters, .dsp-measures, .dsp-shortcuts { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.dsp-stage, .dsp-charts, .dsp-boards { display: grid; gap: 12px; min-width: 0; }
+.dsp-charts { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.dsp-boards { grid-template-columns: 1fr; align-items: start; }
+.dsp-dash .dsp-boards th:first-child, .dsp-dash .dsp-boards td:first-child { white-space: nowrap; }
+.dsp-dash .dsp-kpis { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.dsp-dash .dsp-kpi { background: var(--surface); border-left: 3px solid var(--pc); padding: 12px 14px 10px 12px; }
+.dsp-dash .dsp-kpi.ok { border-left-color: var(--ok); }
+.dsp-dash .dsp-kpi.bad { border-left-color: var(--err); }
+.dsp-dash .dsp-kpi.warn { border-left-color: var(--warn); }
+.dsp-dash .dsp-kpi small.up { color: var(--ok); }
+.dsp-dash .dsp-kpi small.down { color: var(--err); }
+.dsp-dash td.up { color: var(--ok); }
+.dsp-dash td.down { color: var(--err); }
+.dsp-dash tr.total td { font-weight: 650; background: var(--surface-2); }
+.dsp-dash tr.dsp-pick, .dsp-dash tr.on { cursor: pointer; }
+.dsp-dash tr.dsp-pick:hover td, .dsp-dash tr.on td { background: color-mix(in srgb, var(--pc) 12%, transparent); }
+.dsp-dash .dsp-lines summary { cursor: pointer; font-size: 13px; color: var(--text-2); margin-bottom: 8px; }
+.dsp-chart-card .dsp-plot { min-height: 220px; }
+.dsp-ctl { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+.dsp-ctl select, .dsp-range input, .dsp-pop-q {
+  font: inherit; font-size: 12.5px; color: var(--text); background: var(--bg-2); border: 1px solid var(--border-2);
+  border-radius: var(--r); padding: 4px 8px; color-scheme: inherit;
+}
+.dsp-ctl select { max-width: 180px; }
+.dsp-dash .dsp-ctl select { max-width: 220px; }
+.dsp-range { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-3); }
+.dsp-range input[type="text"] { width: 72px; }
+.dsp-range input[type="date"] { width: 132px; }
+.dsp-ff { position: relative; }
+.dsp-dash .btn.on { border-color: var(--pc); background: color-mix(in srgb, var(--pc) 16%, var(--surface-2)); color: var(--text); }
+.dsp-pop { position: absolute; z-index: 8; top: calc(100% + 4px); left: 0; width: 240px; max-height: 300px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r); box-shadow: var(--shadow-pop); padding: 8px;
+  display: flex; flex-direction: column; gap: 6px; }
+.dsp-pop-act { display: flex; gap: 4px; }
+.dsp-pop-q { width: 100%; box-sizing: border-box; }
+.dsp-pop-list { display: flex; flex-direction: column; gap: 1px; }
+.dsp-pop label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 2px; cursor: pointer; }
+.dsp-pop-more { margin: 4px 0 0; font-size: 11px; }
+.dsp-dash-note { margin: 0; font-size: 12px; }
+.dsp-dash .dsp-scroll { max-height: 360px; }
+.dsp-dash .dsp-boards .dsp-scroll { max-height: none; }
+.dsp-measures .dsp-opt { font-size: 12px; }
 .dsp-progress { display: flex; flex-direction: column; gap: 6px; }
 .dsp-pbar { height: 8px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
 .dsp-pbar i { display: block; height: 100%; border-radius: 99px; background: var(--pc); transition: width .4s var(--ease); }

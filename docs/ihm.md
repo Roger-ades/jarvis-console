@@ -68,6 +68,21 @@ directement.
   séries du graphique) part avec le message, citée comme une donnée. Un affichage marque ce qui se
   désigne avec `data-pick` (la description) et `data-pick-label` ; une ligne de tableau se décrit
   seule à partir des en-têtes. Maj + clic droit garde le menu du navigateur.
+- **Tableau de bord** ([console/display.py](../console/display.py), `dashboard` dans
+  [static/js/display.js](../static/js/display.js)) : bloc `tableau_de_bord` de `presenter`
+  (alias `rapport` et `dashboard`). Claude envoie une ligne par fait et des colonnes
+  (`texte`, `nombre`, `date` ; un rôle `montant` et un rôle `marge` au plus). S'il omet `ou`,
+  l'affichage s'ouvre en fenêtre (1 180 × 880). Plafonds : 2 000 lignes, 12 colonnes, 600 Ko.
+  Avec une date et l'un de ces rôles, l'état initial prend le grain mois dès qu'il y a plusieurs
+  mois, les douze derniers mois jusqu'à la dernière date des données, et la comparaison N-1.
+  Cette comparaison garde les lignes qui passent les autres filtres, y compris celles hors de
+  la période affichée. L'écran aligne une carte de filtres (dates, raccourcis, comparaison,
+  textes, nombres, regroupement, grain, forme), quatre indicateurs (montant, taux de marge,
+  marge, rappel de la période comparée) avec l'écart en % ou en points, deux graphiques de
+  montants et la courbe du taux, le tableau de la période avec les écarts colorés et le total,
+  puis le classement de la colonne texte (douze premières lignes, un clic filtre). Le détail
+  des lignes est replié au-delà de 40. Les couleurs viennent du thème (`--pc`, `--ok`, `--err`,
+  `--warn`). Sans ces rôles, la même carte de filtres porte les totaux et un seul graphique.
 - **Widgets du bureau** ([console/widgets.py](../console/widgets.py), [static/js/widgets.js](../static/js/widgets.js)) :
   le bouton « Épingler au bureau » d'un affichage (dans la discussion ou sa fenêtre) le garde dans une
   colonne à droite du bureau, sous les fenêtres, même discussion fermée (12 au plus, `kv` « widgets »).

@@ -279,6 +279,69 @@ def test_server_lists_the_tool(engine):
     json.dumps(PRESENT_SPEC)
 
 
+def test_a_dashboard_keeps_each_fact_for_the_page_to_filter():
+    doc, problems, waiting = display.check({"titre": "CA septembre", "blocs": [{
+        "type": "tableau_de_bord",
+        "colonnes": [
+            {"id": "jour", "libelle": "Jour", "type": "date"},
+            {"libelle": "Client", "type": "texte"},
+            {"id": "ca", "libelle": "CA", "type": "nombre", "unite": "€", "role": "montant"},
+            {"id": "marge", "libelle": "Marge", "type": "nombre", "unite": "€", "agregat": "somme", "role": "marge"},
+            {"id": "autre", "libelle": "Autre marge", "type": "nombre", "role": "marge"},
+        ],
+        "lignes": [
+            {"jour": "2026-09-01", "client": "Dupont", "ca": "1 200,50", "marge": 400},
+            ["03/09/2026", "Martin", 800, 200, 10],
+            {"jour": "", "client": "", "ca": None, "marge": None},
+        ],
+        "grouper": "Client",
+        "forme": "barres",
+        "mesures": ["CA", "marge"],
+    }]}, str, [])
+    assert waiting == 0
+    assert doc["ou"] == "fenetre"  # a report opens beside the discussion when « ou » is left out
+    b = doc["blocs"][0]
+    assert b["lignes"] == [
+        ["2026-09-01", "Dupont", 1200.5, 400.0, None],
+        ["2026-09-03", "Martin", 800.0, 200.0, 10.0],
+    ]
+    assert [c["id"] for c in b["colonnes"]] == ["jour", "client", "ca", "marge", "autre"]
+    assert b["colonnes"][2]["role"] == "montant" and b["colonnes"][3]["role"] == "marge"
+    assert "role" not in b["colonnes"][4]
+    assert b["grouper"] == "client" and b["forme"] == "barres" and b["mesures"] == ["ca", "marge"]
+    assert "periode" not in b
+    assert any("rôle « marge » déjà utilisé" in p for p in problems)
+    assert display.summary(doc) == "tableau de bord (2 lignes)"
+
+
+def test_a_dashboard_infers_columns_and_a_daily_curve():
+    doc, problems, _ = display.check({"titre": "Septembre", "blocs": [{
+        "type": "rapport",
+        "lignes": [
+            {"jour": "2026-09-01", "client": "Dupont", "ca": 10},
+            {"jour": "2026-09-02", "client": "Martin", "ca": 12},
+        ],
+        "periode": "mois",
+    }]}, str, [])
+    assert not problems
+    b = doc["blocs"][0]
+    assert b["type"] == "tableau_de_bord"
+    assert [(c["id"], c["type"]) for c in b["colonnes"]] == [("jour", "date"), ("client", "texte"), ("ca", "nombre")]
+    assert b["grouper"] == "jour" and b["forme"] == "courbe" and b["periode"] == "mois" and b["mesures"] == ["ca"]
+    assert b["colonnes"][2]["agregat"] == "somme"
+
+
+def test_a_dashboard_without_rows_is_refused_and_a_long_one_is_cut():
+    doc, problems, _ = display.check({"titre": "Vide", "blocs": [{"type": "tableau_de_bord", "lignes": []}]}, str, [])
+    assert doc is None and "aucune ligne" in problems[0]
+    rows = [{"client": "A", "ca": i} for i in range(2001)]
+    doc, problems, _ = display.check({"titre": "Gros", "ou": "conversation", "blocs": [
+        {"type": "tableau_de_bord", "lignes": rows}]}, str, [])
+    b = doc["blocs"][0]
+    assert doc["ou"] == "conversation" and len(b["lignes"]) == 2000 and b["tronque"] is True
+    assert any("2 000" in p or "2000" in p for p in problems)
+
+
 def test_a_call_without_blocks_says_how_to_write_them():
     doc, problems, _ = display.check({"titre": "Devis", "kind": "fiche", "donnees": "[]"}, str, [])
     assert doc is None and "passe « blocs »" in problems[0] and "fiche" in problems[0]

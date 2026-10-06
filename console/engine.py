@@ -3150,6 +3150,9 @@ class Engine:
         if "formulaire" in kinds:
             lines.append("Un formulaire renvoie les champs corrigés. Envoyer, créer ou modifier à partir de "
                          "ces champs reste soumis à la validation habituelle.")
+        if "tableau_de_bord" in kinds:
+            lines.append("Tableau de bord interactif : l'utilisateur filtre, change le regroupement, la période et la "
+                         "forme du graphique lui-même. Ne recopie pas les chiffres dans ta réponse.")
         if "cartes" in kinds:
             lines.append("Les boutons des cartes (ouvrir, retenir, tâche terminée, routine, consigne) sont exécutés "
                          "par la console. Seul un bouton « message » te revient comme un nouveau message : termine "

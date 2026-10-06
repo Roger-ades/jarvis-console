@@ -351,14 +351,26 @@ console toujours autorisés (ils ne font que montrer) :
 - `presenter` : un affichage composé de blocs typés, que la console vérifie puis dessine
   elle-même (Claude n'envoie ni HTML ni script) : texte, images (fichiers du projet ou du
   web), résultats de recherche, tableau triable, graphique (barres, courbe, secteurs, avec
-  infobulles et vue tableau), fiche, chronologie, chiffres clés, progression, schéma SVG
-  (affiché comme une image), fichiers, choix et boutons. Il s'affiche **dans la
+  infobulles et vue tableau), tableau de bord, fiche, chronologie, chiffres clés, progression,
+  schéma SVG (affiché comme une image), fichiers, choix et boutons. Il s'affiche **dans la
   conversation**, **dans une fenêtre** ou **au premier plan** (une modale, seulement si tu
   regardes cette tâche ; sinon une fenêtre). Avec un `id`, Claude met à jour le même
   affichage (une progression, un tableau qui se remplit). Un choix ou un bouton cliqué
   revient à la session comme un nouveau message (« [Affichage « titre »] question →
   réponse »), une seule fois par bloc. Les images du web hors des domaines approuvés restent
   à charger d'un clic.
+
+Un rapport, un chiffre d'affaires ou une marge passe par le bloc **tableau de bord**.
+Claude envoie le détail, une ligne par fait (un jour, une facture, un client, un produit)
+et des colonnes typées ; la console filtre, regroupe, calcule et trace (2 000 lignes et
+12 colonnes au plus). Le bloc s'ouvre dans une fenêtre. Avec une date et une colonne de
+montant ou de marge, il s'ouvre sur les douze derniers mois des données, comparés à la
+même période un an plus tôt : quatre indicateurs avec leur écart, le montant et la marge
+côte à côte, la courbe du taux de marge, le mois par mois avec les écarts et le total,
+puis le classement (un clic sur une ligne filtre l'ensemble). Les raccourcis couvrent le
+dernier mois, 6 mois, 12 mois, l'année ou tout l'historique. La comparaison peut être
+l'année précédente ou la période juste avant. Le détail des lignes se déplie. Sans colonne
+de montant ni de marge, le même bloc reste une carte de filtres, des totaux et un graphique.
 
 Les aperçus et les affichages s'ouvrent dans des fenêtres que l'on peut **épingler au
 premier plan** (icône punaise ; un second clic les libère) ; la punaise d'une modale la

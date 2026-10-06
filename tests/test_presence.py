@@ -24,6 +24,7 @@ def test_the_console_and_the_discussion_come_before_the_editable_instructions(en
     t = engine.tasks[tid]
     assert text.startswith("# Environnement : console JARVIS")
     assert "Il n'y a pas de terminal" in text and "afficher_resultat" in text and "presenter" in text
+    assert "tableau_de_bord" in text and "ou = fenetre" in text
     assert "AskUserQuestion" in text
     assert f"- Projet « Chantier Dupont », dossier de travail : {t['workdir']}" in text
     assert f"copiés dans : {t['attachments_dir']}" in text

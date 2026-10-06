@@ -170,6 +170,8 @@ const BLOCKS = {
 
   graphique: (b) => chart(b),
 
+  tableau_de_bord: (b, e, m, i) => dashboard(b, e, i),
+
   fiche: (b, e, m) => h("div", { class: "dsp-card" },
     b.image ? picture(e, m, b.image, "dsp-cimg") : null,
     h("dl", {}, ...b.champs.flatMap((f) => {
@@ -424,6 +426,759 @@ async function onAppMessage(ev) {
   }
 }
 
+// ---------------------------------------------------------------- dashboard (facts in, filters and chart here)
+const MONTHS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+const DASH_TOP = 24;
+
+function dashState(e, i, b) {
+  if (!e.dash) e.dash = new Map();
+  const sig = b.colonnes.map((c) => `${c.id}:${c.type}:${c.role || ""}`).join("|");
+  let s = e.dash.get(i);
+  if (!s || s.sig !== sig) {
+    const date = b.colonnes.find((c) => c.type === "date");
+    const commercial = !!(date && b.colonnes.some((c) => c.role === "montant" || c.role === "marge"));
+    let periode = b.periode || "jour";
+    const months = new Set();
+    if (commercial && date) {
+      const j = b.colonnes.indexOf(date);
+      for (const r of b.lignes) {
+        const v = String(r[j] || "");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(v)) months.add(v.slice(0, 7));
+      }
+      if (months.size > 1) periode = "mois";
+    }
+    s = {
+      sig, grouper: b.grouper || "", periode, forme: b.forme || "barres",
+      compare: commercial ? "n1" : "", preset: "", linesOpen: b.lignes.length <= 40,
+      mesures: new Set((b.mesures || []).slice(0, 8)),
+      text: new Map(), date: new Map(), num: new Map(),
+    };
+    if (!s.mesures.size) b.colonnes.filter((c) => c.type === "nombre").slice(0, 4).forEach((c) => s.mesures.add(c.id));
+    if (!s.mesures.size) s.mesures.add("_n");
+    let dateFrom = "", dateTo = "";
+    if (commercial && date && months.size) {
+      const list = [...months].sort();
+      const ym = list.at(-1);
+      const [y, m] = ym.split("-").map(Number);
+      dateTo = isoOf(new Date(y, m, 0));
+      dateFrom = months.size > 1 ? `${addMonths(ym, -11)}-01` : `${ym}-01`;
+      s.preset = months.size > 1 ? "12" : "mois";
+      s.date.set(date.id, { from: dateFrom, to: dateTo });
+    }
+    s.defaults = {
+      grouper: s.grouper, periode: s.periode, forme: s.forme, compare: s.compare, mesures: [...s.mesures],
+      preset: s.preset, dateId: date?.id || "", dateFrom, dateTo,
+    };
+    e.dash.set(i, s);
+  }
+  return s;
+}
+
+function addMonths(ym, n) {
+  const [y, m] = ym.split("-").map(Number);
+  const total = y * 12 + (m - 1) + n;
+  const ny = Math.floor(total / 12);
+  const nm = total - ny * 12;
+  return `${ny}-${String(nm + 1).padStart(2, "0")}`;
+}
+
+function shiftYear(key, delta) {
+  const [y, ...rest] = String(key).split("-");
+  if (!/^\d{4}$/.test(y)) return "";
+  return [String(Number(y) + delta), ...rest].join("-");
+}
+
+function addDays(iso, n) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return isoOf(dt);
+}
+
+function daySpan(a, b) {
+  const [y1, m1, d1] = a.split("-").map(Number);
+  const [y2, m2, d2] = b.split("-").map(Number);
+  return Math.round((new Date(y2, m2 - 1, d2) - new Date(y1, m1 - 1, d1)) / 86400000);
+}
+
+function isoOf(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function bucketDate(iso, grain) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return "";
+  if (grain === "mois") return iso.slice(0, 7);
+  if (grain !== "semaine") return iso;
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return isoOf(new Date(y, m - 1, d - ((dt.getDay() + 6) % 7)));
+}
+
+function dateLabel(key, grain) {
+  if (grain === "mois" && /^\d{4}-\d{2}$/.test(key)) {
+    const [y, m] = key.split("-").map(Number);
+    return `${MONTHS[m - 1]} ${y}`;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return key;
+  const [, m, d] = key.split("-").map(Number);
+  const day = `${d} ${MONTHS[m - 1]}`;
+  return grain === "semaine" ? `sem. ${day}` : day;
+}
+
+function boundOf(s) {
+  const t = String(s || "").trim().replace(/[\s\u202f\u00a0]/g, "").replace(",", ".");
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+function aggregate(values, how) {
+  const xs = values.filter((v) => typeof v === "number");
+  if (!xs.length) return how === "somme" ? 0 : null;
+  if (how === "somme") return xs.reduce((a, v) => a + v, 0);
+  if (how === "min") return Math.min(...xs);
+  if (how === "max") return Math.max(...xs);
+  return xs.reduce((a, v) => a + v, 0) / xs.length;
+}
+
+function dashboard(b, e, i) {
+  const s = dashState(e, i, b);
+  const cols = b.colonnes;
+  const numbers = cols.filter((c) => c.type === "nombre");
+  const groupable = cols.filter((c) => c.type === "texte" || c.type === "date");
+  const dateCol = cols.find((c) => c.type === "date");
+  const montant = cols.find((c) => c.role === "montant");
+  const marge = cols.find((c) => c.role === "marge");
+  const commercial = !!(dateCol && (montant || marge));
+  const dateInputs = new Map();
+  const wrap = h("div", { class: "dsp-dash" });
+  let pop = null;
+  const shut = () => { pop?._off?.(); pop?.remove(); pop = null; };
+
+  const sel = (label, value, options, onChange) => {
+    const node = h("label", { class: "dsp-ctl" }, h("span", {}, label),
+      h("select", { on: { change: () => onChange(node.querySelector("select").value) } },
+        ...options.map((o) => h("option", { value: o.value, selected: o.value === value ? true : null }, o.label))));
+    return node;
+  };
+
+  const groupSel = sel("Regrouper", s.grouper, [
+    ...groupable.map((c) => ({ value: c.id, label: c.libelle })),
+    ...(!groupable.length ? [{ value: "", label: "Tout" }] : []),
+  ], (v) => { s.grouper = v; paint(); });
+  const periodSel = sel("Période", s.periode, [
+    { value: "jour", label: "Jour" }, { value: "semaine", label: "Semaine" }, { value: "mois", label: "Mois" },
+  ], (v) => { s.periode = v; paint(); });
+  const formSel = sel("Graphique", s.forme, [
+    { value: "barres", label: "Barres" }, { value: "courbe", label: "Courbe" }, { value: "secteurs", label: "Secteurs" },
+  ], (v) => { s.forme = v; paint(); });
+  const compareSel = sel("Comparer", s.compare, [
+    { value: "", label: "Aucune" },
+    { value: "n1", label: "Même période N-1" },
+    { value: "prec", label: "Période précédente" },
+  ], (v) => { s.compare = v; paint(); });
+  compareSel.hidden = !commercial;
+
+  const PRESETS = [["mois", "Dernier mois"], ["6", "6 mois"], ["12", "12 mois"], ["annee", "Année"], ["tout", "Tout"]];
+  const presetBtns = new Map();
+  const presetBar = h("span", { class: "dsp-shortcuts" }, ...PRESETS.map(([id, label]) => {
+    const btn = h("button", { type: "button", class: "btn small ghost", on: { click: () => applyPreset(id) } }, label);
+    presetBtns.set(id, btn);
+    return btn;
+  }));
+  presetBar.hidden = !dateCol;
+
+  const reset = h("button", { type: "button", class: "btn small ghost", on: { click: () => {
+    const d = s.defaults;
+    s.grouper = d.grouper; s.periode = d.periode; s.forme = d.forme; s.compare = d.compare; s.preset = d.preset || "";
+    s.mesures = new Set(d.mesures);
+    s.text.clear(); s.date.clear(); s.num.clear();
+    if (d.dateId && (d.dateFrom || d.dateTo)) s.date.set(d.dateId, { from: d.dateFrom, to: d.dateTo });
+    wrap.querySelectorAll(".dsp-range input").forEach((n) => { n.value = ""; });
+    const box = dateInputs.get(d.dateId);
+    if (box) { box.from.value = d.dateFrom || ""; box.to.value = d.dateTo || ""; }
+    shut();
+    syncSelects();
+    paint();
+  } } }, "Réinitialiser");
+
+  const filters = h("div", { class: "dsp-dash-filters" });
+  const measures = h("div", { class: "dsp-measures" });
+  const kpis = h("div", { class: "dsp-kpis" });
+  const note = h("p", { class: "dsp-dash-note muted" });
+  const stage = h("div", { class: "dsp-stage" });
+  const topBar = h("div", { class: "dsp-dash-bar" });
+  let primaryRange = null;
+
+  const syncSelects = () => {
+    groupSel.querySelector("select").value = s.grouper;
+    periodSel.querySelector("select").value = s.periode;
+    formSel.querySelector("select").value = s.forme;
+    compareSel.querySelector("select").value = s.compare;
+  };
+
+  const passes = (row, skipId) => {
+    for (const [j, c] of cols.entries()) {
+      if (c.id === skipId) continue;
+      const v = row[j];
+      if (c.type === "texte") {
+        const keep = s.text.get(c.id);
+        if (keep && !keep.has(String(v || ""))) return false;
+      } else if (c.type === "date") {
+        const f = s.date.get(c.id);
+        if (!f || (!f.from && !f.to)) continue;
+        if (!v || (f.from && v < f.from) || (f.to && v > f.to)) return false;
+      } else {
+        const f = s.num.get(c.id);
+        if (!f) continue;
+        const lo = boundOf(f.min), hi = boundOf(f.max);
+        if (lo == null && hi == null) continue;
+        if (typeof v !== "number" || (lo != null && v < lo) || (hi != null && v > hi)) return false;
+      }
+    }
+    return true;
+  };
+
+  const uniques = (j) => {
+    const set = new Set();
+    for (const r of b.lignes) set.add(String(r[j] || ""));
+    return [...set].sort((a, x) => a.localeCompare(x, "fr", { sensitivity: "base" }));
+  };
+
+  function openValues(btn, c, j) {
+    shut();
+    const all = uniques(j);
+    const panel = h("div", { class: "dsp-pop" });
+    const q = h("input", { type: "search", placeholder: "Filtrer la liste", class: "dsp-pop-q" });
+    const list = h("div", { class: "dsp-pop-list" });
+    const kept = () => s.text.get(c.id);
+    const checked = (v) => { const k = kept(); return !k || k.has(v); };
+    const toggle = (v, on) => {
+      let k = kept();
+      if (!k) k = new Set(all);
+      if (on) k.add(v); else k.delete(v);
+      if (k.size === all.length) s.text.delete(c.id);
+      else s.text.set(c.id, k);
+      fill();
+      paint();
+    };
+    const fill = () => {
+      const needle = q.value.trim().toLocaleLowerCase("fr");
+      const shown = all.filter((v) => !needle || (v || "(vide)").toLocaleLowerCase("fr").includes(needle)).slice(0, 120);
+      list.replaceChildren(...shown.map((v) => h("label", {},
+        h("input", { type: "checkbox", checked: checked(v) ? true : null, on: { change: (ev) => toggle(v, ev.target.checked) } }),
+        v || "(vide)")));
+      if (all.length > shown.length) list.append(h("p", { class: "muted dsp-pop-more" }, `${shown.length} affichés sur ${all.length}`));
+    };
+    q.addEventListener("input", fill);
+    panel.append(
+      h("div", { class: "dsp-pop-act" },
+        h("button", { type: "button", class: "btn small ghost", on: { click: () => { s.text.delete(c.id); fill(); paint(); } } }, "Tout"),
+        h("button", { type: "button", class: "btn small ghost", on: { click: () => { s.text.set(c.id, new Set()); fill(); paint(); } } }, "Aucun")),
+      q, list);
+    fill();
+    btn.parentElement.append(panel);
+    const doc = wrap.ownerDocument;
+    const onDoc = (ev) => { if (!panel.contains(ev.target) && ev.target !== btn) shut(); };
+    setTimeout(() => doc.addEventListener("pointerdown", onDoc, true), 0);
+    panel._off = () => doc.removeEventListener("pointerdown", onDoc, true);
+    pop = panel;
+    q.focus();
+  }
+
+  cols.forEach((c, j) => {
+    if (c.type === "texte") {
+      const btn = h("button", { type: "button", class: "btn small dsp-ff", on: { click: (ev) => { ev.stopPropagation(); openValues(btn, c, j); } } }, c.libelle);
+      btn.dataset.col = c.id;
+      filters.append(h("span", { class: "dsp-ff" }, btn));
+    } else if (c.type === "date") {
+      const from = h("input", { type: "date", "aria-label": `${c.libelle}, du`, on: { change: () => { remember(); paint(); } } });
+      const to = h("input", { type: "date", "aria-label": `${c.libelle}, au`, on: { change: () => { remember(); paint(); } } });
+      const remember = () => {
+        s.preset = "";
+        if (!from.value && !to.value) s.date.delete(c.id);
+        else s.date.set(c.id, { from: from.value, to: to.value });
+      };
+      const saved = s.date.get(c.id);
+      if (saved) { from.value = saved.from || ""; to.value = saved.to || ""; }
+      const node = h("span", { class: "dsp-range" }, c.libelle, from, "→", to);
+      dateInputs.set(c.id, { from, to });
+      if (c === dateCol) primaryRange = node;
+      else filters.append(node);
+    } else {
+      const min = h("input", { type: "text", inputmode: "decimal", placeholder: "min", "aria-label": `${c.libelle}, minimum`, on: { change: () => { remember(); paint(); } } });
+      const max = h("input", { type: "text", inputmode: "decimal", placeholder: "max", "aria-label": `${c.libelle}, maximum`, on: { change: () => { remember(); paint(); } } });
+      const remember = () => {
+        if (!min.value.trim() && !max.value.trim()) s.num.delete(c.id);
+        else s.num.set(c.id, { min: min.value, max: max.value });
+      };
+      filters.append(h("span", { class: "dsp-range" }, c.libelle, min, "–", max));
+    }
+  });
+
+  function monthEnd(ym) {
+    const [y, m] = ym.split("-").map(Number);
+    return isoOf(new Date(y, m, 0));
+  }
+
+  function applyPreset(which) {
+    if (!dateCol) return;
+    s.preset = which;
+    const box = dateInputs.get(dateCol.id);
+    const write = (from, to) => {
+      if (!from && !to) s.date.delete(dateCol.id);
+      else s.date.set(dateCol.id, { from, to });
+      if (box) { box.from.value = from; box.to.value = to; }
+    };
+    if (which === "tout") { write("", ""); paint(); return; }
+    const j = cols.indexOf(dateCol);
+    const anchor = b.lignes.map((r) => r[j]).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "")).sort().at(-1);
+    if (!anchor) return;
+    const ym = anchor.slice(0, 7);
+    const year = anchor.slice(0, 4);
+    if (which === "mois") write(`${ym}-01`, monthEnd(ym));
+    else if (which === "6") write(`${addMonths(ym, -5)}-01`, monthEnd(ym));
+    else if (which === "12") write(`${addMonths(ym, -11)}-01`, monthEnd(ym));
+    else if (which === "annee") write(`${year}-01-01`, `${year}-12-31`);
+    paint();
+  }
+
+  function sumOf(rows, col) {
+    if (!col) return null;
+    return aggregate(rows.map((r) => r[cols.indexOf(col)]), "somme") || 0;
+  }
+
+  function rateOf(ca, mg) {
+    if (ca == null || mg == null || !ca) return null;
+    return mg / ca * 100;
+  }
+
+  function pctDelta(now, prev) {
+    if (now == null || prev == null || !prev) return null;
+    return (now - prev) / Math.abs(prev) * 100;
+  }
+
+  function shortDate(iso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return "";
+    const [y, m, d] = iso.split("-").map(Number);
+    return `${d} ${MONTHS[m - 1]} ${y}`;
+  }
+
+  function spanLabel(from, to) {
+    if (!from || !to || from < "1000" || to > "9000") return "";
+    return `${shortDate(from)} → ${shortDate(to)}`;
+  }
+
+  function boundsOf(rows) {
+    const f = dateCol && s.date.get(dateCol.id);
+    if (f && (f.from || f.to)) return [f.from || "0000-01-01", f.to || "9999-12-31"];
+    const j = dateCol ? cols.indexOf(dateCol) : -1;
+    const dates = j < 0 ? [] : rows.map((r) => r[j]).filter((v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "")).sort();
+    if (!dates.length) return ["", ""];
+    return [dates[0], dates[dates.length - 1]];
+  }
+
+  function inSpan(rows, from, to) {
+    if (!dateCol || !from || !to) return rows;
+    const j = cols.indexOf(dateCol);
+    return rows.filter((r) => r[j] && r[j] >= from && r[j] <= to);
+  }
+
+  function compareWindow(from, to, mode) {
+    if (!mode || !from || !to || from < "1000" || to > "9000" || from > to) return null;
+    if (mode === "n1") return { from: shiftYear(from, -1), to: shiftYear(to, -1), label: "N-1" };
+    const span = daySpan(from, to);
+    const end = addDays(from, -1);
+    return { from: addDays(end, -span), to: end, label: "Précédente" };
+  }
+
+  function keysBetween(from, to, grain) {
+    if (!from || !to || from < "1000" || to > "9000" || from > to) return [];
+    if (grain === "mois") {
+      const out = [];
+      let k = from.slice(0, 7);
+      const end = to.slice(0, 7);
+      while (k <= end && out.length < 60) { out.push(k); k = addMonths(k, 1); }
+      return out;
+    }
+    if (grain === "jour") {
+      const span = daySpan(from, to);
+      if (span > 400) return [];
+      const out = [];
+      for (let n = 0; n <= span; n++) out.push(addDays(from, n));
+      return out;
+    }
+    const out = [];
+    let k = bucketDate(from, "semaine");
+    const end = bucketDate(to, "semaine");
+    if (!k || !end) return [];
+    while (k <= end && out.length < 80) { out.push(k); k = addDays(k, 7); }
+    return out;
+  }
+
+  function buckets(rows, grain) {
+    const j = cols.indexOf(dateCol);
+    const map = new Map();
+    for (const r of rows) {
+      const key = bucketDate(r[j], grain);
+      if (!key) continue;
+      let g = map.get(key);
+      if (!g) { g = { key, rows: [] }; map.set(key, g); }
+      g.rows.push(r);
+    }
+    return map;
+  }
+
+  function aligned(pFrom, pTo, cmp, pMap, cMap, grain) {
+    const keys = keysBetween(pFrom, pTo, grain);
+    const use = keys.length ? keys : [...pMap.keys()].sort();
+    if (!cmp) return use.map((k) => ({ key: k, cur: pMap.get(k), prev: null }));
+    if (s.compare === "n1") return use.map((k) => ({ key: k, cur: pMap.get(k), prev: cMap.get(shiftYear(k, -1)) }));
+    const cKeys = keysBetween(cmp.from, cmp.to, grain);
+    return use.map((k, i) => ({ key: k, cur: pMap.get(k), prev: cMap.get(cKeys[i]) }));
+  }
+
+  function bucketSum(g, col) {
+    if (!col) return null;
+    if (!g) return 0;
+    return aggregate(g.rows.map((r) => r[cols.indexOf(col)]), "somme") || 0;
+  }
+
+  const measureOf = (id) => (id === "_n" ? { id: "_n", libelle: "Lignes", agregat: "compte" } : numbers.find((c) => c.id === id));
+  const activeMeasures = () => [...s.mesures].map(measureOf).filter(Boolean).slice(0, 8);
+
+  function groupsOf(rows) {
+    const col = cols.find((c) => c.id === s.grouper);
+    const j = col ? cols.indexOf(col) : -1;
+    const isDate = col?.type === "date";
+    const map = new Map();
+    for (const r of rows) {
+      const raw = j < 0 ? "" : (r[j] || "");
+      const key = isDate ? (bucketDate(raw, s.periode) || "") : String(raw);
+      let g = map.get(key);
+      if (!g) { g = { key, rows: [] }; map.set(key, g); }
+      g.rows.push(r);
+    }
+    return { col, isDate, list: [...map.values()] };
+  }
+
+  function seriesOf(list) {
+    return activeMeasures().map((c) => {
+      if (c.id === "_n") return { nom: "Lignes", unite: "", agregat: "compte", valeurs: list.map((g) => g.rows.length) };
+      const j = cols.indexOf(c);
+      return {
+        nom: c.libelle, unite: c.unite || "", agregat: c.agregat || "somme",
+        valeurs: list.map((g) => aggregate(g.rows.map((r) => r[j]), c.agregat || "somme")),
+      };
+    });
+  }
+
+  function deltaNode(pct, unit, versus) {
+    if (pct == null || !Number.isFinite(pct)) return h("small", {}, "\u00a0");
+    const rounded = Math.round(pct * 10) / 10;
+    const cls = rounded > 0 ? "up" : rounded < 0 ? "down" : "";
+    const sign = rounded > 0 ? "+" : "";
+    return h("small", { class: cls || null }, `${sign}${num.format(rounded)} ${unit}${versus ? ` vs ${versus}` : ""}`);
+  }
+
+  function kpiCard(label, value, foot, tone) {
+    return h("div", { class: tone ? `dsp-kpi ${tone}` : "dsp-kpi" },
+      h("span", { class: "dsp-kl" }, label), h("strong", {}, value), foot || h("small", {}, "\u00a0"));
+  }
+
+  function cell(v, cls) { return cls ? { v, cls } : v; }
+
+  function varCell(now, prev) {
+    if (now == null || prev == null) return "—";
+    const d = now - prev;
+    if (!d) return 0;
+    return cell(d, d > 0 ? "up" : "down");
+  }
+
+  function boardTable(headers, rows, opts = {}) {
+    const val = (c) => (c && typeof c === "object" && "v" in c ? c.v : c);
+    const data = opts.pinLast && rows.length > 1 ? rows.slice(0, -1) : rows.slice();
+    const pinned = opts.pinLast && rows.length > 1 ? rows[rows.length - 1] : null;
+    let sort = { col: -1, dir: 1 };
+    const tbody = h("tbody");
+    const heads = headers.map((c, j) => h("th", { scope: "col", on: { click: () => {
+      sort = { col: j, dir: sort.col === j ? -sort.dir : -1 }; fill();
+    } } }, c || " ", h("span", { class: "dsp-sort" })));
+    const cellNode = (c) => {
+      const v = val(c);
+      const cls = [isNum(v) ? "num" : "", c && typeof c === "object" ? c.cls : ""].filter(Boolean).join(" ");
+      return h("td", { class: cls || null }, isNum(v) ? num.format(v) : (v ?? ""));
+    };
+    const fill = () => {
+      const list = [...data];
+      if (sort.col >= 0) {
+        const j = sort.col;
+        list.sort((a, x) => {
+          const p = val(a.cells[j]), q = val(x.cells[j]);
+          if (isNum(p) && isNum(q)) return (p - q) * sort.dir;
+          return String(p ?? "").localeCompare(String(q ?? ""), "fr", { numeric: true, sensitivity: "base" }) * sort.dir;
+        });
+      }
+      heads.forEach((th, j) => { th.dataset.sort = sort.col === j ? (sort.dir > 0 ? "asc" : "desc") : ""; });
+      const trOf = (row, extra) => {
+        const attrs = { class: [extra, row.cls].filter(Boolean).join(" ") || null };
+        if (row.on) attrs.on = { click: row.on };
+        return h("tr", attrs, ...row.cells.map(cellNode));
+      };
+      tbody.replaceChildren(...list.map((row) => trOf(row)), ...(pinned ? [trOf(pinned, "total")] : []));
+    };
+    fill();
+    const csv = () => [headers, ...rows.map((r) => r.cells.map((c) => val(c)))].map((r) => r.map((c) => {
+      const t = isNum(c) ? String(c).replace(".", ",") : String(c ?? "");
+      return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    }).join(";")).join("\n");
+    return h("div", { class: "dsp-table" },
+      h("div", { class: "dsp-tools" }, h("span", { class: "muted" }, opts.caption || ""),
+        h("button", { type: "button", class: "btn small ghost", on: { click: () => copyText(csv()) } }, icon("copy"), "Copier (CSV)")),
+      h("div", { class: "dsp-scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ...heads)), tbody)));
+  }
+
+  function chartCard(title, spec) {
+    const box = h("section", { class: "dsp-panel dsp-chart-card" }, h("h3", { class: "dsp-card-t" }, title));
+    box.append(spec ? chart(spec) : h("div", { class: "empty-row" }, "Rien à tracer."));
+    return box;
+  }
+
+  function lineDetail(rows) {
+    const head = cols.map((c) => c.libelle);
+    const body = rows.map((r) => cols.map((c, j) => (c.type === "nombre" ? (typeof r[j] === "number" ? r[j] : "") : (r[j] || ""))));
+    const node = h("details", {
+      class: "dsp-panel dsp-lines", open: s.linesOpen ? true : null,
+      on: { toggle: (ev) => { s.linesOpen = ev.currentTarget.open; } },
+    }, h("summary", {}, `Détail des lignes · ${num.format(rows.length)}`));
+    node.append(table(head, body, false));
+    return node;
+  }
+
+  function ranking(rows) {
+    const textCol = cols.find((c) => c.id === s.grouper && c.type === "texte") || cols.find((c) => c.type === "texte");
+    if (!textCol) return null;
+    const j = cols.indexOf(textCol);
+    const map = new Map();
+    for (const r of rows) {
+      const key = String(r[j] || "") || "Non renseigné";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(r);
+    }
+    const scoreCol = montant || numbers[0];
+    const total = scoreCol ? (sumOf(rows, scoreCol) || 0) : rows.length;
+    const ranked = [...map.entries()].map(([key, list]) => ({
+      key, list,
+      ca: montant ? sumOf(list, montant) : null,
+      mg: marge ? sumOf(list, marge) : null,
+      score: scoreCol ? sumOf(list, scoreCol) : list.length,
+    })).sort((a, x) => (x.score || 0) - (a.score || 0) || a.key.localeCompare(x.key, "fr"));
+    const top = ranked.slice(0, 12);
+    const active = s.text.get(textCol.id);
+    const pick = (key) => {
+      const value = key === "Non renseigné" ? "" : key;
+      const cur = s.text.get(textCol.id);
+      if (cur && cur.size === 1 && cur.has(value)) s.text.delete(textCol.id);
+      else s.text.set(textCol.id, new Set([value]));
+      paint();
+    };
+    const headers = [textCol.libelle];
+    if (montant) headers.push(montant.libelle);
+    if (marge) headers.push(marge.libelle);
+    if (montant && marge) headers.push("Taux %");
+    headers.push("Part %");
+    const body = top.map((row) => {
+      const value = row.key === "Non renseigné" ? "" : row.key;
+      const on = active && active.size === 1 && active.has(value);
+      const cells = [row.key];
+      if (montant) cells.push(row.ca);
+      if (marge) cells.push(row.mg);
+      if (montant && marge) {
+        const rate = rateOf(row.ca, row.mg);
+        cells.push(rate == null ? "—" : rate);
+      }
+      cells.push(total ? (row.score || 0) / total * 100 : null);
+      return { cells, cls: on ? "on" : "dsp-pick", on: () => pick(row.key) };
+    });
+    return h("section", { class: "dsp-panel" }, h("h3", { class: "dsp-card-t" }, textCol.libelle),
+      body.length ? boardTable(headers, body, { caption: "Cliquer une ligne pour filtrer." }) : h("div", { class: "empty-row" }, "Rien à classer."));
+  }
+
+  function paintChrome() {
+    for (const [id, btn] of presetBtns) btn.classList.toggle("on", s.preset === id);
+    const gcol = cols.find((c) => c.id === s.grouper);
+    periodSel.hidden = !(commercial || gcol?.type === "date");
+    measures.hidden = commercial;
+    filters.querySelectorAll(".dsp-ff > .btn").forEach((btn) => {
+      const c = cols.find((x) => x.id === btn.dataset.col);
+      const keep = c && s.text.get(c.id);
+      btn.textContent = !keep ? c.libelle : keep.size ? `${c.libelle} · ${keep.size}` : `${c.libelle} · aucun`;
+      btn.classList.toggle("on", !!keep);
+    });
+    if (!commercial) {
+      measures.replaceChildren(...[...numbers, { id: "_n", libelle: "Lignes" }].map((c) => h("button", {
+        type: "button", class: `dsp-opt${s.mesures.has(c.id) ? " on" : ""}`,
+        on: { click: () => {
+          if (s.mesures.has(c.id)) s.mesures.delete(c.id); else if (s.mesures.size < 8) s.mesures.add(c.id);
+          paint();
+        } },
+      }, c.libelle)));
+    }
+  }
+
+  function paintGeneric(rows, notes) {
+    const cards = [kpiCard("Lignes", num.format(rows.length))];
+    for (const c of numbers) cards.push(kpiCard(c.libelle, fmt(sumOf(rows, c), c.unite)));
+    if (montant && marge) {
+      const rate = rateOf(sumOf(rows, montant), sumOf(rows, marge));
+      cards.push(kpiCard("Taux de marge", rate == null ? "—" : fmt(rate, "%"), null, rate != null && rate < 0 ? "bad" : "ok"));
+    }
+    kpis.replaceChildren(...cards);
+
+    let { isDate, list } = groupsOf(rows);
+    const scoreOf = (g) => {
+      const v = seriesOf([g])[0]?.valeurs[0];
+      return typeof v === "number" ? v : 0;
+    };
+    if (isDate) list.sort((a, x) => a.key.localeCompare(x.key));
+    else list.sort((a, x) => scoreOf(x) - scoreOf(a) || a.key.localeCompare(x.key, "fr"));
+    let forme = s.forme;
+    if (!isDate && list.length > DASH_TOP && forme !== "courbe") {
+      const rest = list.slice(DASH_TOP);
+      const how = activeMeasures()[0]?.agregat;
+      if (rest.length && (how === "somme" || how === "compte")) list = [...list.slice(0, DASH_TOP), { key: "Autres", rows: rest.flatMap((g) => g.rows) }];
+      else if (rest.length) { list = list.slice(0, DASH_TOP); notes.push(`${num.format(rest.length)} groupes masqués.`); }
+    }
+    if (isDate && list.length > 366) {
+      notes.push(`${num.format(list.length - 366)} points les plus anciens masqués. La période « mois » les regroupe.`);
+      list = list.slice(-366);
+    }
+    let series = seriesOf(list);
+    if (forme === "secteurs" && series.some((ser) => ser.valeurs.some((v) => typeof v === "number" && v < 0))) {
+      forme = "barres";
+      notes.push("Valeurs négatives : affichées en barres.");
+    }
+    if (forme === "secteurs" && series.length > 1) {
+      notes.push(`Secteurs : ${series[0].nom}.`);
+      series = series.slice(0, 1);
+    }
+    const units = new Set(series.map((ser) => ser.unite).filter(Boolean));
+    const unite = units.size === 1 ? [...units][0] : "";
+    if (units.size > 1) series = series.map((ser) => ({ ...ser, nom: ser.unite ? `${ser.nom} (${ser.unite})` : ser.nom }));
+    const labels = list.map((g) => (g.key === "Autres" ? "Autres" : !g.key ? "Non renseigné" : isDate ? dateLabel(g.key, s.periode) : g.key));
+    const spec = !rows.length || !series.length ? null : { forme, etiquettes: labels, series, unite, titre: b.titre || "" };
+    const title = !rows.length ? "Aucune ligne pour ces filtres." : !series.length ? "Choisis au moins une mesure." : (b.titre || "Graphique");
+    stage.replaceChildren(...[chartCard(title, spec), ranking(rows), lineDetail(rows)].filter(Boolean));
+  }
+
+  function paintCommercial(base, notes) {
+    const [pFrom, pTo] = boundsOf(base);
+    const shown = inSpan(base, pFrom, pTo);
+    const cmp = compareWindow(pFrom, pTo, s.compare);
+    const compareRows = cmp ? inSpan(base, cmp.from, cmp.to) : [];
+    if (s.compare && !cmp) notes.push("Indique un début et une fin pour comparer.");
+    else if (cmp && !compareRows.length) notes.push(`Aucune ligne sur la période ${cmp.label}.`);
+
+    const ca = montant ? sumOf(shown, montant) : null;
+    const mg = marge ? sumOf(shown, marge) : null;
+    const rate = rateOf(ca, mg);
+    const caP = cmp && montant ? sumOf(compareRows, montant) : null;
+    const mgP = cmp && marge ? sumOf(compareRows, marge) : null;
+    const rateP = rateOf(caP, mgP);
+    const versus = cmp?.label || "";
+    const cards = [];
+    if (montant) cards.push(kpiCard(montant.libelle, fmt(ca, montant.unite), deltaNode(pctDelta(ca, caP), "%", versus)));
+    if (montant && marge) {
+      const pts = rate != null && rateP != null ? rate - rateP : null;
+      cards.push(kpiCard("Taux de marge", rate == null ? "—" : fmt(rate, "%"), deltaNode(pts, "pts", versus), rate != null && rate < 0 ? "bad" : "ok"));
+    }
+    if (marge) cards.push(kpiCard(marge.libelle, fmt(mg, marge.unite), deltaNode(pctDelta(mg, mgP), "%", versus), mg != null && mg < 0 ? "bad" : "ok"));
+    if (cmp) {
+      const main = montant || marge;
+      const prev = montant ? caP : mgP;
+      cards.push(kpiCard(cmp.label, fmt(prev, main.unite), h("small", {}, spanLabel(cmp.from, cmp.to) || "\u00a0"), "warn"));
+    } else cards.push(kpiCard("Période", num.format(shown.length), h("small", {}, spanLabel(pFrom, pTo) || "lignes"), "warn"));
+    kpis.replaceChildren(...cards);
+
+    const grain = s.periode || "mois";
+    const grainWord = grain === "jour" ? "jour" : grain === "semaine" ? "semaine" : "mois";
+    const pMap = buckets(shown, grain);
+    const cMap = buckets(compareRows, grain);
+    let points = aligned(pFrom, pTo, cmp, pMap, cMap, grain);
+    if (points.length > 366) {
+      notes.push(`${num.format(points.length - 366)} points les plus anciens masqués.`);
+      points = points.slice(-366);
+    }
+    let forme = s.forme;
+    if (forme === "secteurs" && (cmp || points.some((p) => (montant && bucketSum(p.cur, montant) < 0) || (marge && bucketSum(p.cur, marge) < 0)))) {
+      forme = "barres";
+      notes.push("Comparaison ou valeurs négatives : barres plutôt que secteurs.");
+    }
+    const labels = points.map((p) => dateLabel(p.key, grain));
+    const amountSpec = (col) => {
+      if (!col || !points.length) return null;
+      const series = [{ nom: "Période", unite: col.unite || "", valeurs: points.map((p) => bucketSum(p.cur, col)) }];
+      if (cmp) series.push({ nom: cmp.label, unite: col.unite || "", valeurs: points.map((p) => bucketSum(p.prev, col)) });
+      return { forme, etiquettes: labels, series, unite: col.unite || "", titre: col.libelle };
+    };
+    const charts = h("div", { class: "dsp-charts" });
+    if (montant) charts.append(chartCard(`${montant.libelle} par ${grainWord}`, amountSpec(montant)));
+    if (marge) charts.append(chartCard(`${marge.libelle} par ${grainWord}`, amountSpec(marge)));
+    let rateCard = null;
+    if (montant && marge && points.length) {
+      const series = [{ nom: "Période", unite: "%", valeurs: points.map((p) => rateOf(bucketSum(p.cur, montant), bucketSum(p.cur, marge))) }];
+      if (cmp) series.push({ nom: cmp.label, unite: "%", valeurs: points.map((p) => rateOf(bucketSum(p.prev, montant), bucketSum(p.prev, marge))) });
+      const any = series.some((ser) => ser.valeurs.some((v) => v != null));
+      rateCard = chartCard(`Taux de marge par ${grainWord}`, any ? { forme: "courbe", etiquettes: labels, series, unite: "%", titre: "Taux de marge" } : null);
+    }
+
+    const headers = ["Période"];
+    if (montant) headers.push(montant.libelle, ...(cmp ? [`${montant.libelle} ${cmp.label}`, "Écart"] : []));
+    if (marge) headers.push(marge.libelle, ...(cmp ? [`${marge.libelle} ${cmp.label}`, "Écart"] : []));
+    if (montant && marge) headers.push("Taux %", ...(cmp ? [`Taux ${cmp.label}`, "Écart pts"] : []));
+    const body = points.map((p) => {
+      const a = bucketSum(p.cur, montant), g = bucketSum(p.cur, marge);
+      const ap = cmp ? bucketSum(p.prev, montant) : null, gp = cmp ? bucketSum(p.prev, marge) : null;
+      const cells = [dateLabel(p.key, grain)];
+      if (montant) cells.push(a, ...(cmp ? [ap, varCell(a, ap)] : []));
+      if (marge) cells.push(g, ...(cmp ? [gp, varCell(g, gp)] : []));
+      if (montant && marge) cells.push(rateOf(a, g) ?? "—", ...(cmp ? [rateOf(ap, gp) ?? "—", varCell(rateOf(a, g), rateOf(ap, gp))] : []));
+      return { cells };
+    });
+    if (points.length) {
+      const cells = ["Total"];
+      if (montant) cells.push(ca, ...(cmp ? [caP, varCell(ca, caP)] : []));
+      if (marge) cells.push(mg, ...(cmp ? [mgP, varCell(mg, mgP)] : []));
+      if (montant && marge) cells.push(rate ?? "—", ...(cmp ? [rateP ?? "—", varCell(rate, rateP)] : []));
+      body.push({ cells });
+    }
+    const comp = h("section", { class: "dsp-panel" }, h("h3", { class: "dsp-card-t" }, `Comparaison par ${grainWord}`),
+      body.length ? boardTable(headers, body, { pinLast: true, caption: `${num.format(points.length)} ${grainWord}${points.length > 1 ? "s" : ""}` }) : h("div", { class: "empty-row" }, "Aucune date exploitable."));
+    stage.replaceChildren(...[charts, rateCard, h("div", { class: "dsp-boards" }, comp, ranking(shown)), lineDetail(shown)].filter(Boolean));
+  }
+
+  function paint() {
+    paintChrome();
+    const notes = [];
+    if (b.tronque) notes.push(`Jeu limité aux ${num.format(b.lignes.length)} premières lignes.`);
+    stage.querySelectorAll(".dsp-chart").forEach((n) => n.dispatchEvent(new Event("jarvis-drop")));
+    const base = b.lignes.filter((r) => passes(r, commercial ? dateCol.id : null));
+    if (commercial) paintCommercial(base, notes);
+    else paintGeneric(base, notes);
+    note.textContent = notes.join(" ");
+    note.hidden = !notes.length;
+  }
+
+  if (primaryRange) topBar.append(primaryRange);
+  topBar.append(presetBar, compareSel);
+  const filterCard = h("section", { class: "dsp-panel dsp-filters" }, topBar, filters,
+    h("div", { class: "dsp-dash-bar" }, groupSel, periodSel, formSel, measures, reset));
+  wrap.append(filterCard, kpis, note, stage);
+  paint();
+  return wrap;
+}
+
 // ---------------------------------------------------------------- table
 const isNum = (v) => typeof v === "number";
 
@@ -501,7 +1256,9 @@ function chart(b) {
     const g = b.forme === "secteurs" ? drawPie(b, w, tip) : drawXY(b, w, tip);
     plot.prepend(g);
   };
-  new ResizeObserver(draw).observe(plot);
+  const ro = new ResizeObserver(draw);
+  ro.observe(plot);
+  wrap.addEventListener("jarvis-drop", () => ro.disconnect(), { once: true });
   wrap.append(h("div", { class: "dsp-ctools" }, b.unite ? h("span", { class: "muted" }, `En ${b.unite}`) : h("span"), toggle), plot, legend, data);
   return wrap;
 }
@@ -629,6 +1386,11 @@ function drawPie(b, W, tip) {
   const H = 220, rows = pieRows(b);
   const total = rows.reduce((a, r) => a + r.v, 0);
   const R = Math.min(H / 2 - 6, 100), r0 = R * 0.62, cx = W / 2, cy = H / 2;
+  if (!total) {
+    const svg0 = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": b.titre || "Graphique" });
+    svg0.append(el("text", { x: W / 2, y: H / 2, "text-anchor": "middle", class: "pie-sub" }, "0"));
+    return svg0;
+  }
   const svg = el("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": b.titre || "Graphique" });
   let a = -Math.PI / 2;
   const pt = (rad, ang) => `${(cx + rad * Math.cos(ang)).toFixed(2)},${(cy + rad * Math.sin(ang)).toFixed(2)}`;
@@ -685,7 +1447,8 @@ export function openDisplayWindow(taskId, key, color) {
     head, h("div", { class: "pv-body dsp-wbody" }, view)), color);
   // the title follows updates
   e.mounts.add({ root: win, update: () => { title.textContent = e.doc.titre; } });
-  wm.register(id, win, { handle: head, ephemeral: true, size: { w: 780, h: 680 }, fresh: true,
+  const wide = e.doc.blocs.some((b) => b.type === "tableau_de_bord");
+  wm.register(id, win, { handle: head, ephemeral: true, size: wide ? { w: 1180, h: 880 } : { w: 780, h: 680 }, fresh: true,
     meta: { title: e.doc.titre, subtitle: "Affichage de Claude", color: colorOf(color), icon: "sparkle", onClose: close,
       regard: { type: "affichage", task: taskId, key } } });
   return id;

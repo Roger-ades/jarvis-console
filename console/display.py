@@ -20,8 +20,8 @@ from urllib.parse import urlsplit
 from .config import trusted_url, web_domain
 
 WHERE = ("conversation", "fenetre", "modale")
-KINDS = ("texte", "images", "resultats", "tableau", "graphique", "fiche", "chronologie", "chiffres",
-         "progression", "schema", "fichiers", "choix", "actions", "cartes", "formulaire", "application")
+KINDS = ("texte", "images", "resultats", "tableau", "graphique", "tableau_de_bord", "fiche", "chronologie",
+         "chiffres", "progression", "schema", "fichiers", "choix", "actions", "cartes", "formulaire", "application")
 FIELD_TYPES = ("texte", "zone", "nombre", "date", "liste", "case")
 CHARTS = ("barres", "courbe", "secteurs")
 MAX_BLOCKS = 20
@@ -35,11 +35,16 @@ TOOL_SPEC = {
     "name": "presenter",
     "description": (
         "Compose un affichage pour l'utilisateur dans la console JARVIS : images ou galerie, résultats de "
-        "recherche en cartes, tableau, graphique, fiche (un client, un devis, un contact…), chronologie ou agenda, "
+        "recherche en cartes, tableau, graphique, tableau de bord, fiche (un client, un devis, un contact…), chronologie ou agenda, "
         "chiffres clés, progression, schéma SVG, fichiers, des choix ou boutons auxquels il répond d'un clic, "
         "un formulaire prérempli (un mail, un devis) qu'il corrige puis valide, "
         "et des cartes dont les boutons sont exécutés par la console (ouvrir un résultat déjà lu, retenir une ligne, "
         "noter une tâche terminée, proposer une routine ou une consigne). "
+        "Un rapport, un chiffre d'affaires, des marges, une comparaison ou un tableau de bord — dans une session "
+        "comme dans une routine — est un bloc tableau_de_bord avec ou = fenetre. Envoie le détail, une ligne par "
+        "fait (un jour, une facture, un produit, un client), et des colonnes typées (texte, nombre, date). "
+        "N'agrège pas toi-même et n'envoie pas un simple tableau : la console filtre, regroupe, calcule les totaux "
+        "et le taux de marge, et trace le graphique. "
         "La console dessine chaque bloc : donne les données, pas de mise en forme. À utiliser dès que l'utilisateur "
         "demande de montrer, d'afficher, de comparer ou de visualiser quelque chose, quand un affichage est plus "
         "clair qu'un long texte, et pour faire corriger un texte déjà rédigé (un formulaire plutôt qu'une suite de "
@@ -83,9 +88,23 @@ TOOL_SPEC = {
                                      "et {consigne: {texte, description}} ouvrent une carte de validation, rien n'est "
                                      "enregistré avant ; {message: \"…\"} renvoie ce texte à la discussion. "
                                      "Huit cartes, quatre boutons chacune."},
-                        "colonnes": {"type": "array", "items": {"type": "string"}, "description": "tableau : en-têtes."},
-                        "lignes": {"type": "array", "items": {"type": "array"}, "description": "tableau : lignes de cellules."},
-                        "forme": {"type": "string", "enum": list(CHARTS), "description": "graphique : barres, courbe ou secteurs."},
+                        "colonnes": {"type": "array", "description":
+                                     "tableau : en-têtes (textes). tableau_de_bord : [{id, libelle, type, unite, agregat, role}]. "
+                                     "type : texte, nombre ou date. agregat (nombre) : somme (défaut), moyenne, min, max. "
+                                     "role : montant ou marge, un de chaque au plus : la console en tire le taux de marge. "
+                                     "Sans colonnes, elles sont déduites des lignes."},
+                        "lignes": {"type": "array", "description":
+                                   "tableau : lignes de cellules. tableau_de_bord : une ligne par fait, objet {id: valeur} "
+                                   "ou liste dans l'ordre des colonnes, 2 000 au plus. Dates en AAAA-MM-JJ ou JJ/MM/AAAA. "
+                                   "Nombres tels quels (1200.5 ou « 1 200,50 »)."},
+                        "grouper": {"type": "string", "description":
+                                    "tableau_de_bord : id de la colonne de regroupement (un texte ou une date)."},
+                        "periode": {"type": "string", "enum": ["jour", "semaine", "mois"],
+                                    "description": "tableau_de_bord : découpage quand le regroupement est une date."},
+                        "mesures": {"type": "array", "items": {"type": "string"},
+                                    "description": "tableau_de_bord : ids des colonnes numériques à tracer (8 au plus). Défaut : toutes."},
+                        "forme": {"type": "string", "enum": list(CHARTS),
+                                  "description": "graphique ou tableau_de_bord : barres, courbe ou secteurs."},
                         "etiquettes": {"type": "array", "items": {"type": "string"}, "description": "graphique : axe des catégories."},
                         "series": {"type": "array", "items": {"type": "object"},
                                    "description": "graphique : [{nom, valeurs: [nombres]}], 8 au plus (secteurs : une)."},
@@ -213,6 +232,70 @@ def _field_answer(kind: str, raw, options: list[str]) -> str | None:
     return _s(raw, 8000 if kind == "zone" else 2000)
 
 
+_DASH_ROWS = 2000
+_DASH_COLS = 12
+_DASH_TYPES = ("texte", "nombre", "date")
+_DASH_KIND = {"text": "texte", "string": "texte", "number": "nombre", "num": "nombre", "float": "nombre",
+              "date": "date", "nombre": "nombre", "texte": "texte"}
+_DASH_AGG = {"sum": "somme", "avg": "moyenne", "average": "moyenne", "mean": "moyenne",
+             "somme": "somme", "moyenne": "moyenne", "min": "min", "max": "max"}
+
+
+def _dash_ident(raw, used: set[str]) -> str:
+    base = _KEY.sub("-", _s(raw, 48)).strip("-.").lower() or "c"
+    base = base[:40]
+    ident, n = base, 2
+    while ident in used:
+        suffix = f"-{n}"
+        ident = f"{base[:40 - len(suffix)]}{suffix}"
+        n += 1
+    used.add(ident)
+    return ident
+
+
+def _dash_date(v) -> str:
+    if v is None or isinstance(v, (bool, int, float, dict, list)):
+        return ""
+    s = str(v).strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        y, mo, d = (int(m.group(i)) for i in (1, 2, 3))
+    else:
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
+        if not m:
+            return ""
+        d, mo, y = (int(m.group(i)) for i in (1, 2, 3))
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return ""
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+def _infer_kind(values) -> str:
+    kinds = set()
+    for v in values:
+        if v is None or v == "":
+            continue
+        if _dash_date(v):
+            kinds.add("date")
+        elif _num(v) is not None and not (isinstance(v, str) and re.search(r"[A-Za-zÀ-ÿ]", v)):
+            kinds.add("nombre")
+        else:
+            kinds.add("texte")
+    if kinds == {"date"}:
+        return "date"
+    if kinds == {"nombre"}:
+        return "nombre"
+    return "texte"
+
+
+def _dash_value(v, kind: str):
+    if kind == "nombre":
+        return _num(v)
+    if kind == "date":
+        return _dash_date(v)
+    return _s(v, 200)
+
+
 def key_of(raw) -> str:
     k = _KEY.sub("-", _s(raw, 60)).strip("-.")
     return k or f"d-{secrets.token_hex(4)}"
@@ -261,7 +344,9 @@ class Checker:
         if not isinstance(b, dict):
             self.problems.add(where, "doit être un objet")
             return None
-        kind = _s(b.get("type"), 30).lower()
+        kind = _s(b.get("type"), 40).lower().replace(" ", "_").replace("-", "_")
+        if kind in ("dashboard", "rapport"):
+            kind = "tableau_de_bord"
         if kind not in KINDS:
             self.problems.add(where, f"type inconnu « {kind} » (types : {', '.join(KINDS)})")
             return None
@@ -325,6 +410,122 @@ class Checker:
         rows = [r + [""] * (width - len(r)) for r in rows]
         more = len(b.get("lignes") or []) > 1000 if isinstance(b.get("lignes"), list) else False
         return {"colonnes": cols, "lignes": rows, **({"tronque": True} if more else {})}
+
+    def _tableau_de_bord(self, b, where):
+        """One row per fact. The page filters, groups and charts: nothing is aggregated here."""
+        raw_rows = b.get("lignes")
+        if isinstance(raw_rows, dict):
+            raw_rows = [raw_rows]
+        if not isinstance(raw_rows, list) or not raw_rows:
+            self.problems.add(where, "aucune ligne : une ligne par fait (jour, facture, produit…)")
+            return None
+        cut = len(raw_rows) > _DASH_ROWS
+        raw_rows = [r for r in raw_rows[:_DASH_ROWS] if isinstance(r, (dict, list, tuple))]
+        specs = self._dash_columns(b.get("colonnes"), raw_rows, where)
+        if not specs:
+            return None
+        rows = []
+        for r in raw_rows:
+            if isinstance(r, dict):
+                folded = {str(k).strip().casefold(): v for k, v in r.items()}
+                cells = []
+                for spec in specs:
+                    raw = folded.get(spec["id"].casefold())
+                    if raw is None:
+                        raw = folded.get(spec["libelle"].casefold())
+                    cells.append(_dash_value(raw, spec["type"]))
+            else:
+                seq = list(r)
+                cells = [_dash_value(seq[j] if j < len(seq) else None, spec["type"]) for j, spec in enumerate(specs)]
+            if any(c not in ("", None) for c in cells):
+                rows.append(cells)
+        if not rows:
+            self.problems.add(where, "aucune ligne exploitable")
+            return None
+        by_name = {c["id"].casefold(): c for c in specs}
+        for c in specs:
+            by_name.setdefault(c["libelle"].casefold(), c)
+        chosen = by_name.get(_s(b.get("grouper"), 80).casefold())
+        if chosen is None or chosen["type"] == "nombre":
+            chosen = next((c for c in specs if c["type"] == "date"), None) or next((c for c in specs if c["type"] == "texte"), None)
+        grouper = chosen["id"] if chosen else ""
+        forme = _s(b.get("forme"), 20).lower() or ("courbe" if chosen and chosen["type"] == "date" else "barres")
+        if forme not in CHARTS:
+            forme = "barres"
+        numbers = [c for c in specs if c["type"] == "nombre"]
+        wanted = b.get("mesures") if isinstance(b.get("mesures"), list) and b.get("mesures") else [c["id"] for c in numbers]
+        mesures = []
+        for raw in wanted:
+            token = _s(raw, 80).casefold()
+            hit = next((c["id"] for c in numbers if token in (c["id"].casefold(), c["libelle"].casefold())), "")
+            if hit and hit not in mesures:
+                mesures.append(hit)
+            if len(mesures) >= 8:
+                break
+        out = {"colonnes": specs, "lignes": rows, "grouper": grouper, "forme": forme, "mesures": mesures}
+        if chosen and chosen["type"] == "date":
+            periode = _s(b.get("periode"), 20).lower()
+            out["periode"] = periode if periode in ("jour", "semaine", "mois") else "jour"
+        if cut:
+            out["tronque"] = True
+            self.problems.add(where, f"au-delà de {_DASH_ROWS} lignes, la suite est ignorée")
+        return out
+
+    def _dash_columns(self, raw, rows, where):
+        used: set[str] = set()
+        items = raw if isinstance(raw, list) else []
+        if not items:
+            keys = []
+            for r in rows[:50]:
+                if isinstance(r, dict):
+                    for k in r:
+                        ks = _s(k, 80)
+                        if ks and ks not in keys:
+                            keys.append(ks)
+            if keys:
+                items = [{"id": k, "libelle": k} for k in keys[:_DASH_COLS]]
+            else:
+                width = max((len(r) for r in rows if isinstance(r, (list, tuple))), default=0)
+                items = [{"libelle": f"Colonne {i + 1}"} for i in range(min(width, _DASH_COLS))]
+        specs = []
+        roles: set[str] = set()
+        for c in items[:_DASH_COLS]:
+            if isinstance(c, str):
+                c = {"libelle": c}
+            if not isinstance(c, dict):
+                continue
+            label = _s(c.get("libelle") or c.get("nom") or c.get("id"), 80) or f"Colonne {len(specs) + 1}"
+            ident = _dash_ident(c.get("id") or label, used)
+            samples = []
+            for r in rows[:80]:
+                if isinstance(r, dict):
+                    folded = {str(k).strip().casefold(): v for k, v in r.items()}
+                    samples.append(folded.get(str(c.get("id") or "").strip().casefold(), folded.get(label.casefold())))
+                elif isinstance(r, (list, tuple)) and len(specs) < len(r):
+                    samples.append(r[len(specs)])
+            kind = _DASH_KIND.get(_s(c.get("type"), 20).lower(), "")
+            if kind not in _DASH_TYPES:
+                kind = _infer_kind(samples)
+            spec = {"id": ident, "libelle": label, "type": kind}
+            if kind == "nombre":
+                agg = _DASH_AGG.get(_s(c.get("agregat"), 20).lower(), "")
+                spec["agregat"] = agg or "somme"
+                unit = _s(c.get("unite"), 12)
+                if unit:
+                    spec["unite"] = unit
+                role = _s(c.get("role"), 20).lower()
+                if role in ("montant", "marge") and role not in roles:
+                    spec["role"] = role
+                    roles.add(role)
+                elif role in ("montant", "marge"):
+                    self.problems.add(where, f"rôle « {role} » déjà utilisé, ignoré")
+            specs.append(spec)
+        if isinstance(items, list) and len(raw if isinstance(raw, list) else []) > _DASH_COLS:
+            self.problems.add(where, f"au-delà de {_DASH_COLS} colonnes, la suite est ignorée")
+        if not specs:
+            self.problems.add(where, "aucune colonne")
+            return None
+        return specs
 
     def _graphique(self, b, where):
         form = _s(b.get("forme"), 20).lower() or "barres"
@@ -628,9 +829,15 @@ def check(args: dict, file: Callable[[str], str], trusted: list[str], previous: 
         return None, list(c.problems) or [
             "aucun bloc : passe « blocs », une liste d'objets avec un « type » (" + ", ".join(KINDS) + ") et ses "
             "champs, ex. [{\"type\": \"fiche\", \"champs\": [{\"libelle\": \"Client\", \"valeur\": \"…\"}]}]"], 0
-    where = _s(args.get("ou"), 20).lower().replace("ê", "e")
-    if where not in WHERE:
-        where = (previous or {}).get("ou") or "conversation"
+    asked = _s(args.get("ou"), 20).lower().replace("ê", "e")
+    if asked in WHERE:
+        where = asked
+    elif (previous or {}).get("ou") in WHERE:
+        where = previous["ou"]
+    elif any(b["type"] == "tableau_de_bord" for b in blocks):
+        where = "fenetre"  # a report is looked at beside the discussion, unless the call says otherwise
+    else:
+        where = "conversation"
     doc = {"titre": _s(args.get("titre"), 200) or (previous or {}).get("titre") or "Affichage", "ou": where, "blocs": blocks}
     if len(json.dumps(doc, ensure_ascii=False)) > MAX_JSON:
         return None, [*c.problems, "affichage trop volumineux (600 Ko au plus) : réduis le tableau ou découpe-le"], 0
@@ -651,6 +858,8 @@ def summary(doc: dict) -> str:
             parts.append(f"{len(b['elements'])} résultat(s)")
         elif k == "graphique":
             parts.append(f"graphique en {b['forme']}")
+        elif k == "tableau_de_bord":
+            parts.append(f"tableau de bord ({len(b['lignes'])} lignes)")
         elif k == "formulaire":
             parts.append(f"formulaire ({len(b['champs'])} champs)")
         elif k == "cartes":
