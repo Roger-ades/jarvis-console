@@ -2,6 +2,8 @@
 data/
 .demo-data/
 .demo-work/
+.demo-nav/
+.demo-oujen/
 .codegraph/
 .env
 __pycache__/
