@@ -23,7 +23,7 @@ import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
 import { setAccounts, taskTint } from "./tint.js";
 import { TaskWindow, autoGrow } from "./taskwin.js";
-import { barSent, setMenuBadge, setupBar, toggleMenu } from "./bar.js";
+import { barSent, setBarPlace, setMenuBadge, setupBar, toggleMenu } from "./bar.js";
 import { $, ACTIVE, STATUS, confirmDialog, copyText, createLauncher, debounce, dialog, fmtDate, h, modelName, statusLabel, store, toast, toolLabel } from "./util.js";
 import { configure as configureDisplays, displayTitle, hasDisplay, isWindowOpen, openDisplayModal, openDisplayWindow, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
@@ -165,6 +165,9 @@ function applyConfig(config, meta) {
   wm.configure({ default_width: config.ui.default_width, default_height: config.ui.default_height });
   wm.retheme();         // (native windows of the desktop app follow the theme)
   regard.configure({}); // (the chips follow the "Joindre ce que je regarde" setting)
+  setBarPlace(config.ui.bar_place);
+  wm.relayout();
+  if (window.jarvis) window.jarvis.win("bar-edge", null, config.ui.bar_edge === true);
 }
 
 /** Desktop app: "Affichage" changed in the configuration, the interface reloads in the other mode. */

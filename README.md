@@ -410,7 +410,8 @@ porte aussi l'icône JARVIS au lieu de celle du navigateur.
 ### Application de bureau
 
 **`build-app.bat`** (il faut Node.js 22.12 ou plus) construit et installe l'application de bureau
-JARVIS (Electron), pour l'utilisateur, sans droits d'administrateur ; `start-app.bat` la lance sans
+JARVIS (Electron), pour l'utilisateur, sans droits d'administrateur. S'il manque, Python 3.12 est
+installé pour l'utilisateur, puis `.venv` et les dépendances. `start-app.bat` lance l'application sans
 l'installer. En affichage **Intégré au bureau** :
 
 - chaque discussion, aperçu ou affichage devient une vraie fenêtre de Windows (Alt+Tab, ancrage,

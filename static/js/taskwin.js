@@ -167,7 +167,7 @@ export class TaskWindow {
     this.insp = h("aside", { class: "insp", "aria-label": "Inspecteur" });
     this.main = h("div", { class: "win-main" }, this.body, this.insp);
     this.approvals = h("div", { class: "win-approvals", "aria-live": "polite" });
-    this.input = h("textarea", { rows: "1", placeholder: "Message de suite…" });
+    this.input = h("textarea", { rows: "1", placeholder: "Message de suite…", spellcheck: "true", lang: "fr" });
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.sendFollowup(); }
     });

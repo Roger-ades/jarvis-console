@@ -494,6 +494,10 @@ class UISettings(BaseModel):
     link_preview: bool = True
     auto_images: bool = False
     regard: bool = True  # "Ce que je regarde": the preview or selected text goes with the message
+    # desktop app, "intégré": the command bar appears when the pointer touches the screen edge it sits on
+    bar_edge: bool = False
+    # where the command bar sits; at the top the prompt comes first and the panel opens under it
+    bar_place: Literal["bas", "haut"] = "bas"
     # a project named in the bar (or opened by Claude, tool projet) opens its panel at launch, tab Discussions
     open_project: bool = True
     # a finished brief opens its report in a window; a project can force yes or no (ProjectBrief.show)

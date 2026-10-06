@@ -1696,6 +1696,28 @@ html.bar-doc .bar-menu { margin: 0 0 8px; padding: 12px 12px 10px; border-radius
   max-height: 480px; overflow: auto; background: color-mix(in srgb, var(--surface) 97%, transparent);
   box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px var(--border-2); animation: drop .14s var(--ease); }
 html.bar-doc .bar-menu[hidden] { display: none; }
+
+/* command bar at the top of the screen: the whole bar (prompt and its controls) sits on that edge,
+   full width, and the panel (discussions, menu, settings) opens under the prompt */
+html[data-bar="haut"] #dock {
+  top: 46px; bottom: auto; height: auto; padding: 10px 16px 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+}
+html[data-bar="haut"] #dock .composer { order: 1; width: min(760px, 100%); max-width: none; margin: 0; flex: none; }
+html[data-bar="haut"] #dock .taskbar { order: 2; width: min(1180px, 100%); max-width: none; margin: 0; padding: 8px 0 0; flex: none; }
+html[data-bar="haut"] .opt-panel, html[data-bar="haut"] .suggest { top: calc(100% + 8px); bottom: auto; }
+html[data-bar="haut"] .empty-hint { padding: calc(var(--dock-h, 110px) + 12px) 24px 24px; }
+html[data-bar="haut"] .widgets { top: calc(var(--dock-h, 110px) + 12px); bottom: 12px; }
+html[data-bar="haut"] .drawer { padding-top: var(--dock-h, 110px); padding-bottom: 12px; }
+html.bar-doc[data-bar="haut"] body { justify-content: flex-start; }
+html.bar-doc[data-bar="haut"] #dock {
+  position: static; top: auto; bottom: auto; width: 100%; height: auto; padding: 8px 14px 0; align-items: stretch;
+}
+html.bar-doc[data-bar="haut"] #dock .composer,
+html.bar-doc[data-bar="haut"] #dock .taskbar { width: 100%; max-width: none; margin: 0; align-self: stretch; }
+html.bar-doc[data-bar="haut"] .bar-menu { order: 3; margin: 8px 0 0; }
+html.bar-doc[data-bar="haut"] .bar-notices { order: 1; }
+html.bar-doc[data-bar="haut"] .toasts { order: 2; }
 .bm-status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .bm-status .profile-pills { margin-left: auto; flex-wrap: wrap; }
 /* (the bar is narrow: what the narrow-screen rules of the top bar hide stays) */

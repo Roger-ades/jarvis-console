@@ -7,7 +7,7 @@ import { api } from "./api.js";
 import { mdElement } from "./md.js";
 import { confirmDialog, copyText, h, toast } from "./util.js";
 import { openPreview, fileBlob, pinButton, thumbnail } from "./viewer.js";
-import { look } from "./regard.js";
+import { joinButton } from "./regard.js";
 import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
@@ -713,6 +713,7 @@ export function openDisplayModal(taskId, key, color) {
   const act = (ic, label, fn) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, svg: ic, on: { click: fn } });
   const box = paint(h("div", { class: "dialog dsp-modal", role: "dialog", "aria-modal": "true", "aria-label": e.doc.titre },
     h("div", { class: "dsp-mhead" }, icon("sparkle"), title,
+      joinButton({ type: "affichage", task: taskId, key }),
       // pinned: a window that stays in front without blocking the rest of the console
       act("pin", "Épingler au premier plan (dans une fenêtre)", () => {
         close();
@@ -727,7 +728,6 @@ export function openDisplayModal(taskId, key, color) {
   document.addEventListener("keydown", onKey, true);
   document.getElementById("modal-root").append(overlay);
   modal = { id0, close };
-  look({ type: "affichage", task: taskId, key }); // in front of everything: what the user looks at
   box.querySelector(".icon-btn")?.focus();
 }
 

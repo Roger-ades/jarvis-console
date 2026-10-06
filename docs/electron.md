@@ -223,10 +223,11 @@ Ce qu'il faut adapter pour les documents enfants :
 
 ### Sites connectés
 
-- Une **fenêtre JARVIS par site**, qui contient une `WebContentsView` dans une session propre au site :
+- Une **fenêtre JARVIS par page**, dans une session propre au site :
   `persist:site:<domaine approuvé>` (sous-domaines compris), sinon `persist:site:<hôte>`. Cookies
   séparés de la console et entre sites : on reste connecté à Odoo et SharePoint sans rien partager
-  avec la page de la console. Une deuxième adresse du même site réutilise sa fenêtre.
+  avec la page de la console. Deux adresses du même site (deux devis) ouvrent deux fenêtres de cette
+  session ; la même adresse ramène la fenêtre qui l'affiche déjà.
 - Ce qui ouvre une fenêtre de site : un lien https d'une réponse (quand l'aperçu des liens est
   activé), une page qu'affiche Claude (`afficher`, domaines approuvés et applications des serveurs MCP),
   « Ouvrir » dans un aperçu web.
@@ -243,8 +244,8 @@ Ce qu'il faut adapter pour les documents enfants :
   « Se déconnecter des sites » ferme leurs fenêtres et vide leurs sessions.
 - **Exemple : un devis Odoo.** « Affiche-moi le dernier devis de X » : Claude trouve le devis (MCP Odoo)
   et appelle `afficher` avec son modèle et son identifiant ; la console écrit l'adresse
-  (`https://<odoo>/odoo/sales/<id>`, d'après l'adresse du serveur Odoo) et l'ouvre aussitôt dans la
-  fenêtre Odoo, déjà connectée.
+  (`https://<odoo>/odoo/sales/<id>`, d'après l'adresse du serveur Odoo) et l'ouvre aussitôt dans une
+  fenêtre Odoo, déjà connectée. Plusieurs devis, plusieurs fenêtres.
 
 ### Notifications et validations
 
@@ -316,8 +317,8 @@ trouve aux bords, là où la fenêtre de l'OS prend le relais.
 - **Pas d'electron-updater** : il lui faudrait un serveur de versions publiées (le dépôt est privé), et
   ce qui change souvent (le shell) suit déjà le dossier ; reste Electron lui-même, que
   `build-app.bat` met à jour quand il le faut.
-- **Démarrage** : l'application lance le serveur du dossier (`.venv`, créé au besoin par `start.bat`
-  ou `start.command`), sans fenêtre. Le démarrage avec la session (Configuration → Général) lance
+- **Démarrage** : l'application lance le serveur du dossier (`.venv`, créé au besoin par `build-app`,
+  `start.bat` ou `start.command`), sans fenêtre. Le démarrage avec la session (Configuration → Général) lance
   l'application avec `--demarrage` quand elle est enregistrée (`data/app.json`) ; après
   l'installation, le raccourci de démarrage suit l'application installée.
 - **Signature** : construit sur le poste même, l'installateur n'est pas marqué comme venant d'Internet

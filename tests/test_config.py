@@ -12,6 +12,7 @@ def test_defaults_are_valid_and_complete():
     assert {p.id for p in cfg.presets} == {"lecture", "web", "brouillons", "edition", "assiste", "complet"}
     complet = cfg.preset("complet")
     assert not complet.enabled and complet.require_confirm and complet.require_dedicated_workdir
+    assert cfg.ui.bar_edge is False and cfg.ui.bar_place == "bas"
     Config.model_validate(dump(cfg))
 
 

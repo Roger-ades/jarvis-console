@@ -10,7 +10,15 @@ import { animateWith, logo } from "./logo.js";
 import { h, iconBtn, setNoticeHost, toast } from "./util.js";
 import * as wm from "./wm.js";
 
-let menuEl = null, menuBtn = null, menuCount = null;
+let menuEl = null, menuBtn = null, menuCount = null, barRoot = null;
+
+/** "bas" or "haut": the floating bar's screen edge, and the order of the prompt and the panel. */
+export function setBarPlace(place) {
+  const v = place === "haut" ? "haut" : "bas";
+  document.documentElement.dataset.bar = v;
+  if (barRoot) barRoot.dataset.bar = v;
+  if (window.jarvis) window.jarvis.win("bar-place", null, v);
+}
 
 /** dock: the element moved into the bar; popups: what opens above it; menu: {peek, status, actions, home},
  * the inbox's summary and the elements of the top bar and of the home screen for the menu; notices:
@@ -19,6 +27,8 @@ export function setupBar({ dock, popups, menu, notices }) {
   if (!wm.isNative() || !window.jarvis) return null;
   const doc = wm.detachBar(dock);
   if (!doc) return null;
+  barRoot = doc.documentElement;
+  barRoot.dataset.bar = document.documentElement.dataset.bar || "bas";
   const toasts = doc.getElementById("toasts");
   const notes = h("div", { class: "bar-notices" }, ...notices);
   doc.body.insertBefore(notes, dock);
@@ -50,7 +60,8 @@ export function setupBar({ dock, popups, menu, notices }) {
     view.clearTimeout(timer);
     timer = view.setTimeout(() => {
       const above = Math.max(0, ...popups.filter((p) => !p.hidden).map((p) => p.offsetHeight + 12));
-      window.jarvis.win("bar-fit", null, { height: Math.ceil(notes.offsetHeight + toasts.offsetHeight + dock.offsetHeight + above) });
+      const place = barRoot?.dataset.bar === "haut" ? "haut" : "bas";
+      window.jarvis.win("bar-fit", null, { height: Math.ceil(notes.offsetHeight + toasts.offsetHeight + dock.offsetHeight + above), place });
     }, 16);
   };
   const sizes = new view.ResizeObserver(fit);

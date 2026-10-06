@@ -595,7 +595,11 @@ function tabInterface() {
       select("Rangement par défaut", "ui.arrange", [["cascade", "Cascade"], ["mosaique", "Mosaïque"]]),
       check("Sons de notification", "ui.sounds"),
       check("Joindre ce que je regarde", "ui.regard",
-        { help: "L'aperçu ou l'affichage au premier plan et le texte sélectionné partent avec ton message (une puce « Regard » le montre, sa croix le retire)." }),
+        { help: "Le texte sélectionné, ou la fenêtre jointe par son viseur, part avec ton message (une puce « Regard » le montre, sa croix le retire)." }),
+      check("Afficher la barre au bord de l'écran", "ui.bar_edge",
+        { help: "Application de bureau, affichage intégré, sur Windows et Mac. La barre apparaît quand le pointeur touche le bord où elle est placée (haut ou bas). Elle se range quand tu cliques ailleurs." }),
+      select("Position de la barre", "ui.bar_place", [["bas", "En bas de l'écran"], ["haut", "En haut de l'écran"]],
+        { help: "En haut, la zone de demande est contre le bord, et le panneau (discussions, menu, réglages) s'ouvre en dessous." }),
       check("Ouvrir le projet avec ses discussions", "ui.open_project",
         { help: "« On va travailler dans le projet Network » : la barre reconnaît le projet avant l'envoi (une puce « Projet » le montre, sa croix le retire), et le panneau du projet s'ouvre à côté de la discussion, sur l'onglet Discussions. Décoché : la puce reste, le panneau ne s'ouvre pas." }))),
     section("Briefs", "Le brief du matin du compte et le brief de chaque projet.", grid(

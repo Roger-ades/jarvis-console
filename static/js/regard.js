@@ -1,9 +1,9 @@
 // "Ce que je regarde": what the user is looking at when writing, sent with the message (console/regard.py).
-// It is the preview or display last brought forward, and the text last selected in the console (a
-// preview, a display, an answer of Claude). A chip in the bar being used says what will go, its cross
-// removes it. Sent once: it comes back when the user selects something else or goes back to a preview.
-// Text selected inside a frame (a PDF, a mail, a web page) cannot be read by the console: only the
-// file or the page is named then.
+// A content window is joined only from its title-bar button, or by selecting text in it (a preview, a
+// display, an answer of Claude). Clicking the window does not join it. A chip in the bar being used
+// says what will go, its cross removes it. Sent once: it comes back when the user selects something
+// else or joins a window again. Text selected inside a frame (a PDF, a mail, a web page) cannot be
+// read by the console: only the file or the page is named then.
 import { h } from "./util.js";
 import * as wm from "./wm.js";
 
@@ -18,6 +18,7 @@ let picked = null; // the element pointed at, outlined while it would go
 function changed() {
   const el = current?.pickEl || null;
   if (el !== picked) { picked?.classList.remove("regard-pick"); picked = el; picked?.classList.add("regard-pick"); }
+  paintButtons();
   listeners.forEach((fn) => fn());
 }
 
@@ -63,27 +64,82 @@ export function label(r, here = "") {
   return r.selection && r.type !== "discussion" && r.type !== "texte" ? `${what} · « ${snippet(r.selection, 36)} »` : what;
 }
 
-/** A window brought forward: what it shows becomes what the user looks at (its selection kept). */
-function look(desc, wid = null) {
-  if (!desc || Date.now() < mute) return;
-  const same = current && current.wid === wid;
-  const keep = same ? Object.fromEntries(["selection", "element", "pickEl"].filter((k) => current[k]).map((k) => [k, current[k]])) : {};
-  current = { ...desc, ...keep, wid };
-  changed();
-}
-export { look };
-
-let front = null; // the window already in front: a click inside it must not rebuild the chip under the pointer
-wm.onFocus((id) => {
-  const moved = front !== id;
-  front = id;
-  if (!moved) return;
-  const meta = wm.meta(id);
-  if (meta?.regard) look(meta.regard, id);
-  else changed(); // a bar shows the chip only while its window has the focus
-});
+/** A window brought forward used to become what the user looks at. Focus only refreshes the chips:
+ * joining a window is its title-bar button, joining a passage is a selection. */
+wm.onFocus(() => changed());
 // the window it came from is closed: the user no longer looks at it
 wm.onChange(() => { if (current?.wid && !wm.has(current.wid)) clear(); });
+
+const JOIN = "Joindre cette fenêtre à la prochaine demande";
+const JOINED = "Cette fenêtre part avec la prochaine demande. Cliquer retire.";
+const buttons = new Map(); // window id -> button
+
+function joinedWindow(id) {
+  return !!current && current.wid === id && !current.selection && !current.element;
+}
+
+function paintButtons() {
+  for (const [id, btn] of buttons) {
+    if (!btn.isConnected) { buttons.delete(id); continue; }
+    const on = joinedWindow(id);
+    btn.classList.toggle("on", on);
+    btn.title = on ? JOINED : JOIN;
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+/** Join this content window, or drop it if it was already the whole window being joined. */
+function toggleWindow(id) {
+  const desc = wm.meta(id)?.regard;
+  if (!desc) return;
+  if (joinedWindow(id)) { clear(); return; }
+  mute = Date.now() + 400;
+  current = { ...desc, wid: id };
+  changed();
+}
+
+wm.onRegister((id, el, meta) => {
+  if (!meta?.regard || buttons.has(id)) return;
+  const bar = el.querySelector(".win-head .pv-actions");
+  const btn = h("button", {
+    type: "button", class: "icon-btn regard-win", title: JOIN, "aria-label": JOIN, "aria-pressed": "false", svg: "regard",
+    on: { click: (e) => { e.stopPropagation(); toggleWindow(id); } },
+  });
+  if (bar) bar.prepend(btn);
+  else el.querySelector(".win-actions")?.before(btn);
+  buttons.set(id, btn);
+  paintButtons();
+});
+
+function looseJoined(desc) {
+  return !!current && !current.wid && !current.selection && !current.element
+    && current.type === desc.type && current.task === desc.task && (current.key || "") === (desc.key || "");
+}
+
+/** The same button for a display shown in a dialog, which is not a desktop window. */
+export function joinButton(desc) {
+  const btn = h("button", {
+    type: "button", class: "icon-btn regard-win", title: JOIN, "aria-label": JOIN, "aria-pressed": "false", svg: "regard",
+    on: { click: (e) => {
+      e.stopPropagation();
+      if (looseJoined(desc)) { clear(); return; }
+      mute = Date.now() + 400;
+      current = { ...desc };
+      changed();
+    } },
+  });
+  const paint = () => {
+    if (!btn.isConnected) { listeners.delete(paint); return; }
+    const on = looseJoined(desc);
+    btn.classList.toggle("on", on);
+    btn.title = on ? JOINED : JOIN;
+    btn.setAttribute("aria-label", btn.title);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  };
+  listeners.add(paint);
+  return btn;
+}
 
 /** The source of a selection: a display (in the conversation, a window or the modal), a preview, or a
  * discussion's own text. */

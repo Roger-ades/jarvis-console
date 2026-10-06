@@ -22,9 +22,17 @@ const notify = () => listeners.forEach((fn) => fn());
 const bridge = window.jarvis || null;          // the desktop app's preload (shell/preload.js)
 const NATIVE = bridge?.mode === "integre";
 const docInits = new Set();
+const registerListeners = new Set();
 if (NATIVE) document.documentElement.classList.add("bureau-integre");
 /** True when windows are native windows of the OS (desktop app, "Intégré au bureau"). */
 export function isNative() { return NATIVE; }
+/** A window just registered (id, element, meta), including one in its own OS window. */
+export function onRegister(fn) { registerListeners.add(fn); }
+function registered(id) {
+  const w = wins.get(id);
+  if (w) registerListeners.forEach((fn) => fn(id, w.el, w.meta));
+}
+
 /** fn(doc) for this page's document and for each native window's: listeners that a module puts on
  * `document` (click delegation, shortcuts, selection) must be on every document. */
 export function onDocument(fn) {
@@ -123,13 +131,15 @@ function measureDock() {
   if (!dock) return 0;
   const bar = dock.querySelector(".composer-bar");
   const tb = dock.querySelector(".taskbar");
-  const pad = parseFloat(getComputedStyle(dock).paddingBottom) || 0;
+  const cs = getComputedStyle(dock);
+  const pad = parseFloat(document.documentElement.dataset.bar === "haut" ? cs.paddingTop : cs.paddingBottom) || 0;
   return Math.round(pad + 50 + (bar?.offsetHeight || 0) + (tb && !tb.hidden ? tb.offsetHeight : 0) + 10);
 }
-/** Where windows open, maximize and tile: above the command bar (they can still be dragged under it). */
+/** Where windows open, maximize and tile: beside the command bar (they can still be dragged under it). */
 function usable() {
   const b = bounds();
-  return { w: b.w, h: Math.max(200, b.h - reservedH) };
+  const y = document.documentElement.dataset.bar === "haut" ? reservedH : 0;
+  return { y, w: b.w, h: Math.max(200, b.h - reservedH) };
 }
 function watchDock() {
   const dock = document.getElementById("dock");
@@ -149,14 +159,14 @@ function placeNew(size = null) {
   const w = Math.min(size?.w || settings.default_width, b.w - 24), hh = Math.min(size?.h || settings.default_height, b.h - 24);
   const n = visibleCount();
   const spanX = Math.max(1, b.w - w - 40), spanY = Math.max(1, b.h - hh - 30);
-  return { x: 20 + ((n * 36) % spanX), y: 14 + ((n * 30) % spanY), w, h: hh, z: ++topZ, min: false, pinned: false };
+  return { x: 20 + ((n * 36) % spanX), y: b.y + 14 + ((n * 30) % spanY), w, h: hh, z: ++topZ, min: false, pinned: false };
 }
 
 function apply(w) {
   const { el, st } = w;
   if (st.max) {
     const b = usable();
-    Object.assign(el.style, { left: "0px", top: "0px", width: `${b.w}px`, height: `${b.h}px` });
+    Object.assign(el.style, { left: "0px", top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
   } else {
     Object.assign(el.style, { left: `${st.x}px`, top: `${st.y}px`, width: `${st.w}px`, height: `${st.h}px` });
   }
@@ -170,7 +180,7 @@ function fit(st) {
   st.w = clamp(st.w || settings.default_width, 340, b.w);
   st.h = clamp(st.h || settings.default_height, 180, b.h);
   st.x = clamp(st.x ?? 20, -st.w + 120, b.w - 120);
-  st.y = clamp(st.y ?? 14, 0, u.h - 36);
+  st.y = clamp(st.y ?? u.y + 14, u.y, u.y + u.h - 36);
 }
 
 /** ephemeral: a preview window, not remembered across reloads nor minimized with the others.
@@ -198,6 +208,7 @@ export function register(id, el, { handle, onFocus, onClose = null, fresh = fals
   if (isNew || fresh) focus(id);
   persist();
   notify();
+  registered(id);
 }
 
 export function unregister(id) {
@@ -270,7 +281,7 @@ export function setSize(id, width, height) {
   w.st.w = Math.min(width, b.w - 24);
   w.st.h = Math.min(height, b.h - 24);
   w.st.x = Math.min(w.st.x, Math.max(0, b.w - w.st.w - 12));
-  w.st.y = Math.min(w.st.y, Math.max(0, b.h - w.st.h - 12));
+  w.st.y = Math.min(Math.max(w.st.y, b.y), Math.max(b.y, b.y + b.h - w.st.h - 12));
   fit(w.st);
   apply(w);
   persist();
@@ -302,7 +313,7 @@ function makeDraggable(id, handle) {
     handle.setPointerCapture(e.pointerId);
     const move = (ev) => {
       w.st.x = clamp(ox + ev.clientX - sx, -w.st.w + 120, b.w - 120);
-      w.st.y = clamp(oy + ev.clientY - sy, 0, u.h - 36);
+      w.st.y = clamp(oy + ev.clientY - sy, u.y, u.y + u.h - 36);
       apply(w);
     };
     const up = () => {
@@ -350,6 +361,11 @@ function startResize(e, id, dir) {
   grip.addEventListener("pointercancel", up);
 }
 
+/** After the command bar moves to the other edge, keep the windows in the space that remains. */
+export function relayout() {
+  for (const w of wins.values()) if (!w.win && !w.st.min) { fit(w.st); apply(w); }
+}
+
 export function arrange(mode) {
   const b = usable();
   if (mode === "minimize") { for (const [id, w] of wins) if (!w.st.min) minimize(id); return; }
@@ -365,7 +381,7 @@ export function arrange(mode) {
     const c = Math.min(cols, n), rows = Math.ceil(n / c), gap = 8;
     const cw = (b.w - gap * (c + 1)) / c, ch = (b.h - gap * (rows + 1)) / rows;
     list.forEach((w, i) => {
-      Object.assign(w.st, { max: false, x: gap + (i % c) * (cw + gap), y: gap + Math.floor(i / c) * (ch + gap),
+      Object.assign(w.st, { max: false, x: gap + (i % c) * (cw + gap), y: b.y + gap + Math.floor(i / c) * (ch + gap),
         w: Math.max(340, cw), h: Math.max(180, ch) });
       apply(w);
     });
@@ -373,7 +389,7 @@ export function arrange(mode) {
     const ww = Math.min(settings.default_width, b.w - 60), hh = Math.min(settings.default_height, b.h - 60);
     list.forEach((w, i) => {
       Object.assign(w.st, { max: false, x: 20 + ((i * 34) % Math.max(1, b.w - ww - 40)),
-        y: 14 + ((i * 30) % Math.max(1, b.h - hh - 30)), w: ww, h: hh, z: ++topZ });
+        y: b.y + 14 + ((i * 30) % Math.max(1, b.h - hh - 30)), w: ww, h: hh, z: ++topZ });
       apply(w);
     });
   }
@@ -400,7 +416,8 @@ function registerNative(id, el, { onFocus, onClose, fresh, ephemeral, size, meta
   wins.set(id, w);
   el.dataset.wid = id;
   win.addEventListener("focus", () => markFocus(id));
-  el.addEventListener("pointerdown", () => markFocus(id), true);  // (each click: what the user looks at, regard.js)
+  el.addEventListener("pointerdown", () => markFocus(id), true);
+  registered(id);
   docInits.forEach((fn) => fn(doc));
   setTitle(id, title || meta?.title || el.getAttribute("aria-label") || "JARVIS");
   if (st.pinned) bridge.win("pin", id, true);

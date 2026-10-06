@@ -153,6 +153,52 @@ const sameOrigin = (url) => { try { return new URL(url).origin === origin; } cat
 const openOutside = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); };
 const fromConsole = (e) => hub && !hub.isDestroyed() && e.sender === hub.webContents && sameOrigin(e.senderFrame?.url || "");
 
+/** French first, then English, among the dictionaries the OS actually has. */
+function armSpellcheck() {
+  const ses = session.defaultSession;
+  let langs = [];
+  try { langs = ses.availableSpellCheckerLanguages || []; } catch { return; }
+  const french = langs.find((l) => l === "fr-FR" || l === "fr");
+  const english = langs.find((l) => l === "en-US" || l === "en-GB" || l === "en");
+  const chosen = [french, english].filter(Boolean);
+  if (!chosen.length && langs[0]) chosen.push(langs[0]);
+  if (!chosen.length) return;
+  try { ses.setSpellCheckerLanguages(chosen); }
+  catch { try { ses.setSpellCheckerLanguages(chosen.slice(0, 1)); } catch { /* the OS dictionary stays as it is */ } }
+}
+
+/** Right-click in a text field: the suggestions of the spellchecker, then cut, copy and paste.
+ *  A click elsewhere keeps the page's own menu (Regard). */
+function watchSpell(win) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.on("context-menu", (_e, params) => {
+    if (!params.isEditable && !params.misspelledWord) return;
+    const wc = win.webContents;
+    const edit = params.editFlags || {};
+    const template = [];
+    for (const suggestion of params.dictionarySuggestions || []) {
+      template.push({ label: suggestion, click: () => wc.replaceMisspelling(suggestion) });
+    }
+    if (params.misspelledWord) {
+      if (template.length) template.push({ type: "separator" });
+      template.push({ label: "Ajouter au dictionnaire", click: () => wc.session.addWordToSpellCheckerDictionary(params.misspelledWord) });
+    }
+    if (params.isEditable) {
+      if (template.length) template.push({ type: "separator" });
+      template.push(
+        { label: "Annuler", role: "undo", enabled: !!edit.canUndo },
+        { label: "Rétablir", role: "redo", enabled: !!edit.canRedo },
+        { type: "separator" },
+        { label: "Couper", role: "cut", enabled: !!edit.canCut },
+        { label: "Copier", role: "copy", enabled: !!edit.canCopy },
+        { label: "Coller", role: "paste", enabled: !!edit.canPaste },
+        { type: "separator" },
+        { label: "Tout sélectionner", role: "selectAll", enabled: !!edit.canSelectAll });
+    }
+    if (template.length) Menu.buildFromTemplate(template).popup({ window: win });
+  });
+}
+
 function send(id, type, extra = {}) {
   if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:win-event", { id, type, ...extra });
 }
@@ -165,7 +211,7 @@ function nativeOptions(f) {
     icon: ICON, backgroundColor: overlay.color, autoHideMenuBar: true,
     ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
       : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true },
   };
 }
 
@@ -182,7 +228,7 @@ function frameOptions(f, hidden) {
     backgroundColor: overlay.color, autoHideMenuBar: true,
     ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
       : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true },
   };
 }
 
@@ -202,18 +248,23 @@ function widgetOptions(f) {
 }
 
 let barH = 190;
+let barPlace = "bas";   // "haut": the bar hangs from the top of the work area and grows downward
 
-/** Bottom of the work area. Called when what is above the prompt actually changes size (menu, notices),
+/** The work-area edge the bar is tied to. Called when what sits with the prompt changes size,
  *  never while typing: the field does not grow. */
 function setBarBounds(area, height, x) {
   if (!bar || bar.isDestroyed()) return;
   const h = Math.max(90, Math.min(Math.round(height), 720, Math.max(90, area.height - 24)));
-  const y = Math.max(area.y, Math.round(area.y + area.height - 12 - h));
+  const y = barPlace === "haut"
+    ? Math.round(area.y + 8)
+    : Math.max(area.y, Math.round(area.y + area.height - 12 - h));
   x = Math.round(x === undefined ? area.x + (area.width - BAR_W) / 2 : Math.min(Math.max(x, area.x), area.x + area.width - BAR_W));
   const b = bar.getBounds();
   if (b.x === x && b.y === y && b.width === BAR_W && b.height === h) return;
   barH = h;
   bar.setBounds({ x, y, width: BAR_W, height: h });
+  const got = bar.getBounds();
+  if (Math.abs(got.y - y) > 2 || Math.abs(got.x - x) > 2) bar.setPosition(x, y);
 }
 
 function placeBar(area) {
@@ -222,37 +273,140 @@ function placeBar(area) {
 
 function barOptions() {
   const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  return { x: Math.round(a.x + (a.width - BAR_W) / 2), y: Math.round(a.y + a.height - barH - 12), width: BAR_W, height: barH,
+  const y = barPlace === "haut" ? Math.round(a.y + 8) : Math.round(a.y + a.height - barH - 12);
+  return { x: Math.round(a.x + (a.width - BAR_W) / 2), y, width: BAR_W, height: barH,
     frame: false, transparent: true, backgroundColor: "#00000000",
     hasShadow: false, resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
     alwaysOnTop: true, show: false, title: "JARVIS — nouvelle demande", icon: ICON,
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false } };
+    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true } };
 }
 
 function adoptBar(win) {
   bar = win;
+  watchSpell(win);
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { e.preventDefault(); openOutside(url); });
-  win.on("blur", () => { if (!barPinned && !barHold && !win.isDestroyed() && win.isVisible()) win.hide(); });
+  win.on("blur", () => {
+    if (barPinned || barHold || win.isDestroyed() || !win.isVisible()) return;
+    hideBarShield();
+    win.hide();
+  });
   win.on("close", (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });   // (Alt+F4: put away)
   win.on("closed", () => { if (bar === win) bar = null; });
 }
 
 /** Ctrl+Alt+J, "Nouvelle demande": the bar where the mouse is, ready to type (select: false keeps what
  * is in it); menu: with the JARVIS menu open ("Ouvrir JARVIS"). */
-function showBar({ select = true, menu = false } = {}) {
+function showBar({ select = true, menu = false, fromEdge = false } = {}) {
   if (!bar || bar.isDestroyed() || mode !== "integre") { revealHub(true); return; }
   wake();
   if (!bar.isVisible()) placeBar(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
   bar.show();
   bar.focus();
+  // Shown from the screen edge, Windows often refuses the focus (the call comes from a timer).
+  // A click beside the bar would then not blur it. A clear layer behind the bar takes that click.
+  if (fromEdge && !barPinned && !barHold) showBarShield();
   const cmd = menu ? "menu" : select ? "nouvelle-demande" : "";
   if (cmd && hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd });
 }
 
 function toggleBar() {
-  if (bar && !bar.isDestroyed() && mode === "integre" && bar.isVisible() && bar.isFocused()) bar.hide();
-  else showBar();
+  if (bar && !bar.isDestroyed() && mode === "integre" && bar.isVisible() && bar.isFocused()) {
+    hideBarShield();
+    bar.hide();
+  } else showBar();
+}
+
+// "Afficher la barre au bord de l'écran": the pointer on the edge the bar sits on (top or bottom) brings it.
+let barEdge = false;
+let edgeWatch = null;
+let edgeInside = false;
+
+function setBarPlace(place) {
+  barPlace = place === "haut" ? "haut" : "bas";
+  edgeInside = false;
+  if (!bar || bar.isDestroyed()) return;
+  const area = screen.getDisplayMatching(bar.getBounds()).workArea;
+  // Drop the remembered height so the next measure hugs the content on the new edge.
+  const content = Math.max(90, bar.getContentSize()[1] || barH);
+  setBarBounds(area, content);
+}
+
+function watchBarEdge(on) {
+  barEdge = !!on;
+  edgeInside = false;
+  if (edgeWatch) { clearInterval(edgeWatch); edgeWatch = null; }
+  if (!barEdge) return;
+  edgeWatch = setInterval(() => {
+    if (mode !== "integre" || !bar || bar.isDestroyed() || barHold) return;
+    const p = screen.getCursorScreenPoint();
+    const d = screen.getDisplayNearestPoint(p);
+    const b = d.bounds;
+    const at = (barPlace === "haut" ? p.y <= b.y + 3 : p.y >= b.y + b.height - 3)
+      && p.x >= b.x && p.x < b.x + b.width;
+    if (!at) { edgeInside = false; return; }
+    if (edgeInside || bar.isVisible()) return;
+    edgeInside = true;
+    showBar({ fromEdge: true });
+  }, 80);
+}
+
+// The edge show cannot take the keyboard, so a click elsewhere never blurs the bar.
+// This layer covers the screens behind it and receives that click.
+let barShield = null;
+let shieldArmed = false;
+
+function virtualScreen() {
+  const all = screen.getAllDisplays().map((d) => d.bounds);
+  const x = Math.min(...all.map((b) => b.x));
+  const y = Math.min(...all.map((b) => b.y));
+  return { x, y, width: Math.max(...all.map((b) => b.x + b.width)) - x, height: Math.max(...all.map((b) => b.y + b.height)) - y };
+}
+
+function hideBarShield() {
+  shieldArmed = false;
+  if (barShield && !barShield.isDestroyed()) barShield.hide();
+  if (bar && !bar.isDestroyed()) bar.setAlwaysOnTop(true, "floating");
+}
+
+function showBarShield() {
+  if (!bar || bar.isDestroyed() || barPinned || barHold) return;
+  if (!barShield || barShield.isDestroyed()) {
+    barShield = new BrowserWindow({
+      ...virtualScreen(), frame: false, transparent: true, backgroundColor: "#00000000",
+      hasShadow: false, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
+      skipTaskbar: true, focusable: true, alwaysOnTop: true, show: false, title: "JARVIS",
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    barShield.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(
+      "<!doctype html><body style='margin:0;height:100vh;background:rgba(0,0,0,.02)'></body>"));
+    const away = () => {
+      if (barPinned || barHold) return;
+      hideBarShield();
+      if (bar && !bar.isDestroyed() && bar.isVisible()) bar.hide();
+    };
+    barShield.on("focus", () => { if (shieldArmed) away(); });
+    barShield.webContents.on("did-finish-load", () => {
+      barShield.webContents.executeJavaScript(
+        "document.body.addEventListener('pointerdown', () => { location.hash = location.hash === '#1' ? '#2' : '#1'; })").catch(() => {});
+    });
+    barShield.webContents.on("did-navigate-in-page", away);
+    barShield.on("close", (e) => { if (!quitting) { e.preventDefault(); barShield.hide(); } });
+    barShield.on("closed", () => { barShield = null; });
+  } else barShield.setBounds(virtualScreen());
+  const reveal = () => {
+    if (!barShield || barShield.isDestroyed() || !bar || bar.isDestroyed() || !bar.isVisible() || barPinned || barHold) return;
+    barShield.setBounds(virtualScreen());
+    bar.setAlwaysOnTop(true, "pop-up-menu");
+    barShield.setAlwaysOnTop(true, "floating");
+    barShield.showInactive();
+    bar.setAlwaysOnTop(true, "pop-up-menu");
+    bar.moveTop();
+    shieldArmed = false;
+    setTimeout(() => { if (barShield && !barShield.isDestroyed() && barShield.isVisible()) shieldArmed = true; }, 120);
+  };
+  if (barShield.webContents.isLoading()) barShield.webContents.once("did-finish-load", reveal);
+  else reveal();
 }
 
 /** window.open from the console's page: its native windows; a web address goes to the system browser. */
@@ -279,6 +433,7 @@ function adopt(win, details) {
   if (!id) return;
   if (id === "barre") { adoptBar(win); return; }
   children.set(id, win);
+  watchSpell(win);
   if (id.startsWith("widget-")) setImmediate(() => { if (!discreet && !win.isDestroyed()) win.showInactive(); });
   win.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { e.preventDefault(); openOutside(url); });
@@ -309,6 +464,8 @@ function closeChildren() {
   children.clear();
   if (bar && !bar.isDestroyed()) bar.destroy();
   bar = null;
+  if (barShield && !barShield.isDestroyed()) barShield.destroy();
+  barShield = null;
 }
 
 function arrange({ mode: how, ids } = {}) {
@@ -346,6 +503,7 @@ function createHub() {
       nodeIntegration: false, backgroundThrottling: false, spellcheck: true },
   });
   if (st.maximized) hub.maximize();
+  watchSpell(hub);
   hub.webContents.setWindowOpenHandler(openHandler);
   hub.webContents.on("did-create-window", adopt);
   hub.webContents.on("will-navigate", (e, url) => { if (!sameOrigin(url)) { e.preventDefault(); openOutside(url); } });
@@ -404,14 +562,15 @@ function showInbox() {
 function quit() { quitting = true; app.quit(); }
 
 // ------------------------------------------------------------------ connected sites
-// A site the console shows (a link, an address Claude shows from an approved domain, one the user agreed
+// A page the console shows (a link, an address Claude shows from an approved domain, one the user agreed
 // to open) gets a window of its own: a navigation bar (site.html) above a view of the site, in a session
 // of its own (persist:site:<domain>): cookies apart from the console and from the other sites, so the
-// user stays signed in to Odoo or SharePoint. The site's view has no preload and no Node; it may go to
-// any https address (sign-in pages are often elsewhere); a link opened in a new tab to another site, or
-// any plain http address, goes to the system browser.
+// user stays signed in to Odoo or SharePoint. Several pages of one site (two devis) are several windows
+// of that session. The same address brings its window forward. The site's view has no preload and no
+// Node; it may go to any https address (sign-in pages are often elsewhere); a link opened in a new tab
+// to another site, or any plain http address, goes to the system browser.
 const SITE_BAR_H = 44;
-const sites = [];                        // {win, view, partition, label}
+const sites = [];                        // {win, view, partition, label, url}
 let trusted = [];                        // the approved domains (Configuration → Sécurité), refreshed on each opening
 let siteTheme = "sombre";
 
@@ -446,15 +605,31 @@ function siteSession(partition) {
 
 const barColors = () => (siteTheme === "clair" ? { bg: "#f6f8fa", text: "#3f5163" } : { bg: "#1c2430", text: "#aab6c3" });
 
+/** Origin and path, so a redirect that only adds a hash still counts as the same page. */
+function pageKey(raw) {
+  try {
+    const u = new URL(raw);
+    return `${u.origin}${(u.pathname.replace(/\/+$/, "") || "/")}${u.search}`;
+  } catch { return ""; }
+}
+
+/** A window already open on this exact page (the address it was given, or the one it shows now). */
+function windowShows(s, href) {
+  if (s.win.isDestroyed()) return false;
+  const want = pageKey(href);
+  if (!want) return false;
+  if (pageKey(s.url) === want) return true;
+  try { return pageKey(s.view.webContents.getURL()) === want; } catch { return false; }
+}
+
 async function openSite(url, { fresh = false } = {}) {
   let u;
   try { u = new URL(url); } catch { return false; }
   if (u.protocol !== "https:") { openOutside(url); return false; }
   await refreshSiteSettings();
   const { partition, label } = partitionOf(u);
-  const live = !fresh && [...sites].reverse().find((s) => s.partition === partition && !s.win.isDestroyed());
+  const live = !fresh && [...sites].reverse().find((s) => windowShows(s, u.href));
   if (live) {
-    live.view.webContents.loadURL(u.href);
     if (live.win.isMinimized()) live.win.restore();
     if (!discreet) { live.win.show(); live.win.focus(); }
     return true;
@@ -474,7 +649,7 @@ function createSiteWindow(partition, label, url) {
   siteSession(partition);
   const view = new WebContentsView({ webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: true } });
   win.contentView.addChildView(view);
-  const entry = { win, view, partition, label };
+  const entry = { win, view, partition, label, url };
   sites.push(entry);
   const layout = () => {
     if (win.isDestroyed()) return;
@@ -486,6 +661,7 @@ function createSiteWindow(partition, label, url) {
   const wc = view.webContents;
   const state = () => {
     if (win.isDestroyed() || wc.isDestroyed()) return;
+    try { const now = wc.getURL(); if (/^https:/i.test(now)) entry.url = now; } catch { /* gone */ }
     const nh = wc.navigationHistory;
     win.webContents.send("site:state", { url: wc.getURL(), title: wc.getTitle(), canBack: nh.canGoBack(), canForward: nh.canGoForward(),
       loading: wc.isLoading(), session: label });
@@ -784,6 +960,8 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     return true;
   }
   if (op.startsWith("bar-")) {
+    if (op === "bar-edge") { watchBarEdge(data); return true; }
+    if (op === "bar-place") { setBarPlace(data); return true; }
     if (op === "bar-show") showBar({ select: data?.select !== false });
     if (!bar || bar.isDestroyed()) return false;
     if (op === "bar-ready") {
@@ -795,11 +973,12 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
       placeBar(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea);
       bar.showInactive();
     }
-    else if (op === "bar-hide") bar.hide();
-    else if (op === "bar-sent" && !barPinned) bar.hide();
+    else if (op === "bar-hide") { hideBarShield(); bar.hide(); }
+    else if (op === "bar-sent" && !barPinned) { hideBarShield(); bar.hide(); }
     else if (op === "bar-pin") barPinned = !!data;
-    else if (op === "bar-hold") barHold = !!data;
+    else if (op === "bar-hold") { barHold = !!data; if (barHold) hideBarShield(); }
     else if (op === "bar-fit" && Number.isFinite(data?.height)) {
+      if (data.place === "haut" || data.place === "bas") barPlace = data.place;
       const b = bar.getBounds();
       setBarBounds(screen.getDisplayMatching(b).workArea, data.height, b.x);
     }
@@ -861,6 +1040,7 @@ async function main() {
   origin = `http://127.0.0.1:${port}`;
   session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) =>
     cb(sameOrigin(details?.requestingUrl || wc.getURL()) && ["notifications", "clipboard-sanitized-write"].includes(permission)));
+  armSpellcheck();
   makeTray();
   createHub();
   // the inbox's "Pendant ton absence": the page notes when the session locks or sleeps, then tells what came
@@ -885,6 +1065,8 @@ async function main() {
   try {
     const { config } = await call(port, "/api/config", { token });
     if (MODES.includes(config?.ui?.bureau)) mode = config.ui.bureau;
+    watchBarEdge(config?.ui?.bar_edge === true);
+    setBarPlace(config?.ui?.bar_place);
   } catch { /* default mode */ }
   const { code } = await call(port, "/api/auth/code", { method: "POST", token, body: {} });
   if (hub && !hub.isDestroyed()) {
@@ -927,7 +1109,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!hub || hub.isDestroyed() || !String(hub.webContents.getURL()).startsWith("http://127.0.0.1")) return;
     showHub();
   });
-  app.on("before-quit", () => { quitting = true; });
+  app.on("before-quit", () => { quitting = true; if (edgeWatch) clearInterval(edgeWatch); });
   app.on("will-quit", () => globalShortcut.unregisterAll());
   app.on("window-all-closed", () => { if (!tray) quit(); });
   app.whenReady().then(main).catch((e) => { dialog.showErrorBox("JARVIS", String(e?.stack || e)); quit(); });
