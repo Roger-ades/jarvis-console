@@ -893,9 +893,23 @@ pre, .codeblock pre {
 .pv-note { flex: none; font-size: 11.5px; color: var(--text-3); padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .pv-text { padding: 18px 24px; }
 .pv-pre { margin: 0; padding: 16px 20px; font: 12px/1.55 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-head small.dirty { color: var(--warn); }
+.pv-actions .icon-btn:disabled { opacity: .35; }
+.pv-actions .icon-btn.on { color: var(--pc, var(--accent)); }
+.pv-win.editing .pv-body { overflow: hidden; }
+.pv-body > .pv-edit {
+  flex: 1; width: 100%; min-height: 0; margin: 0; border: 0; border-radius: 0; resize: none;
+  padding: 16px 20px; background: var(--bg-2); font: 13px/1.55 var(--mono); color: var(--text); tab-size: 2;
+}
+.pv-body > .pv-edit:hover, .pv-body > .pv-edit:focus { border-color: transparent; outline: none; }
 .pv-other { margin: auto; text-align: center; padding: 30px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.pv-text table.csv { display: table; font-size: 12px; }
-.pv-text table.csv td, .pv-text table.csv th { white-space: nowrap; padding: 4px 10px; }
+.pv-text table.csv { display: table; width: max-content; max-width: none; font-size: 12px; }
+.pv-text table.csv td, .pv-text table.csv th { position: relative; white-space: nowrap; padding: 4px 12px 4px 10px; }
+.pv-text table.csv .col-label { display: block; overflow: hidden; text-overflow: ellipsis; }
+.pv-text table.csv th { border-right: 1px solid var(--border); }
+.pv-text table.csv .col-grip { position: absolute; top: 0; right: -4px; z-index: 1; width: 8px; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+.pv-text table.csv .col-grip:hover { background: color-mix(in srgb, var(--pc, var(--accent)) 55%, transparent); }
+html.col-resizing, html.col-resizing * { cursor: col-resize !important; user-select: none !important; }
 
 /* ------------------------------------------------ project panel */
 #project { display: flex; flex-direction: column; }

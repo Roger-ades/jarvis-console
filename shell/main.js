@@ -730,6 +730,8 @@ function updateTray(s = {}) {
   if (IS_WIN) {
     const icon = awaiting ? badge([240, 180, 92]) : null, label = awaiting ? `${awaiting} à valider` : "";
     for (const w of [hub, ...children.values()]) if (w && !w.isDestroyed()) w.setOverlayIcon(icon, label);
+  } else if (IS_MAC && app.dock) {
+    app.dock.setBadge(awaiting ? String(awaiting) : "");
   }
   if (!tray) return;
   tray.setToolTip(`JARVIS · ${running} en cours · ${awaiting} à valider${queued ? ` · ${queued} en file` : ""}${unread ? ` · ${unread} à lire` : ""}`);
@@ -919,6 +921,12 @@ if (!app.requestSingleInstanceLock()) {
     else if (!argv.includes("--demarrage")) showHub();
   });
   app.on("open-url", (e, url) => { e.preventDefault(); handleLink(url); });   // (Mac)
+  app.on("activate", () => {
+    // Dock click. Launching also activates, before the console page exists: that one stays quiet
+    // (a session start keeps the windows hidden until the user calls JARVIS).
+    if (!hub || hub.isDestroyed() || !String(hub.webContents.getURL()).startsWith("http://127.0.0.1")) return;
+    showHub();
+  });
   app.on("before-quit", () => { quitting = true; });
   app.on("will-quit", () => globalShortcut.unregisterAll());
   app.on("window-all-closed", () => { if (!tray) quit(); });

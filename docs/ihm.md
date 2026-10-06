@@ -46,6 +46,12 @@ directement.
   le donne) ; un clic déplie toutes les étapes. Le statut d'une discussion active porte le compteur
   (« En cours · 3/7 ») partout où il s'affiche, et le titre de la fenêtre native aussi. La liste
   d'un sous-agent ne remplace pas celle de l'agent principal.
+- **Modifier un fichier texte** ([static/js/viewer.js](../static/js/viewer.js)) : l'aperçu d'un texte,
+  Markdown, CSV, JSON, YAML ou format proche a un bouton Modifier. Le fichier s'édite dans la fenêtre
+  (le Markdown et le CSV reviennent en aperçu au bouton Aperçu) et Ctrl+S l'enregistre. Fermer ou
+  revenir à l'aperçu avec des modifications demande confirmation. Si le fichier change sur le disque
+  pendant l'édition, Jarvis le signale et ne remplace la version du disque qu'avec accord. Un binaire,
+  un fichier trop gros, un type qui n'est pas du texte ou un chemin protégé ne s'écrit pas.
 - **Ouvrir un fichier au bon endroit** ([static/js/highlight.js](../static/js/highlight.js)) : `afficher`
   accepte `passage` (quelques mots exacts) et `page`. L'aperçu (Word, Excel, texte, Markdown, mail) fait
   défiler jusqu'au passage et le surligne ; un PDF s'ouvre à la page. La recherche ignore les accents,

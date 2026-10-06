@@ -1,7 +1,7 @@
 // Project = a working folder of an account, like a claude.ai Project: its instructions
 // (CLAUDE.md of the folder and of the account), what Claude remembers there, its files and
 // its discussions. The panel follows the folder chosen in the request bar.
-import { renderActions } from "./actions.js";
+import { actionStamp, renderActions } from "./actions.js";
 import { api } from "./api.js";
 import { fmtSize } from "./attach.js";
 import { pickFolder } from "./folderpicker.js";
@@ -12,6 +12,7 @@ import { odooChanged, renderOdoo } from "./odoo.js";
 import { projectTint } from "./tint.js";
 import { $, STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
+import * as wm from "./wm.js";
 
 const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["suivi", "Suivi"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
@@ -19,6 +20,8 @@ const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).po
 const join = (a, b) => (a ? `${a}/${b}` : b);
 
 let ctx = null, ws = null, tab = "instructions", sub = "", note = null, loading = false;
+let epoch = 0, paintGen = 0, wsParts = null, fileSig = null, filesGen = 0, sessionSig = null;
+let liveTimer = 0, liveRunning = false, liveAgain = false;
 const el = () => $("#project");
 
 export function toggleProject(context) {
@@ -38,7 +41,7 @@ export function showProject(context, { folder = null, tab: on = "tasks" } = {}) 
   if (d.hidden) { ctx.closeDrawers?.("project"); d.hidden = false; }
   tab = on;
   note = null;
-  if (folder && ws && fkey(ws.folder) === fkey(folder)) { render(); return; }
+  if (folder && ws && fkey(ws.folder) === fkey(folder)) { render(); projectDiskChanged(); return; }
   load(folder, false);
 }
 
@@ -47,7 +50,11 @@ export function projectFollow() { if (ctx && !el().hidden) load(); }
 
 /** Projects or routines changed (an action added or validated, a routine accepted): the Actions tab follows,
  * and the Suivi tab (an Odoo project linked from a discussion). */
-export function projectActionsChanged() { if (ctx && ws && !el().hidden && (tab === "actions" || tab === "suivi")) render(); }
+export function projectActionsChanged() {
+  if (!ctx || !ws || el().hidden) return;
+  if (tab === "actions" || tab === "suivi") render();
+  else syncBadges();
+}
 /** A discussion was archived or brought back: the Discussions tab follows. */
 export function projectTasksChanged() { if (ctx && ws && !el().hidden && tab === "tasks") render(); }
 
@@ -60,6 +67,9 @@ export function projectSuiviChanged({ folder } = {}) {
 }
 
 async function load(folder = null, follow = true) {
+  const mine = ++epoch;
+  fileSig = null;
+  sessionSig = null;
   loading = true;
   render();
   const f = folder ?? ctx.workdir();
@@ -68,9 +78,18 @@ async function load(folder = null, follow = true) {
   const q = new URLSearchParams({ profile: pid });
   if (f) q.set("folder", f);
   try {
-    ws = await api(`/api/workspace?${q}`);
+    const fresh = await api(`/api/workspace?${q}`);
+    if (mine !== epoch) return;
+    ws = fresh;
+    wsParts = partSigs(ws);
     if (folder !== null && follow) ctx.setWorkdir(ws.folder, ws.folder === ws.folders[0]);
-  } catch (e) { toast(e.message, "err"); ws = null; }
+  } catch (e) {
+    if (mine !== epoch) return;
+    toast(e.message, "err");
+    ws = null;
+    wsParts = null;
+  }
+  if (mine !== epoch) return;
   sub = "";
   note = null;
   loading = false;
@@ -82,6 +101,228 @@ const scope = () => ({ profile: ws.profile, folder: ws.folder });
 const tint = () => (ws ? projectTint(ws.folder, ws.profile) : null);
 const fkey = (f) => String(f || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 const notesHere = (folder) => allNotes().filter((n) => fkey(n.folder) === fkey(folder)).length;
+
+// ------------------------------------------------------------ live refresh
+// The panel used to read the folder once, when it opened. A file Claude writes, a memory note, a rule
+// or a command showed up only after a restart. While the panel is open it now re-reads, quietly:
+// right after a tool runs, every few seconds, and when its window comes back to the front. A text
+// the user is editing is left alone.
+
+const docOf = (d) => `${d?.exists ? 1 : 0}:${d?.text || ""}`;
+function partSigs(w) {
+  if (!w) return null;
+  return {
+    memory: (w.memory?.files || []).map((f) => `${f.name}\t${f.size}\t${f.mtime}`).join("\n"),
+    rules: (w.rules || []).map((r) => `${r.pattern}\t${r.created}`).join("\n"),
+    instructions: [docOf(w.instructions?.folder), docOf(w.instructions?.profile)].join("\n--\n"),
+    jarvis: w.jarvis_instructions || "",
+  };
+}
+
+function panelOpen() {
+  const d = el();
+  return !!(ctx && ws && d && !d.hidden && d.ownerDocument.visibilityState !== "hidden");
+}
+
+/** A tool just ran, or the panel's window came forward: look at the folder again, soon. */
+export function projectDiskChanged() {
+  if (!ctx || el()?.hidden) return;
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(liveRefresh, 300);
+}
+
+setInterval(() => { if (panelOpen()) liveRefresh(); }, 3000);
+wm.onDocument((doc) => doc.addEventListener("visibilitychange", () => {
+  if (doc.visibilityState === "visible" && el()?.ownerDocument === doc) projectDiskChanged();
+}));
+
+function editing() {
+  const d = el();
+  if (!d) return false;
+  return [...d.querySelectorAll("textarea.pj-text")].some((area) => {
+    const btn = (area.closest("section") || area.parentElement)?.querySelector("button.primary");
+    return btn && !btn.disabled;
+  });
+}
+
+function tabCount(id) {
+  const proj = ctx.project(ws.folder);
+  const toReview = (proj?.actions || []).filter((a) => a.status !== "ok").length;
+  if (id === "memory") return ws.memory.files.length ? { n: ws.memory.files.length } : null;
+  if (id === "rules") return ws.rules?.length ? { n: ws.rules.length } : null;
+  if (id === "actions") return toReview ? { n: toReview, warn: true, title: "Actions à valider" } : null;
+  if (id === "notes") { const n = notesHere(ws.folder); return n ? { n } : null; }
+  if (id === "suivi") return proj?.odoo?.length ? { n: proj.odoo.length } : null;
+  return null;
+}
+
+function countNode(c) {
+  return h("span", { class: c.warn ? "cnt warn" : "cnt", ...(c.title ? { title: c.title } : {}) }, String(c.n));
+}
+
+function syncBadges() {
+  const root = el()?.querySelector(".pj-tabs");
+  if (!root || !ws) return;
+  for (const [id] of TABS) {
+    const btn = root.querySelector(`button[data-tab="${id}"]`);
+    if (!btn) continue;
+    const c = tabCount(id);
+    const span = btn.querySelector(".cnt");
+    if (!c) { span?.remove(); continue; }
+    if (!span) btn.append(countNode(c));
+    else {
+      span.textContent = String(c.n);
+      span.className = c.warn ? "cnt warn" : "cnt";
+      if (c.title) span.title = c.title; else span.removeAttribute("title");
+    }
+  }
+}
+
+function redraw() {
+  const top = el().querySelector(".pj-body")?.scrollTop || 0;
+  render();
+  const body = el().querySelector(".pj-body");
+  if (body) body.scrollTop = top;
+}
+
+async function liveRefresh() {
+  if (!panelOpen() || loading || editing()) return;
+  if (liveRunning) { liveAgain = true; return; }
+  liveRunning = true;
+  const mine = epoch;
+  try {
+    await refreshWorkspace(mine);
+    if (mine !== epoch || !panelOpen() || editing()) return;
+    if (tab === "files") await refreshFileList(mine);
+    else if (tab === "tasks") await refreshSessions(mine);
+    else if (tab === "actions") await refreshActions(mine);
+    if (mine === epoch && panelOpen()) syncBadges();
+  } catch { /* the next pass tries again; a manual refresh still reports the error */ }
+  finally {
+    liveRunning = false;
+    if (liveAgain) { liveAgain = false; if (mine === epoch) liveRefresh(); }
+  }
+}
+
+async function refreshWorkspace(mine) {
+  const fresh = await api(`/api/workspace?${new URLSearchParams({ profile: ws.profile, folder: ws.folder })}`);
+  if (mine !== epoch || !panelOpen() || editing()) return;
+  const next = partSigs(fresh);
+  const prev = wsParts;
+  if (!prev || !next || (prev.memory === next.memory && prev.rules === next.rules
+    && prev.instructions === next.instructions && prev.jarvis === next.jarvis)) return;
+  const old = ws;
+  ws = fresh;
+  wsParts = next;
+  if (editing()) { ws = old; wsParts = prev; return; }
+  if (tab === "memory" && prev.memory !== next.memory) {
+    if (note) await followOpenNote(old, fresh, mine);
+    else redraw();
+  } else if (tab === "rules" && prev.rules !== next.rules) redraw();
+  else if (tab === "instructions" && (prev.instructions !== next.instructions || prev.jarvis !== next.jarvis)
+    && !instructionsOnScreen(fresh, prev.jarvis === next.jarvis)) redraw();
+}
+
+/** The consignes on screen already are the ones just read (the user saved them): don't rebuild the editors. */
+function instructionsOnScreen(fresh, jarvisSame) {
+  if (!jarvisSame) return false;
+  const areas = [...el().querySelectorAll(".pj-body textarea.pj-text")];
+  return areas.length >= 2 && areas[0].value === (fresh.instructions?.folder?.text || "")
+    && areas[1].value === (fresh.instructions?.profile?.text || "");
+}
+
+async function followOpenNote(old, fresh, mine) {
+  const was = (old.memory?.files || []).find((f) => f.name === note?.name);
+  const now = (fresh.memory?.files || []).find((f) => f.name === note?.name);
+  if (!now) {
+    if (mine !== epoch || editing()) return;
+    note = null;
+    redraw();
+    return;
+  }
+  if (was && was.mtime === now.mtime && was.size === now.size) return;
+  const n = await api(`/api/workspace/memory?${new URLSearchParams({ ...scope(), name: now.name })}`);
+  if (mine !== epoch || tab !== "memory" || !note || note.name !== now.name || editing()) return;
+  if (n.text === note.text) return;
+  note.text = n.text;
+  const area = el().querySelector("textarea.pj-text");
+  if (area) area.value = n.text;
+}
+
+function fileSignature(res) {
+  return `${res.sub}\n${res.truncated ? 1 : 0}\n${res.entries.map((e) => `${e.dir ? "d" : "f"}\t${e.name}\t${e.size}\t${e.mtime}`).join("\n")}`;
+}
+
+function fileRows(res) {
+  const rows = res.entries.map((e) => {
+    const rel = join(res.sub, e.name);
+    const act = (label, title, fn) => h("button", { type: "button", class: "btn small ghost", title,
+      on: { click: (ev) => { ev.stopPropagation(); fn(); } } }, label);
+    return h("div", { class: `hrow file${e.dir ? " dir" : ""}`, style: { "--pc": e.dir ? "var(--warn)" : "var(--border-3)" },
+      title: e.dir ? "Ouvrir le dossier" : "Aperçu",
+      on: { click: () => { if (e.dir) { sub = rel; render(); } else openPreview({ ...scope(), path: rel }); } } },
+      h("span", { class: "i", svg: e.dir ? "folder" : "file" }),
+      h("div", { class: "hm" }, h("div", { class: "ht" }, e.name), h("div", { class: "hs" }, [e.dir ? "dossier" : fmtSize(e.size), fmtDate(e.mtime)].join(" · "))),
+      e.dir ? null : act("Citer", "Ajouter son chemin à ta demande", () => ctx.mention(nativePath(rel))),
+      act("Dossier", "Afficher dans l'explorateur", () => reveal(rel, true)));
+  });
+  return [...(rows.length ? rows : [h("div", { class: "empty-row" }, "Dossier vide.")]),
+    ...(res.truncated ? [h("div", { class: "muted pad" }, "1 000 premiers éléments affichés.")] : [])];
+}
+
+async function refreshFileList(mine) {
+  if (fileSig === null || tab !== "files") return;
+  const gen = filesGen;
+  const res = await api(`/api/workspace/files?${new URLSearchParams({ ...scope(), sub })}`);
+  if (mine !== epoch || gen !== filesGen || tab !== "files" || !panelOpen()) return;
+  const sig = fileSignature(res);
+  if (sig === fileSig) return;
+  const list = el().querySelector(".pj-files");
+  if (!list) return;
+  fileSig = sig;
+  list.replaceChildren(...fileRows(res));
+}
+
+function externalSessions(sessions) {
+  const known = new Set(ctx.tasks().map((t) => t.session_id));
+  return (sessions || []).filter((r) => sameFolder(r.cwd, ws.folder) && !known.has(r.id));
+}
+function sessionSignature(rows) {
+  return [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((r) => [r.id, r.updated, r.title, r.prompts, r.origin].join("\t")).join("\n");
+}
+
+async function refreshSessions(mine) {
+  if (sessionSig === null || tab !== "tasks") return;
+  const seen = paintGen;
+  const { sessions } = await api(`/api/sessions?profile=${encodeURIComponent(ws.profile)}`);
+  if (mine !== epoch || paintGen !== seen || tab !== "tasks" || sessionSig === null || !panelOpen()) return;
+  const sig = sessionSignature(externalSessions(sessions));
+  if (sig === sessionSig) return;
+  redraw();
+}
+
+async function refreshActions(mine) {
+  const before = el().querySelector(".pj-body")?.dataset.live;
+  if (!before || tab !== "actions") return;
+  const seen = paintGen;
+  const proj = ctx.project(ws.folder);
+  if (!proj) {
+    if (before !== "noproj" && mine === epoch && paintGen === seen && tab === "actions") redraw();
+    return;
+  }
+  const res = await api(`/api/projects/actions?${new URLSearchParams({ folder: proj.folder, profile: ctx.currentProfile?.() || "" })}`);
+  if (mine !== epoch || paintGen !== seen || tab !== "actions") return;
+  const acc = ctx.profiles().find((p) => p.id === (proj.profile || ctx.currentProfile?.()));
+  let account;
+  if (acc?.account_actions) {
+    try { account = (await api(`/api/accounts/${acc.id}/actions`)).actions || []; }
+    catch { account = null; }
+  }
+  if (mine !== epoch || paintGen !== seen || tab !== "actions") return;
+  if (el().querySelector(".pj-body")?.dataset.live === actionStamp(res.actions, res.routines, account)) return;
+  redraw();
+}
 
 function renderNotes(body) {
   if (!ctx.project(ws.folder)) {
@@ -103,6 +344,7 @@ async function browse() {
 }
 
 function render() {
+  paintGen++;
   const d = el();
   if (d.hidden) return;
   const proj = ws ? ctx.project(ws.folder) : null;
@@ -117,19 +359,17 @@ function render() {
     h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { d.hidden = true; } } }));
   if (!ws) { d.replaceChildren(head, h("div", { class: "empty-row" }, loading ? "Chargement…" : "Projet indisponible.")); return; }
   const folders = [...new Set([...ws.folders, ...ctx.workdirOptions(), ws.folder])];
-  const toReview = (proj?.actions || []).filter((a) => a.status !== "ok").length;
   const sel = h("select", { class: "pj-folder", title: ws.folder }, ...folders.map((f, i) =>
     h("option", { value: f, title: f }, i === 0 ? `${baseName(f)} (dossier du compte)` : baseName(f))),
     h("option", { value: "__other__" }, "Autre dossier…"));
   sel.value = ws.folder;
   sel.addEventListener("change", () => (sel.value === "__other__" ? browse() : load(sel.value)));
-  const tabs = h("div", { class: "pj-tabs", role: "tablist" }, ...TABS.map(([id, label]) => h("button", {
-    type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id),
-    on: { click: () => { tab = id; note = null; render(); } } }, label, id === "memory" && ws.memory.files.length ? h("span", { class: "cnt" }, String(ws.memory.files.length))
-      : id === "rules" && ws.rules?.length ? h("span", { class: "cnt" }, String(ws.rules.length))
-      : id === "actions" && toReview ? h("span", { class: "cnt warn", title: "Actions à valider" }, String(toReview))
-      : id === "notes" && notesHere(ws.folder) ? h("span", { class: "cnt" }, String(notesHere(ws.folder)))
-      : id === "suivi" && proj?.odoo?.length ? h("span", { class: "cnt" }, String(proj.odoo.length)) : null)));
+  const tabs = h("div", { class: "pj-tabs", role: "tablist" }, ...TABS.map(([id, label]) => {
+    const c = tabCount(id);
+    return h("button", {
+      type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id), "data-tab": id,
+      on: { click: () => { tab = id; note = null; render(); projectDiskChanged(); } } }, label, c ? countNode(c) : null);
+  }));
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick), h("small", { title: ws.folder }, ws.folder)), tabs, body);
@@ -229,7 +469,9 @@ function reveal(path, show = false) {
 }
 
 async function renderFiles(body) {
-  const list = h("div", { class: "drawer-list flat" }, h("div", { class: "empty-row" }, "Lecture du dossier…"));
+  const gen = ++filesGen;
+  fileSig = null;
+  const list = h("div", { class: "drawer-list flat pj-files" }, h("div", { class: "empty-row" }, "Lecture du dossier…"));
   const crumbs = h("div", { class: "pj-crumbs" });
   body.append(crumbs, list);
   const parts = sub ? sub.split("/") : [];
@@ -238,21 +480,10 @@ async function renderFiles(body) {
       h("button", { type: "button", class: "lnk", on: { click: () => { sub = parts.slice(0, i + 1).join("/"); render(); } } }, p)]));
   let res;
   try { res = await api(`/api/workspace/files?${new URLSearchParams({ ...scope(), sub })}`); }
-  catch (e) { list.replaceChildren(h("div", { class: "line err" }, e.message)); return; }
-  const rows = res.entries.map((e) => {
-    const rel = join(res.sub, e.name);
-    const act = (label, title, fn) => h("button", { type: "button", class: "btn small ghost", title,
-      on: { click: (ev) => { ev.stopPropagation(); fn(); } } }, label);
-    return h("div", { class: `hrow file${e.dir ? " dir" : ""}`, style: { "--pc": e.dir ? "var(--warn)" : "var(--border-3)" },
-      title: e.dir ? "Ouvrir le dossier" : "Aperçu",
-      on: { click: () => { if (e.dir) { sub = rel; render(); } else openPreview({ ...scope(), path: rel }); } } },
-      h("span", { class: "i", svg: e.dir ? "folder" : "file" }),
-      h("div", { class: "hm" }, h("div", { class: "ht" }, e.name), h("div", { class: "hs" }, [e.dir ? "dossier" : fmtSize(e.size), fmtDate(e.mtime)].join(" · "))),
-      e.dir ? null : act("Citer", "Ajouter son chemin à ta demande", () => ctx.mention(nativePath(rel))),
-      act("Dossier", "Afficher dans l'explorateur", () => reveal(rel, true)));
-  });
-  list.replaceChildren(...(rows.length ? rows : [h("div", { class: "empty-row" }, "Dossier vide.")]),
-    ...(res.truncated ? [h("div", { class: "muted pad" }, "1 000 premiers éléments affichés.")] : []));
+  catch (e) { if (gen === filesGen && list.isConnected) list.replaceChildren(h("div", { class: "line err" }, e.message)); return; }
+  if (gen !== filesGen || !list.isConnected) return;
+  fileSig = fileSignature(res);
+  list.replaceChildren(...fileRows(res));
 }
 
 // ------------------------------------------------------------ discussions
@@ -311,7 +542,7 @@ async function resumeHere(r) {
 let showArchived = false;
 
 function renderTasks(body) {
-  const all = ctx.tasks().filter((t) => t.profile === ws.profile && sameFolder(t.workdir, ws.folder) && t.origin !== "reglage")
+  const all = ctx.tasks().filter((t) => t.profile === ws.profile && sameFolder(t.workdir, ws.folder) && t.origin !== "reglage" && !t.ephemeral)
     .sort((a, b) => (b.created || 0) - (a.created || 0));
   const archived = all.filter((t) => t.archived);
   const mine = showArchived ? archived : all.filter((t) => !t.archived);
@@ -345,9 +576,12 @@ function renderTasks(body) {
   h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small", on: { click: () => ctx.sessions() } },
     "Toutes les sessions du compte…")));
   // sessions of this folder not driven by the console (Claude Desktop, CLI)
-  const known = new Set(ctx.tasks().map((t) => t.session_id));
+  sessionSig = null;
+  const ticket = epoch;
   api(`/api/sessions?profile=${encodeURIComponent(ws.profile)}`).then(({ sessions }) => {
-    const rows = (sessions || []).filter((r) => sameFolder(r.cwd, ws.folder) && !known.has(r.id));
+    if (ticket !== epoch || !others.isConnected) return;
+    const rows = externalSessions(sessions);
+    sessionSig = sessionSignature(rows);
     others.replaceChildren(...rows.map((r) => h("div", { class: "hrow", style: { "--pc": "var(--violet)" } },
       h("div", { class: "hm" }, h("div", { class: "ht" }, r.title), h("div", { class: "hs" }, [ORIGIN[r.origin] || r.origin, fmtDate(r.updated),
         `${r.prompts} demande${r.prompts > 1 ? "s" : ""}`].join(" · "))),

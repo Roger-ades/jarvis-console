@@ -166,6 +166,12 @@ class TaskError(Exception):
         self.message, self.status, self.extra = message, status, extra
 
 
+def file_stamp(p: Path) -> str:
+    """Changes whenever the file is written: an open preview compares it to reload itself."""
+    st = p.stat()
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
 # ---------------------------------------------------------------- event bus
 
 class Bus:
@@ -1376,6 +1382,16 @@ class Engine:
 
     def open_document_file(self, path: str, reveal: bool = False):
         self._open_path(self.document_file(path), reveal)
+
+    def save_document_file(self, path: str, text, stamp: str = "", force: bool = False) -> dict:
+        """The user edits an indexed document from its preview. Same places as the preview, and a write
+        is refused where a read is."""
+        p = self.document_file(path)
+        if self._doc_guard().forbidden_hit({"file_path": str(p)}, "Write"):
+            raise TaskError("Ce fichier est protégé par la configuration de sécurité : la console n'y écrit pas.", 403)
+        out = self._save_text_file(p, text, stamp, force)
+        self._audit("fichier modifié depuis l'aperçu", {"chemin": str(p), "caractères": len(text or "")})
+        return out
 
     @staticmethod
     def file_text(p: Path) -> dict:
@@ -3847,6 +3863,10 @@ class Engine:
     RISKY_EXT = {".exe", ".bat", ".cmd", ".com", ".scr", ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf",
                  ".wsh", ".hta", ".msi", ".msp", ".lnk", ".reg", ".cpl", ".jar", ".docm", ".xlsm", ".pptm", ".dotm",
                  ".app", ".command", ".sh", ".pkg", ".dmg", ".py", ".pyw"}
+    # Plain text the preview can save. Keep in step with TEXT in static/js/viewer.js.
+    EDITABLE_EXT = {".txt", ".text", ".md", ".markdown", ".csv", ".tsv", ".json", ".log", ".xml",
+                    ".yaml", ".yml", ".ini", ".toml", ".cfg", ".conf", ".rst"}
+    EDIT_MAX = 2_000_000
 
     def _cited(self, t: dict, asked: str, real: str) -> bool:
         """The task's own conversation (answers, tool inputs, resumed history) names this file."""
@@ -3920,6 +3940,16 @@ class Engine:
 
     def open_task_file(self, tid: str, path: str, reveal: bool = False):
         self._open_path(self.task_file(tid, path), reveal, self._get(tid))
+
+    def save_task_file(self, tid: str, path: str, text, stamp: str = "", force: bool = False) -> dict:
+        """The user edits a file of the task from its preview. Same places as the preview."""
+        t = self._get(tid)
+        p = self.task_file(tid, path)
+        if self._task_guard(t).forbidden_hit({"file_path": str(p)}, "Write"):
+            raise TaskError("Ce fichier est protégé par la configuration de sécurité : la console n'y écrit pas.", 403)
+        out = self._save_text_file(p, text, stamp, force)
+        self._audit("fichier modifié depuis l'aperçu", {"chemin": str(p), "caractères": len(text or "")}, t)
+        return out
 
     def _open_path(self, p: Path, reveal: bool, t: dict | None = None):
         if not reveal and p.suffix.lower() in self.RISKY_EXT:
@@ -4000,9 +4030,60 @@ class Engine:
 
     def _write_doc(self, path: Path, text: str):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_bytes(path, text.encode("utf-8"))
+
+    def _write_bytes(self, path: Path, data: bytes):
         tmp = path.with_name(f".{path.name}.{secrets.token_hex(3)}.tmp")
-        tmp.write_text(text, encoding="utf-8", newline="")
-        os.replace(tmp, path)
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    def _save_text_file(self, p: Path, text, stamp: str, force: bool) -> dict:
+        """Replace a previewed text file. The version the editor opened (stamp) must still be the one on
+        disk, unless the user chooses to overwrite. Newlines and a UTF-8 BOM already there are kept."""
+        if not isinstance(text, str):
+            raise TaskError("Texte manquant.")
+        if p.suffix.lower() not in self.EDITABLE_EXT or p.suffix.lower() in self.RISKY_EXT:
+            raise TaskError("Ce type de fichier ne se modifie pas dans Jarvis.", 415)
+        if len(text) > self.EDIT_MAX:
+            raise TaskError("Texte trop long pour l'éditeur (2 000 000 caractères au plus).", 413)
+        if "\x00" in text:
+            raise TaskError("Le texte contient des données binaires.", 415)
+        try:
+            raw = p.read_bytes()
+        except FileNotFoundError:
+            raise TaskError("Fichier introuvable.", 404) from None
+        except OSError as exc:
+            raise TaskError(f"Lecture impossible : {exc.__class__.__name__}.", 500) from exc
+        if len(raw) > self.EDIT_MAX:
+            raise TaskError("Fichier trop volumineux pour l'éditeur.", 413)
+        if b"\x00" in raw:
+            raise TaskError("Ce fichier n'est pas du texte.", 415)
+        try:
+            decoded = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise TaskError("Ce fichier n'est pas du texte UTF-8. Ouvre-le avec son application.", 415) from None
+        if decoded.replace("\r\n", "\n") == text.replace("\r\n", "\n"):
+            return {"path": str(p), "stamp": file_stamp(p)}
+        current = file_stamp(p)
+        if not force and (not stamp or current != stamp):
+            raise TaskError("Ce fichier a changé sur le disque depuis son ouverture." if stamp
+                            else "Version du fichier manquante : rouvre-le.", 409, conflict=True)
+        body = text.replace("\r\n", "\n")
+        sample = raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw
+        if b"\r\n" in sample and b"\n" not in sample.replace(b"\r\n", b""):
+            body = body.replace("\n", "\r\n")
+        data = body.encode("utf-8")
+        if raw.startswith(b"\xef\xbb\xbf"):
+            data = b"\xef\xbb\xbf" + data
+        try:
+            self._write_bytes(p, data)
+        except OSError as exc:
+            raise TaskError(f"Enregistrement impossible : {exc.__class__.__name__}.", 500) from exc
+        return {"path": str(p), "stamp": file_stamp(p)}
 
     def _mem_path(self, pid: str | None, folder: str | None, name: str) -> Path:
         prof, wd = self._ws_folder(pid, folder)
@@ -4080,6 +4161,17 @@ class Engine:
             self._open_path(Path(wd), False)  # the folder itself, in the file explorer
             return
         self._open_path(self.workspace_file(pid, folder, path), reveal)
+
+    def save_workspace_file(self, pid: str | None, folder: str | None, path: str, text, stamp: str = "",
+                            force: bool = False) -> dict:
+        """The user edits a file of the project folder from its preview."""
+        _, wd = self._ws_folder(pid, folder)
+        p = self.workspace_file(pid, folder, path)
+        if self._guard(wd).forbidden_hit({"file_path": str(p)}, "Write"):
+            raise TaskError("Ce fichier est protégé par la configuration de sécurité : la console n'y écrit pas.", 403)
+        out = self._save_text_file(p, text, stamp, force)
+        self._audit("fichier modifié depuis l'aperçu", {"chemin": str(p), "caractères": len(text or "")})
+        return out
 
     # -------------------------------------------------------- folder picker (any folder of the disk)
     HIDDEN_DIRS = {"$recycle.bin", "system volume information", "$windows.~bt", "$windows.~ws", "config.msi", "recovery"}

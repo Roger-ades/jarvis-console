@@ -321,4 +321,11 @@ def test_documents_api(client):  # noqa: F811
     assert client.get("/api/documents/file", params={"path": path}, headers=hdr).status_code == 200
     assert client.get("/api/documents/text", params={"path": path}, headers=hdr).json()["text"] == "Compte rendu de réunion"
     assert client.get("/api/documents/file", params={"path": str(engine.data_dir / "token")}, headers=hdr).status_code == 403
+    note = root / "notes.md"
+    note.write_text("# Note\n", encoding="utf-8")
+    engine._sync_documents()
+    stamp = client.get("/api/documents/file", params={"path": str(note)}, headers=hdr).headers["x-file-stamp"]
+    saved = client.put("/api/documents/file", json={"path": str(note), "text": "# Note\n\nchangé\n", "stamp": stamp}, headers=hdr)
+    assert saved.status_code == 200 and "changé" in note.read_text(encoding="utf-8")
+    assert client.put("/api/documents/file", json={"path": path, "text": "x", "stamp": "1", "force": True}, headers=hdr).status_code == 415
     assert client.post("/api/documents/clear", headers=hdr).json()["total"] == 0

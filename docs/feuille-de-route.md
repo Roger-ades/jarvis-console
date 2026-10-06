@@ -152,7 +152,9 @@ partout. *Fait : [boite-de-reception.md](boite-de-reception.md).*
 ### 4. Les fichiers sans quitter Jarvis
 
 - **Différences et annulation des modifications de Claude**. *Fait, voir plus bas.*
-- Éditeur intégré pour texte, Markdown et CSV. *À faire.*
+- Éditeur intégré pour texte, Markdown et CSV. *Fait : dans l'aperçu, Modifier ouvre le fichier
+  (texte, Markdown, CSV, JSON, YAML…), Ctrl+S l'enregistre. Un fichier binaire, trop gros ou protégé
+  ne s'écrit pas ; un changement sur le disque pendant l'édition est signalé.*
 - Aperçu de Word, Excel, PowerPoint, OpenDocument et des mails `.eml`. *Fait : le texte seul
   (un tableau par feuille pour Excel), lu par la console sans dépendance, avec « Ouvrir avec
   l'application » pour la mise en forme.*

@@ -184,7 +184,7 @@ export function noticeRoot() { return noticeHost(); }
 /** The launcher: in the desktop app, its own "JARVIS" shortcuts (with its taskbar identity); else the
  * console's (it opens what Configuration → Général → Ouverture says). Returns the shortcuts' paths. */
 export async function createLauncher(api) {
-  if (window.jarvis?.createLauncher) {
+  if (window.jarvis?.createLauncher && window.jarvis.platform === "win32") {
     const r = await window.jarvis.createLauncher();
     if (r?.error) throw new Error(r.error);
     return r.paths || [];

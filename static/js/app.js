@@ -7,7 +7,7 @@ import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
 import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
-import { projectActionsChanged, projectFollow, projectSuiviChanged, projectTasksChanged, showProject, toggleProject } from "./project.js";
+import { projectActionsChanged, projectDiskChanged, projectFollow, projectSuiviChanged, projectTasksChanged, showProject, toggleProject } from "./project.js";
 import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
@@ -87,7 +87,7 @@ async function boot() {
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
     probe: ({ profile: pid, probe }) => { S.probes[pid] = { ...(S.probes[pid] || {}), ...probe }; updateProbe(pid, probe); renderPills(); },
-    config: reloadConfig, deleted: ({ id }) => { S.tasks.delete(id); closeWindow(id); renderHistory(); },
+    config: reloadConfig, deleted: ({ id }) => { S.tasks.delete(id); closeWindow(id); renderHistory(); homeChanged(); },
     reload: resync, routines: (p) => { S.routines = p.routines || S.routines; routinesChanged(p); projectActionsChanged(); }, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
     projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); projectActionsChanged(); },
     notes: notesChanged,
@@ -115,8 +115,11 @@ async function proposeDesktopApp() {
     || wm.modalOpen()) return;
   const v = await dialog({
     title: "Ouvrir JARVIS avec l'application de bureau ?",
-    body: "start.bat, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur, "
-      + "et un raccourci « JARVIS » va dans le menu Démarrer et sur le Bureau. Tu pourras revenir au navigateur dans Configuration → Général.",
+    body: window.jarvis.platform === "darwin"
+      ? "start.command, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur. "
+        + "Tu pourras revenir au navigateur dans Configuration → Général."
+      : "start.bat, le lanceur et le démarrage avec la session ouvriront cette application au lieu du navigateur, "
+        + "et un raccourci « JARVIS » va dans le menu Démarrer et sur le Bureau. Tu pourras revenir au navigateur dans Configuration → Général.",
     buttons: [{ label: "Plus tard", value: null }, { label: "Garder le navigateur", value: "non" },
       { label: "Utiliser l'application", value: "oui", cls: "primary" }],
   });
@@ -560,13 +563,16 @@ async function newProject() {
   if (saved && saved !== "deleted") { refreshProjectsUI(); useProject(saved); }
 }
 
-/** The home screen: pinned projects, discussions to pick up again, the accounts' limits. */
+/** The home screen: pinned projects, discussions to pick up again, the accounts' limits.
+ *  Setting discussions (origin "reglage": the Odoo and Office reads, no window) stay out, as in the
+ *  project's discussion list. */
 function renderHome() {
   const home = $("#home");
   if (!home) return;
   const pinned = projects().filter((p) => p.pinned);
   const touched = (t) => Math.max(t.created || 0, t.started || 0, t.ended || 0);
-  const recent = [...S.tasks.values()].filter((t) => !t.archived).sort((a, b) => touched(b) - touched(a)).slice(0, 6);
+  const recent = [...S.tasks.values()].filter((t) => !t.archived && t.origin !== "reglage" && !t.ephemeral)
+    .sort((a, b) => touched(b) - touched(a)).slice(0, 6);
   const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
     on: { click: () => { useProject(p); focusInput(); } } },
     h("b", {}, p.name),
@@ -894,13 +900,12 @@ function onTask(t, fresh = false) {
   S.tasks.set(t.id, t);
   if (!!t.archived !== !!prev?.archived && prev) {
     if (t.archived) closeWindow(t.id);
-    queueMicrotask(renderHome);
   }
   // the Discussions tab of the project panel: a new discussion, its status, its folder (moved into a project)
   if (!prev || prev.status !== t.status || prev.workdir !== t.workdir || !!t.archived !== !!prev.archived) tasksChanged();
   // a turn that ends under the user's eyes is read (its end is set now: the mark comes after it)
   if (prev && ACTIVE.has(prev.status) && !ACTIVE.has(t.status) && looking(t.id)) markTasksRead([t.id], true);
-  if (!prev) queueMicrotask(renderHome);
+  if (!prev || prev.status !== t.status || prev.title !== t.title || prev.ended !== t.ended || !!t.archived !== !!prev.archived) homeChanged();
   const w = S.windows.get(t.id);
   if (w) w.update(t);
   else if (t.status === "awaiting" && prev) openTask(t.id); // a validation always surfaces, even from a closed window
@@ -912,6 +917,7 @@ function onTask(t, fresh = false) {
 
 const actionRunsChanged = debounce(() => projectActionsChanged(), 400);
 const tasksChanged = debounce(() => projectTasksChanged(), 300);
+const homeChanged = debounce(() => renderHome(), 200);
 
 function onEvent(ev) {
   const w = S.windows.get(ev.task_id);
@@ -927,7 +933,7 @@ function onEvent(ev) {
 let followTimer = 0;
 function followFiles() {
   clearTimeout(followTimer);
-  followTimer = setTimeout(refreshPreviews, 300);
+  followTimer = setTimeout(() => { refreshPreviews(); projectDiskChanged(); }, 300);
 }
 
 /** A brief report opens in a window when the global option is on, unless the project forces yes or no. */
@@ -1165,7 +1171,7 @@ function onShortcut(e) {
   } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
     searchAnything();
-  } else if (e.ctrlKey && e.altKey && !e.shiftKey && e.code === "KeyW") {
+  } else if ((e.ctrlKey || (e.metaKey && window.jarvis?.platform === "darwin")) && e.altKey && !e.shiftKey && e.code === "KeyW") {
     e.preventDefault();
     closeAll();
   } else if (e.key === "Escape" && !elsewhere) {

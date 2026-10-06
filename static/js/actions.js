@@ -10,6 +10,16 @@ import { openRoutineEditor, setRoutineEnabled } from "./routines.js";
 import { projectTint } from "./tint.js";
 
 const STATE = { ok: "validée", nouvelle: "à valider", modifiee: "modifiée depuis sa validation" };
+
+/** What the project panel compares to know the Actions tab changed. account: the list, null if that
+ * fetch failed, omitted when the account has no actions of its own. */
+export function actionStamp(actions, routines, account) {
+  const one = (a) => [a.name, a.hash, a.status, a.model || "", a.effort || "",
+    (a.runs || []).map((r) => `${r.id}:${r.status}:${r.created}`).join(",")].join("\t");
+  const rout = (r) => [r.id, r.name, r.enabled ? 1 : 0, r.next_run || "", r.schedule_label || ""].join("\t");
+  const tail = account === undefined ? "" : account === null ? "\u0000" : account.map(one).join("\n");
+  return [(actions || []).map(one).join("\n"), (routines || []).map(rout).join("\n"), tail].join("\f");
+}
 const KIND = { commande: "Commande", skill: "Skill" };
 const EFFORT = { "": "Par défaut", low: "Faible", medium: "Moyen", high: "Élevé", xhigh: "Très élevé", max: "Max" };
 const ORIGIN = { action: "bouton", routine: "routine" };
@@ -100,6 +110,7 @@ export async function runAction(ctx, folder, a, { args = null } = {}) {
 export async function renderActions(body, ctx, ws, refresh) {
   const proj = ctx.project(ws.folder);
   if (!proj) {
+    body.dataset.live = "noproj";
     body.append(h("p", { class: "pj-lead pad" }, "Les actions et les routines appartiennent à un projet. ",
       "Donne d'abord un nom à ce dossier : ses commandes (.claude/commands) et ses skills (.claude/skills) deviendront des boutons."),
     h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small primary",
@@ -115,20 +126,31 @@ export async function renderActions(body, ctx, ws, refresh) {
       "Nouvelle routine")));
   let res;
   try { res = await api(`/api/projects/actions?${new URLSearchParams({ folder: proj.folder, profile: ctx.currentProfile?.() || "" })}`); }
-  catch (e) { list.replaceChildren(h("div", { class: "line err" }, e.message)); return; }
+  catch (e) {
+    if (list.isConnected) list.replaceChildren(h("div", { class: "line err" }, e.message));
+    if (body.isConnected) body.dataset.live = "error";
+    return;
+  }
+  if (!list.isConnected) return;
   list.replaceChildren(...(res.actions.length ? res.actions.flatMap((a) => actionRow(ctx, proj, a, refresh))
     : [h("div", { class: "empty-row" }, "Aucune action. Demande à Claude d'en proposer une, ou ajoute un fichier dans .claude/commands du dossier.")]));
   routines.replaceChildren(...(res.routines.length ? res.routines.map((r) => routineRow(ctx, proj, r, refresh))
     : [h("div", { class: "empty-row" }, "Aucune routine pour ce projet.")]));
   // the actions of the account, launched in this project's folder (once the user turned them on)
   const acc = ctx.profiles().find((p) => p.id === (proj.profile || ctx.currentProfile?.()));
-  if (!acc?.account_actions) return;
-  const own = h("div", { class: "drawer-list flat" });
-  list.after(h("div", { class: "sec-title pad" }, `Du compte ${acc.name}`), own);
-  try {
-    const { actions } = await api(`/api/accounts/${acc.id}/actions`);
-    own.replaceChildren(...accountActionRows({ ...ctx, workdir: () => proj.folder }, acc, actions, refresh));
-  } catch (e) { own.replaceChildren(h("div", { class: "line err" }, e.message)); }
+  let account;
+  if (acc?.account_actions) {
+    const own = h("div", { class: "drawer-list flat" });
+    list.after(h("div", { class: "sec-title pad" }, `Du compte ${acc.name}`), own);
+    try {
+      account = (await api(`/api/accounts/${acc.id}/actions`)).actions || [];
+      if (own.isConnected) own.replaceChildren(...accountActionRows({ ...ctx, workdir: () => proj.folder }, acc, account, refresh));
+    } catch (e) {
+      account = null;
+      if (own.isConnected) own.replaceChildren(h("div", { class: "line err" }, e.message));
+    }
+  }
+  if (body.isConnected) body.dataset.live = actionStamp(res.actions, res.routines, account);
 }
 
 function actionRow(ctx, proj, a, refresh) {

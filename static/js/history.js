@@ -49,6 +49,7 @@ export function renderHistory() {
     const needle = q.trim().toLowerCase();
     const rows = ctx.tasks().filter((t) => (!profile || t.profile === profile) && (!status || t.status === status)
       && (shelf === "all" || (shelf === "archived" ? t.archived : !t.archived))
+      && t.origin !== "reglage" && !t.ephemeral
       && (!needle || `${t.title} ${t.prompt}`.toLowerCase().includes(needle)));
     for (const id of [...picked]) if (!rows.some((t) => t.id === id)) picked.delete(id);
     list.replaceChildren(...(rows.length ? rows.map((t) => {

@@ -25,7 +25,7 @@ from starlette.datastructures import MutableHeaders
 from . import __version__, attachments, claude_cli, content, mcp, updater, winsys
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors, web_domain)
-from .engine import Engine, TaskError
+from .engine import Engine, TaskError, file_stamp
 from .permissions import LOCKED_RULES
 from .store import Store
 
@@ -190,12 +190,6 @@ class Guard:
             await send(message)
 
         await self.app(scope, receive, send_headers)
-
-
-def file_stamp(p: Path) -> str:
-    """Changes whenever the file is written: an open preview compares it to reload itself."""
-    st = p.stat()
-    return f"{st.st_mtime_ns}-{st.st_size}"
 
 
 def preview_response(p: Path, stat: bool = False):
@@ -739,6 +733,12 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def workspace_file(path: str, profile: str | None = None, folder: str | None = None, stat: bool = False):
         return preview_response(engine.workspace_file(profile, folder, path), stat)
 
+    @app.put("/api/workspace/file")
+    def workspace_file_save(body: dict = Body(...)):
+        return engine.save_workspace_file(body.get("profile"), body.get("folder"), str(body.get("path") or ""),
+                                          body.get("text"), stamp=str(body.get("stamp") or ""),
+                                          force=bool(body.get("force")))
+
     @app.get("/api/workspace/frame")
     def workspace_frame(path: str, profile: str | None = None, folder: str | None = None, remote: bool = False):
         return engine.workspace_frame(profile, folder, path, remote)
@@ -776,6 +776,11 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def document_open(body: dict = Body(...)):
         engine.open_document_file(str(body.get("path") or ""), reveal=bool(body.get("reveal")))
         return {"ok": True}
+
+    @app.put("/api/documents/file")
+    def document_file_save(body: dict = Body(...)):
+        return engine.save_document_file(str(body.get("path") or ""), body.get("text"),
+                                         stamp=str(body.get("stamp") or ""), force=bool(body.get("force")))
 
     @app.get("/api/limits")
     def limits():
@@ -831,6 +836,11 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.get("/api/tasks/{tid}/file")
     def task_file(tid: str, path: str, stat: bool = False):
         return preview_response(engine.task_file(tid, path), stat)
+
+    @app.put("/api/tasks/{tid}/file")
+    def task_file_save(tid: str, body: dict = Body(...)):
+        return engine.save_task_file(tid, str(body.get("path") or ""), body.get("text"),
+                                     stamp=str(body.get("stamp") or ""), force=bool(body.get("force")))
 
     @app.get("/api/tasks/{tid}/frame")
     def task_frame(tid: str, path: str, remote: bool = False):

@@ -148,3 +148,50 @@ def test_open_with_the_default_application(client, task, monkeypatch):  # noqa: 
     assert client.post(url, json={"path": "lancer.bat", "reveal": True}, headers=h).status_code == 200
     assert calls and calls[-1][0] == "popen"
     assert client.post(url, json={"path": ".env", "reveal": True}, headers=h).status_code == 403
+
+
+def test_a_text_file_can_be_edited_from_its_preview(client, task, tmp_path):  # noqa: F811
+    """Markdown, CSV and the other plain-text types save in place. Newlines and a BOM stay.
+    A protected file, a program, a binary or a file outside the task is never written."""
+    h = {"X-Console-Token": client.token}
+    url = f"/api/tasks/{task['id']}/file"
+    wd = Path(task["workdir"])
+    notes = wd / "notes.md"
+    notes.write_bytes("\ufeff# Bonjour\r\n\r\nligne\r\n".encode("utf-8"))
+    opened = client.get(url, params={"path": "notes.md"}, headers=h)
+    stamp = opened.headers["x-file-stamp"]
+    assert client.put(url, json={"path": "notes.md", "text": "# Bonjour\n\nligne changée\n", "stamp": stamp}).status_code == 401
+    saved = client.put(url, json={"path": "notes.md", "text": "# Bonjour\n\nligne changée\n", "stamp": stamp}, headers=h)
+    assert saved.status_code == 200, saved.text
+    raw = notes.read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf") and raw.endswith("changée\r\n".encode("utf-8")) and b"\n" not in raw.replace(b"\r\n", b"")
+    same = client.put(url, json={"path": "notes.md", "text": "# Bonjour\n\nligne changée\n", "stamp": saved.json()["stamp"]}, headers=h)
+    assert same.status_code == 200 and same.json()["stamp"] == saved.json()["stamp"] and notes.read_bytes() == raw
+    notes.write_text("autre\n", encoding="utf-8")
+    conflict = client.put(url, json={"path": "notes.md", "text": "nouveau\n", "stamp": saved.json()["stamp"]}, headers=h)
+    assert conflict.status_code == 409 and conflict.json()["conflict"] is True and notes.read_text(encoding="utf-8") == "autre\n"
+    forced = client.put(url, json={"path": "notes.md", "text": "forcé\n", "stamp": saved.json()["stamp"], "force": True}, headers=h)
+    assert forced.status_code == 200 and notes.read_text(encoding="utf-8") == "forcé\n"
+    csv = wd / "tarifs.csv"
+    csv.write_text("a;b\n1;2\n", encoding="utf-8")
+    csv_stamp = client.get(url, params={"path": "tarifs.csv"}, headers=h).headers["x-file-stamp"]
+    assert client.put(url, json={"path": "tarifs.csv", "text": "a;b\n1;3\n", "stamp": csv_stamp}, headers=h).status_code == 200
+    assert csv.read_text(encoding="utf-8") == "a;b\n1;3\n"
+    assert client.put(url, json={"path": "notes.md", "stamp": forced.json()["stamp"]}, headers=h).status_code == 400
+    assert client.put(url, json={"path": "notes.md", "text": "x" * 2_000_001, "stamp": forced.json()["stamp"]}, headers=h).status_code == 413
+    assert client.put(url, json={"path": "img/photo.png", "text": "x", "stamp": "1"}, headers=h).status_code == 415
+    assert client.put(url, json={"path": "lancer.bat", "text": "x", "stamp": "1"}, headers=h).status_code == 415
+    assert client.put(url, json={"path": ".env", "text": "x", "stamp": "1"}, headers=h).status_code == 403
+    assert notes.read_text(encoding="utf-8") == "forcé\n"
+    outside = tmp_path / "ailleurs.txt"
+    outside.write_text("non", encoding="utf-8")
+    assert client.put(url, json={"path": str(outside), "text": "oui", "stamp": "1", "force": True}, headers=h).status_code == 403
+    assert outside.read_text(encoding="utf-8") == "non"
+    latin = wd / "latin.txt"
+    latin.write_bytes("café".encode("latin-1"))
+    assert client.put(url, json={"path": "latin.txt", "text": "cafe", "stamp": "1", "force": True}, headers=h).status_code == 415
+    assert latin.read_bytes() == "café".encode("latin-1")
+    huge = wd / "gros.txt"
+    huge.write_text("x" * 2_000_001, encoding="utf-8")
+    assert client.put(url, json={"path": "gros.txt", "text": "y", "stamp": "1", "force": True}, headers=h).status_code == 413
+    assert huge.read_text(encoding="utf-8").startswith("x")

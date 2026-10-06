@@ -184,3 +184,19 @@ def test_open_from_the_project_never_runs_a_program(client, monkeypatch):  # noq
     assert client.post("/api/workspace/file/open", json={**body, "reveal": True}, headers=h).status_code == 200
     assert client.post("/api/workspace/file/open", json={**body, "path": ""}, headers=h).status_code == 200
     assert len(calls) == 2
+
+
+def test_a_project_text_file_can_be_edited_from_its_preview(client):  # noqa: F811
+    h = {"X-Console-Token": client.token}
+    folder = Path(client.get("/api/workspace", params={"profile": "work"}, headers=h).json()["folder"])
+    notes = folder / "notes.md"
+    notes.write_text("# Notes\n", encoding="utf-8")
+    (folder / ".env").write_text("SECRET=1", encoding="utf-8")
+    q = {"profile": "work", "folder": str(folder), "path": "notes.md"}
+    stamp = client.get("/api/workspace/file", params=q, headers=h).headers["x-file-stamp"]
+    saved = client.put("/api/workspace/file", json={**q, "text": "# Notes\n\n- relance\n", "stamp": stamp}, headers=h)
+    assert saved.status_code == 200, saved.text
+    assert notes.read_text(encoding="utf-8") == "# Notes\n\n- relance\n"
+    refused = client.put("/api/workspace/file", json={**q, "path": ".env", "text": "SECRET=2", "stamp": stamp, "force": True}, headers=h)
+    assert refused.status_code == 403 and (folder / ".env").read_text(encoding="utf-8") == "SECRET=1"
+    assert client.put("/api/workspace/file", json={**q, "path": "../x.md", "text": "x", "stamp": stamp, "force": True}, headers=h).status_code == 403

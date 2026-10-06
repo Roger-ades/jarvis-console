@@ -1,16 +1,19 @@
 // Preview of files and links: images, PDF, local HTML (no scripts), text/CSV/JSON,
-// and web pages in a sandboxed frame. Local files come from the task's folders
-// through the console (token header), as blob URLs.
+// and web pages in a sandboxed frame. Text files (Markdown, CSV, JSON, …) can be
+// edited in the same window and saved back. Local files come from the task's
+// folders through the console (token header), as blob URLs.
 import { api } from "./api.js";
 import { highlight } from "./highlight.js";
 import { mdElement } from "./md.js";
-import { copyText, dialog, downloadBlob, h, toast } from "./util.js";
+import { confirmDialog, copyText, dialog, downloadBlob, h, ICONS, toast } from "./util.js";
 import { projectFor, projects as allProjects } from "./projects.js";
 import { colorOf, paint } from "./tint.js";
 import * as wm from "./wm.js";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
-const TEXT = /\.(txt|md|csv|tsv|json|log|xml)$/i;
+// Plain text the preview can edit. Keep in step with Engine.EDITABLE_EXT.
+const TEXT = /\.(txt|text|md|markdown|csv|tsv|json|log|xml|yaml|yml|ini|toml|cfg|conf|rst)$/i;
+const EDIT_MAX = 2_000_000;
 const OFFICE = /\.(docx|docm|odt|xlsx|xlsm|ods|pptx|odp|eml)$/i;
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 
@@ -29,16 +32,17 @@ export function kindOf(name) {
 function source(opts) {
   const p = (path) => `path=${encodeURIComponent(path)}`;
   if (opts.doc) {
-    return { get: (path) => `/api/documents/file?${p(path)}`, open: "/api/documents/file/open",
+    return { get: (path) => `/api/documents/file?${p(path)}`, open: "/api/documents/file/open", save: "/api/documents/file",
       frame: (path, remote) => `/api/documents/frame?${p(path)}&remote=${remote}`, text: (path) => `/api/documents/text?${p(path)}`, extra: {} };
   }
   if (opts.folder) {
     const q = `profile=${encodeURIComponent(opts.profile || "")}&folder=${encodeURIComponent(opts.folder)}`;
-    return { get: (path) => `/api/workspace/file?${q}&${p(path)}`, open: "/api/workspace/file/open",
+    return { get: (path) => `/api/workspace/file?${q}&${p(path)}`, open: "/api/workspace/file/open", save: "/api/workspace/file",
       frame: (path, remote) => `/api/workspace/frame?${q}&${p(path)}&remote=${remote}`, text: (path) => `/api/workspace/text?${q}&${p(path)}`,
       extra: { profile: opts.profile, folder: opts.folder } };
   }
   return { get: (path) => `/api/tasks/${opts.taskId}/file?${p(path)}`, open: `/api/tasks/${opts.taskId}/file/open`,
+    save: `/api/tasks/${opts.taskId}/file`,
     frame: (path, remote) => `/api/tasks/${opts.taskId}/frame?${p(path)}&remote=${remote}`, text: (path) => `/api/tasks/${opts.taskId}/text?${p(path)}`, extra: {} };
 }
 
@@ -52,7 +56,7 @@ async function officeText(src, path, openWith) {
   const body = tabular
     ? h("div", { class: "pv-text" }, ...r.text.split(/\n\n(?=Feuille « )/).map((sheet) => {
       const [head, ...rows] = sheet.split("\n");
-      return h("div", { class: "pv-sheet" }, h("h4", {}, head), csvTable(rows.join("\n")));
+      return h("div", { class: "pv-sheet" }, h("h4", {}, head), csvTable(rows.join("\n"), "\t"));
     }))
     : h("pre", { class: "pv-pre" }, r.text);
   return h("div", {}, note, body);
@@ -112,12 +116,99 @@ export function revealImage(btn) {
   btn.replaceWith(img);
 }
 
-function csvTable(text) {
-  const sep = (text.split("\n")[0].match(/;/g) || []).length > (text.split("\n")[0].match(/,/g) || []).length ? ";" : text.includes("\t") ? "\t" : ",";
+function csvTable(text, sep = "") {
+  if (!sep) {
+    const head = text.split("\n")[0] || "";
+    const semis = (head.match(/;/g) || []).length;
+    sep = semis > (head.match(/,/g) || []).length ? ";" : text.includes("\t") ? "\t" : ",";
+  }
   const rows = text.split(/\r?\n/).filter(Boolean).slice(0, 501).map((l) => l.split(sep));
-  const table = h("table", { class: "csv" }, h("thead", {}, h("tr", {}, ...(rows[0] || []).map((c) => h("th", {}, c)))),
-    h("tbody", {}, ...rows.slice(1).map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c))))));
+  const n = rows.reduce((m, r) => Math.max(m, r.length), 0);
+  const cols = Array.from({ length: n }, () => h("col"));
+  const cell = (tag, value) => h(tag, value ? { title: value } : {}, h("span", { class: "col-label" }, value));
+  const ths = Array.from({ length: n }, (_, i) => {
+    const th = cell("th", (rows[0] || [])[i] || "");
+    th.append(h("button", { type: "button", class: "col-grip", "aria-label": "Redimensionner la colonne",
+      title: "Redimensionner la colonne. Double-clic : ajuster au contenu." }));
+    return th;
+  });
+  const table = h("table", { class: "csv" },
+    h("colgroup", {}, ...cols),
+    h("thead", {}, h("tr", {}, ...ths)),
+    h("tbody", {}, ...rows.slice(1).map((r) => h("tr", {}, ...Array.from({ length: n }, (_, i) => cell("td", r[i] || ""))))));
+  ths.forEach((th, i) => bindColResize(table, th, i));
   return h("div", { class: "md" }, table, rows.length > 500 ? h("p", { class: "muted" }, "500 premières lignes.") : null);
+}
+
+/** Drag the header edge to set a column width. Widths stay as they are until the first drag. */
+function bindColResize(table, th, index) {
+  const grip = th.querySelector(".col-grip");
+  const freeze = () => {
+    const cols = [...table.querySelectorAll("col")];
+    [...table.tHead.rows[0].cells].forEach((cell, k) => {
+      cols[k].style.width = `${Math.max(36, Math.round(cell.getBoundingClientRect().width))}px`;
+    });
+    table.style.tableLayout = "fixed";
+    table.style.width = `${cols.reduce((s, c) => s + parseFloat(c.style.width), 0)}px`;
+    return cols;
+  };
+  const fit = () => {
+    const doc = table.ownerDocument;
+    const sample = table.rows[0]?.cells[index];
+    if (!sample) return 72;
+    const probe = doc.createElement("span");
+    const font = doc.defaultView.getComputedStyle(sample).font;
+    probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${font};padding:0 10px`;
+    doc.body.append(probe);
+    let max = 72;
+    for (const row of table.rows) {
+      probe.textContent = row.cells[index]?.textContent || "";
+      max = Math.max(max, probe.offsetWidth + 18);
+    }
+    probe.remove();
+    return Math.min(max, 720);
+  };
+  grip.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cols = freeze();
+    const startX = e.clientX, startW = parseFloat(cols[index].style.width);
+    const doc = table.ownerDocument;
+    doc.documentElement.classList.add("col-resizing");
+    const move = (ev) => {
+      cols[index].style.width = `${Math.max(36, Math.round(startW + ev.clientX - startX))}px`;
+      table.style.width = `${cols.reduce((s, c) => s + parseFloat(c.style.width), 0)}px`;
+    };
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      doc.documentElement.classList.remove("col-resizing");
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+    try { grip.setPointerCapture(e.pointerId); } catch { /* the move listeners still follow the pointer */ }
+  });
+  grip.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const cols = freeze();
+    cols[index].style.width = `${fit()}px`;
+    table.style.width = `${cols.reduce((s, c) => s + parseFloat(c.style.width), 0)}px`;
+  });
+}
+
+/** UTF-8 text small enough to edit and save whole. Null when the file is binary, too big, or not UTF-8. */
+async function editableText(b) {
+  if (!b || b.size > EDIT_MAX) return null;
+  const bytes = new Uint8Array(await b.arrayBuffer());
+  if (bytes.includes(0)) return null;
+  let i = 0;
+  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) i = 3;
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(i)); }
+  catch { return null; }
 }
 
 // Previews open as windows of the desktop (move, resize, enlarge, several side by side).
@@ -173,7 +264,16 @@ export async function openPreview(opts) {
   const body = h("div", { class: "pv-body" }, h("div", { class: "muted pv-wait" }, "Chargement…"));
   const actions = h("div", { class: "pv-actions" });
   const title = opts.path ? baseName(opts.path) : opts.url;
-  const close = () => { wm.unregister(id); open.delete(key); closers.delete(id); live.delete(id); aimers.delete(id); urls.forEach((u) => URL.revokeObjectURL(u)); };
+  let dirty = false, closing = false;
+  const close = async () => {
+    if (closing) return;
+    closing = true;
+    if (dirty) {
+      const ok = await confirmDialog("Modifications non enregistrées", `Fermer ${title} sans enregistrer ?`, "Fermer sans enregistrer", "danger", opts.color);
+      if (!ok) { closing = false; return; }
+    }
+    wm.unregister(id); open.delete(key); closers.delete(id); live.delete(id); aimers.delete(id); urls.forEach((u) => URL.revokeObjectURL(u));
+  };
   closers.set(id, close);
   const btn = (label, fn, cls = "") => h("button", { type: "button", class: `btn small ${cls}`, on: { click: fn } }, label);
   const act = (icon, label, fn) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, svg: icon, on: { click: fn } });
@@ -220,8 +320,17 @@ export async function openPreview(opts) {
     try { await api(src.open, { method: "POST", body: { ...src.extra, path, reveal } }); }
     catch (e) { toast(e.message, "err"); }
   };
-  actions.append(act("external", "Ouvrir avec l'application", () => openWith(false)), act("folder", "Afficher dans le dossier", () => openWith(true)));
+  const setIcon = (button, name, label) => { button.innerHTML = ICONS[name] || ""; button.title = label; button.setAttribute("aria-label", label); };
+  let editing = false, editor = null, baseline = "", saving = false, warned = "";
+  const editBtn = act("edit", "Modifier ce fichier", () => (editing ? leaveEdit() : enterEdit()));
+  const saveBtn = act("check", "Enregistrer (Ctrl+S)", () => saveEdit());
+  editBtn.hidden = true;
+  saveBtn.hidden = true;
+  actions.append(editBtn, saveBtn, act("external", "Ouvrir avec l'application", () => openWith(false)), act("folder", "Afficher dans le dossier", () => openWith(true)));
   let blob = null, stamp = "", where = path, remote = false, first = true, busy = false, focus = opts.focus || null;
+  el.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S") && editing) { e.preventDefault(); saveEdit(); }
+  });
   const pdfUrl = (url) => url + (focus?.page ? `#page=${focus.page}` : "");
   // the place Claude (or a search) points at: the passage marked, and scrolled to when asked
   const point = (scroll) => {
@@ -258,7 +367,10 @@ export async function openPreview(opts) {
     if (frame && urls[0]) frame.src = pdfUrl(urls[0]);
     else point(true);
   });
-  actions.append(act("retry", "Recharger", () => check(true)), act("download", "Télécharger", () => blob && downloadBlob(blob, baseName(path))));
+  actions.append(act("retry", "Recharger", () => check(true)), act("download", "Télécharger", () => {
+    const file = editing && editor ? new Blob([editor.value], { type: "text/plain;charset=utf-8" }) : blob;
+    if (file) downloadBlob(file, baseName(path));
+  }));
   const gone = h("div", { class: "pv-note pv-gone" });
   const draw = async (b) => {
     const url = URL.createObjectURL(b);
@@ -277,7 +389,7 @@ export async function openPreview(opts) {
       node = htmlFrame((r) => { remote ||= r; return api(src.frame(path, r)); }, baseName(path), remote);
     } else if (kind === "text") {
       const text = (await b.text()).slice(0, 2_000_000);
-      if (/\.md$/i.test(path)) node = h("div", { class: "pv-text" }, mdElement(text));
+      if (/\.(md|markdown)$/i.test(path)) node = h("div", { class: "pv-text" }, mdElement(text));
       else if (/\.(csv|tsv)$/i.test(path)) node = h("div", { class: "pv-text" }, csvTable(text));
       else if (/\.json$/i.test(path)) {
         let pretty = text;
@@ -298,34 +410,163 @@ export async function openPreview(opts) {
     point(first);
     old.forEach((u) => URL.revokeObjectURL(u));
   };
+  const disk = h("div", { class: "pv-note pv-gone" });
+  const showPath = (prefix = "") => { subtitle.textContent = prefix + where; subtitle.title = where; };
+  const markDirty = (on) => {
+    dirty = on;
+    saveBtn.classList.toggle("on", on);
+    saveBtn.disabled = !on;
+    subtitle.classList.toggle("dirty", on);
+    if (on) showPath("Modifié · ");
+  };
+  const showDisk = () => {
+    if (disk.isConnected) return;
+    disk.replaceChildren(h("span", {}, "Ce fichier a changé sur le disque."),
+      btn("Recharger", () => { disk.remove(); markDirty(false); check(true); }),
+      btn("Garder ma version", () => disk.remove()));
+    body.before(disk);
+  };
+  const enterEdit = async () => {
+    if (editing || !blob) return;
+    const raw = await editableText(blob);
+    if (raw === null) {
+      toast(blob.size > EDIT_MAX ? "Ce fichier est trop volumineux pour être modifié ici (2 Mo au plus)."
+        : "Ce fichier n'est pas du texte UTF-8 : ouvre-le avec l'application.", "err");
+      return;
+    }
+    const csv = /\.(csv|tsv)$/i.test(path);
+    editor = h("textarea", { class: `pv-edit${csv ? " csv" : ""}`, wrap: csv ? "off" : "soft",
+      spellcheck: /\.(md|markdown|txt|text|rst)$/i.test(path) ? "true" : "false", "aria-label": `Modifier ${baseName(path)}` });
+    editor.value = raw;
+    baseline = editor.value;
+    editor.addEventListener("input", () => markDirty(editor.value !== baseline));
+    editor.addEventListener("keydown", (e) => {
+      if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        editor.setRangeText("\t", editor.selectionStart, editor.selectionEnd, "end");
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    finder.hidden = true;
+    body.replaceChildren(editor);
+    editing = true;
+    el.classList.add("editing");
+    setIcon(editBtn, "eye", "Aperçu");
+    saveBtn.hidden = false;
+    markDirty(false);
+    editor.focus();
+  };
+  const leaveEdit = async () => {
+    if (!editing) return;
+    if (dirty) {
+      const ok = await confirmDialog("Modifications non enregistrées", "Revenir à l'aperçu sans enregistrer ?", "Ne pas enregistrer", "danger", opts.color);
+      if (!ok) return;
+    }
+    editing = false;
+    editor = null;
+    markDirty(false);
+    showPath();
+    subtitle.classList.remove("dirty");
+    setIcon(editBtn, "edit", "Modifier ce fichier");
+    saveBtn.hidden = true;
+    el.classList.remove("editing");
+    disk.remove();
+    if (blob) await draw(blob);
+  };
+  const saveEdit = async () => {
+    if (!editing || !editor || saving || !dirty) return;
+    saving = true;
+    saveBtn.disabled = true;
+    let force = false;
+    try {
+      const text = editor.value;
+      for (;;) {
+        try {
+          const r = await api(src.save, { method: "PUT", body: { ...src.extra, path, text, stamp, force } });
+          stamp = r.stamp || stamp;
+          blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+          baseline = editor.value;
+          markDirty(false);
+          showPath();
+          disk.remove();
+          warned = "";
+          subtitle.classList.add("fresh");
+          toast("Enregistré.", "ok");
+          return;
+        } catch (e) {
+          if (e.status === 409 && !force) {
+            const ok = await confirmDialog("Fichier modifié ailleurs", "Le fichier a changé sur le disque. Enregistrer remplace cette version par la tienne.", "Remplacer", "danger", opts.color);
+            if (!ok) return;
+            force = true;
+            continue;
+          }
+          toast(e.message, "err");
+          return;
+        }
+      }
+    } finally { saving = false; saveBtn.disabled = !dirty; }
+  };
+  const adopt = async (b) => {
+    if (!(editing && editor)) { await draw(b); return; }
+    const raw = await editableText(b);
+    if (raw === null) { editing = false; editor = null; setIcon(editBtn, "edit", "Modifier ce fichier"); saveBtn.hidden = true; el.classList.remove("editing"); await draw(b); return; }
+    const norm = raw.replace(/\r\n/g, "\n");
+    if (norm !== baseline) {
+      const pos = editor.selectionStart;
+      editor.value = raw;
+      baseline = editor.value;
+      const p = Math.min(pos, baseline.length);
+      editor.setSelectionRange(p, p);
+    }
+  };
   const load = async () => {
     const r = await api(src.get(path), { raw: true });
-    where = decodeURIComponent(r.headers.get("X-File-Path") || "") || where;
-    regard.path = where;
+    const resolved = decodeURIComponent(r.headers.get("X-File-Path") || "") || where;
     const b = await r.blob();
+    const newStamp = r.headers.get("X-File-Stamp") || "";
+    if (editing && dirty) {
+      if (warned !== newStamp) { warned = newStamp; showDisk(); }
+      return;
+    }
+    where = resolved;
+    regard.path = where;
     const changed = !first;
-    stamp = r.headers.get("X-File-Stamp") || "";
+    stamp = newStamp;
     blob = b;
     gone.remove();
-    await draw(b);
+    disk.remove();
+    warned = "";
+    editBtn.hidden = kind !== "text";
+    await adopt(b);
     first = false;
-    const at = changed ? `Mis à jour à ${new Date().toLocaleTimeString("fr-FR")} · ` : "";
-    subtitle.textContent = at + where;
-    subtitle.title = where;
-    subtitle.classList.toggle("fresh", changed);
+    if (!dirty) {
+      showPath(changed ? `Mis à jour à ${new Date().toLocaleTimeString("fr-FR")} · ` : "");
+      subtitle.classList.toggle("fresh", changed);
+      subtitle.classList.remove("dirty");
+    }
   };
   // a date asked every few seconds; the file itself only when it changed (or on the reload button)
   const check = async (force = false) => {
-    if (busy || !wm.has(id)) return;
+    if (busy || saving || !wm.has(id)) return;
+    if (force && dirty) {
+      const ok = await confirmDialog("Recharger le fichier", "Les modifications non enregistrées seront perdues.", "Recharger", "danger", opts.color);
+      if (!ok) return;
+      markDirty(false);
+    }
     busy = true;
     try {
       const s = force ? null : await api(`${src.get(path)}&stat=1`);
+      if (!force && editing && dirty && s.stamp !== stamp) {
+        if (warned !== s.stamp) { warned = s.stamp; showDisk(); }
+        return;
+      }
       if (force || s.stamp !== stamp || gone.isConnected) await load();
     } catch (e) {
       if (first) body.replaceChildren(h("div", { class: "line err pv-err" }, e.message));
       else if (e.status === 404 || e.status === 403) {
         gone.textContent = `${e.message} Le fichier a peut-être été supprimé ou déplacé : l'aperçu montre sa dernière version.`;
         if (!gone.isConnected) body.before(gone);
+        if (!editing) editBtn.hidden = true;
       }
       // console unreachable for a moment: the next check will tell
     } finally { busy = false; }

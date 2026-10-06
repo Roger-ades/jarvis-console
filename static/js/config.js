@@ -732,7 +732,7 @@ function launcherSection() {
       ? "Crée « JARVIS » (l'application de bureau) dans le menu Démarrer et sur le Bureau, à épingler à la barre des tâches : ses fenêtres "
         + "s'y regroupent. Les anciens raccourcis « JARVIS Console » (navigateur) sont retirés."
       : mac
-      ? "Crée « JARVIS Console » dans ton dossier Applications : glisse-le dans le Dock. Il démarre la console si besoin et l'ouvre."
+      ? "Crée « JARVIS Console » dans ton dossier Applications. Ce lanceur n'apparaît pas dans le Dock : il démarre la console et l'ouvre. C'est l'application installée (image disque) qui se place dans le Dock."
       : "Crée « JARVIS Console » dans le menu Démarrer et sur le Bureau, avec l'icône JARVIS. Clic droit dessus → Épingler à la barre des tâches. "
         + "Il démarre la console si besoin et l'ouvre. Astuce : installe aussi l'app (bouton Installer en haut) ; le lanceur ouvre alors l'app installée "
         + "et sa fenêtre porte l'icône JARVIS au lieu de celle de Chrome.";
