@@ -1459,9 +1459,11 @@ class Engine:
         self.sync_briefs()
 
     def move_project(self, folder: str, target: str) -> dict:
-        """The project now points at another folder of the disk (moved by the user, or another copy): its
-        settings, rules, notes, routines, validated actions, Odoo and Office follow-up, and Claude's memory go
-        with it. Nothing is moved or deleted on the disk; the discussions stay where they were run."""
+        """The project now points at another folder of the disk, with everything it has: settings, rules,
+        notes, routines, validated actions, Odoo and Office follow-up, widgets, its discussions and sessions (of
+        every account, Claude Desktop's too), Claude's memory and Claude Code's settings of the folder, and its
+        own files (CLAUDE.md, BRIEF.md, .claude/, .mcp.json), copied without replacing any. The old folder and
+        the user's other files stay as they are."""
         proj = self._project(folder)
         if not proj:
             raise TaskError("Projet introuvable.", 404)
@@ -1472,6 +1474,10 @@ class Engine:
         other = self._project(new)
         if other:
             raise TaskError(f"Ce dossier est déjà le projet « {other.name} ».")
+        with self._lock:
+            if any(norm(t.get("workdir") or "") == key for tid, t in self.tasks.items() if tid in self.runs):
+                raise TaskError("Une discussion du projet est en cours : attends qu'elle se termine pour changer de dossier.", 409)
+        report = {"fichiers": self._copy_project_files(old, new)}
         cfg = self.cfg.model_copy(deep=True)
         for p in cfg.projects:
             if norm(p.folder) == key:
@@ -1507,27 +1513,87 @@ class Engine:
                 if r.brief_project and norm(r.brief_project) == key:
                     r.brief_project = new
             self._persist_routines()
-        self._copy_memory(proj.profile, old, new)
-        self._audit("projet déplacé", {"projet": proj.name, "ancien dossier": old, "nouveau dossier": new})
+        widgets = [w for w in self.widgets if w.get("workdir") and norm(w["workdir"]) == key]
+        for w in widgets:
+            w["workdir"] = new
+        if widgets:
+            self._persist_widgets()
+        report.update(self._move_project_sessions(old, new))
+        report["mémoire"], report["réglages Claude Code"], errors = 0, 0, []
+        for prof in self.cfg.profiles:
+            try:
+                report["mémoire"] += library.move_memory(prof, old, new)
+                report["réglages Claude Code"] += library.copy_cli_project(prof, old, new)
+            except OSError as exc:
+                errors.append(f"{prof.name} : {exc.__class__.__name__}")
+        if errors:
+            report["erreurs"] = report.get("erreurs", []) + [f"mémoire ou réglages non repris ({e})" for e in errors]
+        report["notes"], report["widgets"] = len(moved), len(widgets)
+        self._audit("projet déplacé", {"projet": proj.name, "ancien dossier": old, "nouveau dossier": new, **report})
         self.bus.publish("projects", {"projects": self.projects()})
         for n in moved:
             self.bus.publish("notes", {"note": n})
         self.sync_briefs()
-        return self._project(new).model_dump()
+        return {**self._project(new).model_dump(), "report": report}
 
-    def _copy_memory(self, pid: str, old: str, new: str):
-        """Claude's memory of the old folder is copied for the new one when it has none (the old one stays)."""
-        prof = self.cfg.profile(pid or self.cfg.general.default_profile)
-        if not prof:
-            return
-        src, dst = library.memory_dir(prof, old), library.memory_dir(prof, new)
-        if not src.is_dir() or (dst.is_dir() and any(dst.iterdir())):
-            return
+    PROJECT_FILES = ("CLAUDE.md", "CLAUDE.local.md", brief_mod.FILE_NAME, ".mcp.json", ".claude")
+
+    def _copy_project_files(self, old: str, new: str) -> list[str]:
+        """The project's own files (instructions, suivi, actions and Claude Code settings of the folder) are
+        copied into the new folder; a file already there is kept. Nothing is removed from the old folder."""
         import shutil
-        try:
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        except OSError as exc:
-            self._audit("mémoire du projet non copiée", {"dossier": new, "erreur": exc.__class__.__name__})
+        copied = []
+        src_root, dst_root = Path(old), Path(new)
+        guard = self._guard(new)
+        for name in self.PROJECT_FILES:
+            src = src_root / name
+            files = [src] if src.is_file() else sorted(p for p in src.rglob("*") if p.is_file()) if src.is_dir() else []
+            for f in files:
+                dst = dst_root / f.relative_to(src_root)
+                if dst.exists() or guard.forbidden_hit({"file_path": str(dst)}, "Write"):
+                    continue
+                try:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(f, dst)
+                except OSError:
+                    continue
+                copied.append(f.relative_to(src_root).as_posix())
+        return copied
+
+    def _move_project_sessions(self, old: str, new: str) -> dict:
+        """Every session run in the project's folder, in every account (console, Claude Desktop, CLI), is filed
+        under the new folder, where Claude Code finds it when resumed; the console's discussions follow."""
+        key, slug = norm(old), library.project_slug(old)
+        moved, errors = set(), []
+        for prof in self.cfg.profiles:
+            for row in library.list_sessions(prof, limit=1_000_000):
+                if not ((row["cwd"] and norm(row["cwd"]) == key) or row["project"] == slug):
+                    continue
+                try:
+                    library.move_session(prof, row["id"], new)
+                except (OSError, ValueError) as exc:
+                    errors.append(f"session « {row['title'][:60]} » ({prof.name}) : {exc.__class__.__name__}")
+                    continue
+                moved.add((prof.id, row["id"]))
+        tasks, stuck = 0, 0
+        with self._lock:
+            for t in self.tasks.values():
+                linked = (t.get("profile"), t.get("session_id")) in moved
+                if not linked and norm(t.get("workdir") or "") != key:
+                    continue
+                if t.get("session_started") and not linked:
+                    stuck += 1  # its session could not be moved: it stays resumable where it was
+                    continue
+                t["workdir"] = new
+                self._save(t)
+                self._event(t["id"], "info", {"text": f"Projet déplacé dans {new}."})
+                tasks += 1
+        if stuck:
+            errors.append(f"{stuck} discussion(s) restée(s) dans l'ancien dossier (session introuvable)")
+        out = {"sessions": len(moved), "discussions": tasks}
+        if errors:
+            out["erreurs"] = errors
+        return out
 
     def _project(self, folder: str | None):
         key = norm(folder or "")

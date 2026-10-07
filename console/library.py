@@ -341,6 +341,51 @@ def move_session(profile: Profile, session_id: str, folder: str) -> dict:
     return {"session": session_id, "path": str(dest), "desktop": desktop}
 
 
+def move_memory(profile: Profile, old: str, new: str) -> int:
+    """Claude Code's memory of a folder goes with its project to another folder: each file is carried over (a
+    file of the same name with another text there gets the old text appended), then the old memory is removed.
+    Returns the number of files carried."""
+    src, dst = memory_dir(profile, old), memory_dir(profile, new)
+    if not src.is_dir() or os.path.normcase(str(src)) == os.path.normcase(str(dst)):
+        return 0
+    count = 0
+    for f in sorted(p for p in src.rglob("*") if p.is_file()):
+        target = dst / f.relative_to(src)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        data = f.read_bytes()
+        if not target.exists():
+            target.write_bytes(data)
+        elif target.read_bytes() != data:
+            with target.open("ab") as fh:
+                fh.write(b"\n\n<!-- repris de l'ancien dossier du projet -->\n\n" + data)
+        count += 1
+    shutil.rmtree(src, ignore_errors=True)
+    return count
+
+
+def copy_cli_project(profile: Profile, old: str, new: str) -> bool:
+    """Claude Code's settings of a folder (its MCP servers, allowed tools…, in .claude.json) are given to the new
+    folder when it has none. The old entry stays. True when something was written."""
+    cd = expand_path(profile.config_dir)
+    path = Path(cd) / ".claude.json" if cd else Path.home() / ".claude.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    projects = raw.get("projects") if isinstance(raw, dict) else None
+    if not isinstance(projects, dict):
+        return False
+    key = lambda p: os.path.normcase(os.path.normpath(p))  # noqa: E731
+    entry = next((v for k, v in projects.items() if key(k) == key(old) and isinstance(v, dict)), None)
+    if entry is None or any(key(k) == key(new) for k in projects):
+        return False
+    projects[str(new)] = entry
+    tmp = path.with_name(f".{path.name}.jarvis.tmp")
+    tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return True
+
+
 # ---------------------------------------------------------------- copies left by the former "move"
 def _first_message_id(path: Path) -> str:
     try:

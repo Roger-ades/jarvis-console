@@ -361,14 +361,19 @@ async function moveProject(proj) {
   const target = await pickFolder({ title: `Nouveau dossier du projet « ${proj.name} »`, start: parent || from, recent: ctx.recentFolders(ws.profile) });
   if (!target || fkey(target) === fkey(from)) { render(); return; }
   if (!(await confirmDialog("Changer le dossier du projet ?",
-    `« ${proj.name} » pointera vers ${target}. Ses réglages, notes, règles, routines, actions validées, le suivi Odoo / Office `
-    + "et la mémoire de Claude le suivent. Rien n'est déplacé ni supprimé sur le disque : déplace toi-même les fichiers si besoin. "
-    + "Les discussions passées restent dans l'ancien dossier (menu d'une discussion → Déplacer pour en reprendre une).", "Changer de dossier"))) return;
+    `Tout « ${proj.name} » passe dans ${target} : réglages, notes, règles, routines, actions validées, suivi Odoo / Office, widgets, `
+    + "discussions et sessions (console, Claude Desktop), mémoire de Claude et réglages Claude Code du dossier. "
+    + "Ses fichiers propres (CLAUDE.md, BRIEF.md, .claude/, .mcp.json) y sont copiés sans écraser ceux déjà présents. "
+    + "L'ancien dossier et tes autres fichiers restent tels quels sur le disque.", "Changer de dossier"))) return;
   try {
     const saved = await api("/api/projects/move", { method: "POST", body: { folder: from, target } });
     ctx.projectMoved(ws.profile, from, saved.folder);
     await load(saved.folder);
-    toast(`Projet « ${proj.name} » rattaché à ${saved.folder}.`, "ok");
+    const r = saved.report || {}, n = (k, one, many) => r[k] ? [`${r[k]} ${r[k] > 1 ? many : one}`] : [];
+    const parts = [...n("sessions", "session", "sessions"), ...n("discussions", "discussion", "discussions"), ...n("notes", "note", "notes"),
+      ...n("mémoire", "fichier de mémoire", "fichiers de mémoire"), ...(r.fichiers?.length ? [`${r.fichiers.length} fichier(s) du projet copié(s)`] : [])];
+    toast(`Projet « ${proj.name} » déplacé dans ${saved.folder}${parts.length ? ` (${parts.join(", ")})` : ""}.`, "ok");
+    if (r.erreurs?.length) toast(`Non repris : ${r.erreurs.join(" ; ")}`, "err");
   } catch (e) { toast(e.message, "err"); }
 }
 
@@ -407,7 +412,7 @@ function render() {
   const forget = fkey(ws.folder) === fkey(home) ? null : h("button", { type: "button", class: "btn small",
     title: "Retirer ce dossier des listes de la console (le dossier et ses fichiers ne changent pas)", on: { click: () => forgetFolder(proj) } }, "Retirer de la liste");
   const move = proj ? h("button", { type: "button", class: "btn small",
-    title: "Faire pointer ce projet vers un autre dossier du disque (rien n'est déplacé sur le disque)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
+    title: "Déplacer le projet et tout ce qui s'y rattache vers un autre dossier du disque (l'ancien dossier n'est pas modifié)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
     h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), tabs, body);
   ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules,
