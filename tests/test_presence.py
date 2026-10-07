@@ -30,7 +30,7 @@ def test_the_console_and_the_discussion_come_before_the_editable_instructions(en
     assert f"copiés dans : {t['attachments_dir']}" in text
     assert "preset « Assisté (validation) », décrit ainsi à l'utilisateur" in text
     assert "Lancée automatiquement" not in text
-    assert "## Ce projet : Chantier Dupont" in text and "l'outil proposer" in text and "Actions" not in text
+    assert "## Ce projet : Chantier Dupont" in text and "l'outil proposer" in text and "- Actions (" not in text
     # the security instructions (editable, possibly emptied) still follow
     assert text.index("## Cette discussion") < text.index("Consignes de sécurité de la console JARVIS")
 

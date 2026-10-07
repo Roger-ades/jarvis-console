@@ -30,7 +30,7 @@ from . import display as display_mod
 from . import documents as docs_mod
 from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
-from . import odoo_link, office_link, project_nav, project_tools
+from . import notes_tool, odoo_link, office_link, project_nav, project_tools
 from . import regard as regard_mod
 from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
@@ -155,7 +155,9 @@ DOCS_SPEC = {
 }
 PROJECT_TOOL = f"mcp__{CONSOLE_MCP}__projet"
 PROJECT_SPEC = {"_meta": ALWAYS_LOAD, **project_nav.SPEC}
-CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL}
+NOTES_TOOL = f"mcp__{CONSOLE_MCP}__notes"
+NOTES_SPEC = {"_meta": ALWAYS_LOAD, **notes_tool.SPEC}
+CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL, NOTES_TOOL}
 DOCS_RESCAN = 15 * 60  # the document folders are walked again this often (only changed files are read)
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
@@ -1456,6 +1458,77 @@ class Engine:
         self.bus.publish("projects", {"projects": self.projects()})
         self.sync_briefs()
 
+    def move_project(self, folder: str, target: str) -> dict:
+        """The project now points at another folder of the disk (moved by the user, or another copy): its
+        settings, rules, notes, routines, validated actions, Odoo and Office follow-up, and Claude's memory go
+        with it. Nothing is moved or deleted on the disk; the discussions stay where they were run."""
+        proj = self._project(folder)
+        if not proj:
+            raise TaskError("Projet introuvable.", 404)
+        _, new = self._ws_folder(proj.profile or None, str(target or ""))
+        old, key, nkey = proj.folder, norm(proj.folder), norm(new)
+        if nkey == key:
+            raise TaskError("Le projet est déjà dans ce dossier.")
+        other = self._project(new)
+        if other:
+            raise TaskError(f"Ce dossier est déjà le projet « {other.name} ».")
+        cfg = self.cfg.model_copy(deep=True)
+        for p in cfg.projects:
+            if norm(p.folder) == key:
+                p.folder = new
+        for r in cfg.project_rules:
+            if norm(r.folder) == key:
+                r.folder = new
+        self.cfg_store.save(cfg, f"projet déplacé : {proj.name} → {new}")
+        moved = []
+        for n in self.store.list_notes():
+            if n.get("folder") and norm(n["folder"]) == key:
+                moved.append({**n, "folder": new})
+                self.store.save_note(moved[-1])
+        for name in ("action_pins", "action_prefs"):
+            data = self.store.kv_get(name, {}) or {}
+            if key in data:
+                data[nkey] = {**data.pop(key), **data.get(nkey, {})}
+                self.store.kv_set(name, data)
+        for kv_key in (odoo_link.kv_key, office_link.kv_key):
+            cache = self.store.kv_get(kv_key(key))
+            if cache:
+                self.store.kv_set(kv_key(nkey), cache)
+                self.store.kv_set(kv_key(key), {})
+        with self._lock:
+            old_brief, new_brief = brief_mod.project_routine_id(old), brief_mod.project_routine_id(new)
+            if old_brief in self.routines:  # its runs and last run are kept (sync_briefs writes the rest)
+                r = self.routines.pop(old_brief)
+                r.id = new_brief
+                self.routines[new_brief] = r
+            for r in self.routines.values():
+                if r.workdir and norm(r.workdir) == key:
+                    r.workdir = new
+                if r.brief_project and norm(r.brief_project) == key:
+                    r.brief_project = new
+            self._persist_routines()
+        self._copy_memory(proj.profile, old, new)
+        self._audit("projet déplacé", {"projet": proj.name, "ancien dossier": old, "nouveau dossier": new})
+        self.bus.publish("projects", {"projects": self.projects()})
+        for n in moved:
+            self.bus.publish("notes", {"note": n})
+        self.sync_briefs()
+        return self._project(new).model_dump()
+
+    def _copy_memory(self, pid: str, old: str, new: str):
+        """Claude's memory of the old folder is copied for the new one when it has none (the old one stays)."""
+        prof = self.cfg.profile(pid or self.cfg.general.default_profile)
+        if not prof:
+            return
+        src, dst = library.memory_dir(prof, old), library.memory_dir(prof, new)
+        if not src.is_dir() or (dst.is_dir() and any(dst.iterdir())):
+            return
+        import shutil
+        try:
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        except OSError as exc:
+            self._audit("mémoire du projet non copiée", {"dossier": new, "erreur": exc.__class__.__name__})
+
     def _project(self, folder: str | None):
         key = norm(folder or "")
         return next((p for p in self.cfg.projects if key and norm(p.folder) == key), None)
@@ -1515,6 +1588,76 @@ class Engine:
             raise TaskError("Note introuvable.", 404)
         self.bus.publish("notes", {"deleted": note_id})
         self._inbox_changed()
+
+    def notes_for_claude(self, tid: str, args) -> tuple[str, bool]:
+        """Tool "notes" (console/notes_tool.py): the notes of the discussion's account, its project's and the
+        general ones. Reading, adding, changing; never deleting."""
+        args = args if isinstance(args, dict) else {}
+        t = self._get(tid)
+        account = t.get("profile") or ""
+        proj = self._project(t.get("workdir") or "")
+        here = norm(proj.folder) if proj else ""
+        action = str(args.get("action") or "").strip().lower()
+        mine = [n for n in self.store.list_notes() if (n.get("profile") or account) == account]
+
+        def where(n: dict) -> str:
+            if not n.get("folder"):
+                return "générale"
+            if norm(n["folder"]) == here:
+                return f"projet « {proj.name} »"
+            other = self._project(n["folder"])
+            return f"projet « {other.name} »" if other else "autre projet"
+
+        if action == "lire":
+            scope = str(args.get("portee") or "").strip().lower()
+            if scope == "projet" and not proj:
+                return "Cette discussion n'est dans aucun projet : lis les notes generales ou toutes.", True
+            if scope == "generales":
+                found, label = [n for n in mine if not n.get("folder")], "notes générales"
+            elif scope == "toutes":
+                found, label = mine, "toutes les notes du compte"
+            elif scope == "projet":
+                found, label = [n for n in mine if n.get("folder") and norm(n["folder"]) == here], f"projet « {proj.name} »"
+            else:
+                found = [n for n in mine if not n.get("folder") or (here and norm(n["folder"]) == here)]
+                label = (f"projet « {proj.name} » et notes générales" if proj else "notes générales")
+            needle = " ".join(str(args.get("contient") or "").split()).lower()
+            if needle:
+                found = [n for n in found if needle in str(n.get("text") or "").lower()]
+                label += f", contenant « {_clip(needle, 80)} »"
+            return notes_tool.listing(found, where, label), False
+
+        if action not in ("ajouter", "modifier"):
+            return "« action » vaut lire, ajouter ou modifier.", True
+        data: dict = {}
+        if "texte" in args:
+            data["text"] = str(args.get("texte") or "")
+        if "rappel" in args:
+            try:
+                data["remind_at"] = notes_tool.parse_reminder(args.get("rappel"))
+            except ValueError:
+                return "Rappel illisible : date et heure locales au format AAAA-MM-JJTHH:MM.", True
+        try:
+            if action == "ajouter":
+                scope = str(args.get("portee") or ("projet" if proj else "generales")).strip().lower()
+                if scope == "projet" and not proj:
+                    return "Cette discussion n'est dans aucun projet : ajoute une note generale.", True
+                note = self.save_note({**data, "folder": proj.folder if scope == "projet" else "", "profile": account})
+            else:
+                nid = str(args.get("id") or "").strip()
+                if not any(n["id"] == nid for n in mine):
+                    return "Note introuvable parmi celles de ce compte : lis d'abord les notes pour avoir son id.", True
+                if not data:
+                    return "Rien à modifier : donne texte ou rappel.", True
+                note = self.save_note(data, nid)
+        except TaskError as e:
+            return str(e), True
+        self._audit("note ajoutée par Claude" if action == "ajouter" else "note modifiée par Claude",
+                    {"note": note["id"], "où": where(note), **({"rappel": notes_tool.when(note["remind_at"])}
+                                                            if note.get("remind_at") else {})}, t)
+        remind = f", rappel le {notes_tool.when(note['remind_at'])}" if note.get("remind_at") else ""
+        return (f"Note {'ajoutée' if action == 'ajouter' else 'modifiée'} (id {note['id']}, {where(note)}{remind}). "
+                "Elle apparaît dans les notes de la console."), False
 
     # -------------------------------------------------------- project actions (its commands and skills)
     def project_actions(self, folder: str, content: bool = False, profile: str | None = None) -> list[dict]:
@@ -2966,7 +3109,7 @@ class Engine:
                        "serverInfo": {"name": CONSOLE_MCP, "version": "1.0.0"}})
         if method == "tools/list":
             # (listed only when the user indexes documents: every tool weighs in every discussion's context)
-            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC,
+            return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC, NOTES_SPEC,
                                  *([DOCS_SPEC] if self.cfg.documents.enabled else [])]})
         if method == "tools/call":
             if silent:
@@ -2983,6 +3126,8 @@ class Engine:
                 text, failed = "Cet outil passe par la fenêtre de la discussion.", True  # (see _propose, _project_tool)
             elif params.get("name") == DOCS_SPEC["name"]:
                 text, failed = self.search_documents(tid, args)
+            elif params.get("name") == NOTES_SPEC["name"]:
+                text, failed = self.notes_for_claude(tid, args)
             else:
                 text, failed = f"Outil inconnu : {params.get('name')}", True
             return ok({"content": [{"type": "text", "text": text}], "isError": failed})

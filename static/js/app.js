@@ -379,7 +379,9 @@ function selectProfile(id, remember = true) {
   const home = S.meta?.profiles?.[p.id]?.workdir || p.workdir;
   // pinned projects of this account first, then the folders used lately
   const pinnedDirs = projects().filter((x) => x.pinned && (!x.profile || x.profile === p.id)).map((x) => x.folder);
-  const dirs = [...new Map([...pinnedDirs, ...recent].map((d) => [dirKey(d), d])).values()].filter((d) => dirKey(d) !== dirKey(home));
+  const hidden = hiddenFolders(p.id);
+  const dirs = [...new Map([...pinnedDirs, ...recent].map((d) => [dirKey(d), d])).values()]
+    .filter((d) => dirKey(d) !== dirKey(home) && !hidden.has(dirKey(d)));
   wd.replaceChildren(option("", `${projectFor(home)?.name || String(home).replace(/[\\/]+$/, "").split(/[\\/]/).pop()} (défaut)`, home),
     ...dirs.map(folderOption), option("__other__", "Autre dossier…"));
   wd.value = "";
@@ -411,7 +413,43 @@ let lastWorkdir = "";
 function recentFolders(pid = S.profile) {
   const p = profile(pid);
   const home = S.meta?.profiles?.[pid]?.workdir || p?.workdir || "";
-  return [...new Set([home, ...((wm.prefs().workdirs || {})[pid] || [])].filter(Boolean))];
+  const hidden = hiddenFolders(pid);
+  return [...new Set([home, ...((wm.prefs().workdirs || {})[pid] || []).filter((d) => !hidden.has(dirKey(d)))].filter(Boolean))];
+}
+
+/** The folders the user took out of the lists of an account (the folders themselves are untouched). */
+function hiddenFolders(pid) {
+  return new Set(((wm.prefs().hiddenFolders || {})[pid] || []).map(dirKey));
+}
+
+/** Take a folder out of the lists of an account: the request bar, the Projet panel, the folder picker. Only the
+ * console's lists change, never the disk; choosing the folder again brings it back. */
+function forgetFolder(pid, dir) {
+  const k = dirKey(dir);
+  const all = { ...(wm.prefs().workdirs || {}) };
+  all[pid] = (all[pid] || []).filter((d) => dirKey(d) !== k);
+  const hidden = { ...(wm.prefs().hiddenFolders || {}) };
+  hidden[pid] = [...new Set([...(hidden[pid] || []), k])].slice(-200);
+  wm.savePrefs({ workdirs: all, hiddenFolders: hidden });
+  if (pid !== S.profile) return;
+  const sel = $("#opt-workdir");
+  const wasOn = dirKey(sel.value) === k;
+  for (const o of [...sel.options]) if (o.value && o.value !== "__other__" && dirKey(o.value) === k) o.remove();
+  if (wasOn) { sel.value = ""; lastWorkdir = ""; applyProject(projectFor(currentFolder())); updateSummary(); }
+}
+
+/** A project now points at another folder: the lists follow it. */
+function projectMoved(pid, from, to) {
+  const k = dirKey(from);
+  const all = { ...(wm.prefs().workdirs || {}) };
+  for (const id of Object.keys(all)) all[id] = all[id].map((d) => (dirKey(d) === k ? to : d));
+  wm.savePrefs({ workdirs: all });
+  const sel = $("#opt-workdir");
+  const wasOn = dirKey(sel.value) === k;
+  for (const o of [...sel.options]) if (o.value && o.value !== "__other__" && dirKey(o.value) === k) o.remove();
+  if (wasOn && pid === S.profile) { chooseWorkdir(to); return; }
+  rememberWorkdir(pid, to);
+  if (pid === S.profile && ![...sel.options].some((o) => dirKey(o.value) === dirKey(to))) sel.insertBefore(folderOption(to), sel.lastChild);
 }
 
 /** Move a console discussion into another project: a copy of its session continues there. */
@@ -604,7 +642,9 @@ function rememberWorkdir(pid, dir) {
   if (!dir) return;
   const all = { ...(wm.prefs().workdirs || {}) };
   all[pid] = [dir, ...(all[pid] || []).filter((d) => d !== dir)].slice(0, 12);
-  wm.savePrefs({ workdirs: all });
+  const hidden = { ...(wm.prefs().hiddenFolders || {}) };
+  if (hidden[pid]) hidden[pid] = hidden[pid].filter((k) => k !== dirKey(dir));  // chosen again: back in the lists
+  wm.savePrefs({ workdirs: all, hiddenFolders: hidden });
 }
 
 function history() { return store.get("jarvis.prompts", []); }
@@ -1317,6 +1357,9 @@ const panelCtx = {
   },
   remember: (dir, pid = S.profile) => rememberWorkdir(pid, dir),
   recentFolders: (pid) => recentFolders(pid),
+  hiddenFolders: (pid = S.profile) => hiddenFolders(pid),
+  forgetFolder: (dir, pid = S.profile) => forgetFolder(pid, dir),
+  projectMoved: (pid, from, to) => projectMoved(pid, from, to),
   project: (folder) => projectFor(folder),
   editProject: async (folder, pid) => {
     const saved = await editProject({ folder, profiles: profiles(), presets: S.config.presets, models: panelCtx.models(), current: { profile: pid } });

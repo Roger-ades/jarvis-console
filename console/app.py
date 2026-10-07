@@ -648,6 +648,10 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         engine.delete_project(folder)
         return {"ok": True}
 
+    @app.post("/api/projects/move")
+    def project_move(body: dict = Body(...)):
+        return engine.move_project(str(body.get("folder") or ""), str(body.get("target") or ""))
+
     @app.get("/api/notes")
     def notes(folder: str | None = None):
         return {"notes": engine.notes(folder)}

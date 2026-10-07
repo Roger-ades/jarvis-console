@@ -343,6 +343,35 @@ async function browse() {
   if (ws && ws.folder) ctx.remember(ws.folder);
 }
 
+/** Take the folder out of the console's lists. The disk is not touched; choosing the folder again brings it back. */
+async function forgetFolder(proj) {
+  const what = proj ? `Le projet « ${proj.name} » reste dans Projets (Réglages → Retirer le projet pour l'enlever aussi). ` : "";
+  if (!(await confirmDialog("Retirer ce dossier de la liste ?",
+    `${ws.folder} n'apparaîtra plus dans les listes de dossiers de ce compte. ${what}`
+    + "Le dossier et ses fichiers ne changent pas ; le choisir à nouveau le remet dans la liste.", "Retirer de la liste"))) return;
+  ctx.forgetFolder(ws.folder, ws.profile);
+  await load(ws.folders[0]);
+  toast("Dossier retiré de la liste (rien n'a changé sur le disque).", "ok");
+}
+
+/** The project points at another folder of the disk: its settings, notes, rules, routines and follow-up go with it. */
+async function moveProject(proj) {
+  const from = ws.folder;
+  const parent = from.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
+  const target = await pickFolder({ title: `Nouveau dossier du projet « ${proj.name} »`, start: parent || from, recent: ctx.recentFolders(ws.profile) });
+  if (!target || fkey(target) === fkey(from)) { render(); return; }
+  if (!(await confirmDialog("Changer le dossier du projet ?",
+    `« ${proj.name} » pointera vers ${target}. Ses réglages, notes, règles, routines, actions validées, le suivi Odoo / Office `
+    + "et la mémoire de Claude le suivent. Rien n'est déplacé ni supprimé sur le disque : déplace toi-même les fichiers si besoin. "
+    + "Les discussions passées restent dans l'ancien dossier (menu d'une discussion → Déplacer pour en reprendre une).", "Changer de dossier"))) return;
+  try {
+    const saved = await api("/api/projects/move", { method: "POST", body: { folder: from, target } });
+    ctx.projectMoved(ws.profile, from, saved.folder);
+    await load(saved.folder);
+    toast(`Projet « ${proj.name} » rattaché à ${saved.folder}.`, "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
 function render() {
   paintGen++;
   const d = el();
@@ -358,7 +387,10 @@ function render() {
     h("button", { type: "button", class: "icon-btn", title: "Actualiser", svg: "retry", on: { click: () => load(ws?.folder ?? null) } }),
     h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { d.hidden = true; } } }));
   if (!ws) { d.replaceChildren(head, h("div", { class: "empty-row" }, loading ? "Chargement…" : "Projet indisponible.")); return; }
-  const folders = [...new Set([...ws.folders, ...ctx.workdirOptions(), ws.folder])];
+  const home = ws.folders[0];
+  const hidden = ctx.hiddenFolders?.(ws.profile) || new Set();
+  const folders = [...new Set([...ws.folders, ...ctx.workdirOptions(), ws.folder])]
+    .filter((f) => f === home || f === ws.folder || !hidden.has(fkey(f)));
   const sel = h("select", { class: "pj-folder", title: ws.folder }, ...folders.map((f, i) =>
     h("option", { value: f, title: f }, i === 0 ? `${baseName(f)} (dossier du compte)` : baseName(f))),
     h("option", { value: "__other__" }, "Autre dossier…"));
@@ -372,7 +404,12 @@ function render() {
   }));
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
-  d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick), h("small", { title: ws.folder }, ws.folder)), tabs, body);
+  const forget = fkey(ws.folder) === fkey(home) ? null : h("button", { type: "button", class: "btn small",
+    title: "Retirer ce dossier des listes de la console (le dossier et ses fichiers ne changent pas)", on: { click: () => forgetFolder(proj) } }, "Retirer de la liste");
+  const move = proj ? h("button", { type: "button", class: "btn small",
+    title: "Faire pointer ce projet vers un autre dossier du disque (rien n'est déplacé sur le disque)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
+  d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
+    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), tabs, body);
   ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules,
     actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,
     suivi: renderSuivi })[tab](body);
