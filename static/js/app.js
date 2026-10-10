@@ -12,6 +12,7 @@ import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
+import { addonAnswered, addonItems, addonOpened, addonsChanged, initAddons } from "./addons.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
 import { openConfig, updateProbe } from "./config.js";
@@ -83,6 +84,7 @@ async function boot() {
   onAccountActions(renderHome);
   initInbox(inboxCtx);
   initWidgets({ profiles, openTask });
+  initAddons({ compose: (pid, text) => panelCtx.compose(pid, text), currentProfile: () => S.profile, color: () => profile() });
   setInterval(renderPills, 60_000); // a window past its reset time goes back to 0
   openStream({
     hello: resync, task: onTask, ev: onEvent, state: (st) => { S.state = { ...S.state, ...st }; renderState(); },
@@ -94,6 +96,7 @@ async function boot() {
     inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
     account_actions: () => loadAccountActions(profiles()),
     widgets: widgetsChanged,
+    addons: addonsChanged, addon_open: addonOpened, addon_answer: addonAnswered,
     odoo_tasks: projectSuiviChanged,
     office_suivi: projectSuiviChanged,
     // Claude opened a project (tool projet), or a discussion just moved into one
@@ -1261,6 +1264,7 @@ function searchAnything() {
     actions: () => [
       ...projectActions(),
       ...accountActionItems(),
+      ...addonItems(),
       { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => focusInput() },
       { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
       { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },

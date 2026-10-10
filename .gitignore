@@ -11,3 +11,5 @@ __pycache__/
 .pytest_cache/
 shell/node_modules/
 shell/dist/
+# modules written by Claude for this console (README.md is rewritten at start): never versioned
+addons/

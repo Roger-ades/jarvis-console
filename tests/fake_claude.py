@@ -20,6 +20,7 @@ The user message drives the scenario, one directive per line:
   PROPOSE <json arguments>   call the console's "proposer" tool (an action or a routine for the project)
   PROJECT <json arguments>   call the console's "projet" tool (open a project's panel, move this discussion there)
   NOTES <json arguments>     call the console's "notes" tool (read, add or change the user's notes)
+  MODULES <json arguments>   call the console's "modules" tool (list, check, open a module of addons/)
   FIND <query>              call the console's "chercher_documents" tool (the local document index)
   POINT <json arguments>     call the console's "afficher" tool (a file at a passage or a page)
   PLAN                       the lead writes a plan (TodoWrite), then a sub-agent writes its own list
@@ -602,6 +603,8 @@ def turn(text: str):
             lines.append(console_tool("projet", json.loads(raw.strip()[7:].strip() or "{}")))
         elif cmd == "NOTES":
             lines.append(console_tool("notes", json.loads(raw.strip()[5:].strip() or "{}")))
+        elif cmd == "MODULES":
+            lines.append(console_tool("modules", json.loads(raw.strip()[7:].strip() or "{}")))
         elif cmd == "POINT":
             lines.append(console_tool("afficher", json.loads(raw.strip()[5:].strip() or "{}")))
         elif cmd == "FIND":

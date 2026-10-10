@@ -1,7 +1,7 @@
 """The console's own MCP server: Claude opens files in the interface with mcp__jarvis__afficher."""
 import os
 
-from console.engine import CONSOLE_MCP, NOTES_SPEC, PRESENT_SPEC, PROJECT_SPEC, PROPOSE_SPEC, RESULT_SPEC, SHOW_SPEC
+from console.engine import CONSOLE_MCP, MODULES_SPEC, NOTES_SPEC, PRESENT_SPEC, PROJECT_SPEC, PROPOSE_SPEC, RESULT_SPEC, SHOW_SPEC
 
 from .conftest import task_status, wait_for
 
@@ -49,7 +49,7 @@ def test_server_protocol(engine):
     init = eng._console_mcp("x", CONSOLE_MCP, {"id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
     assert init["result"]["protocolVersion"] == "2025-06-18" and "tools" in init["result"]["capabilities"]
     tools = eng._console_mcp("x", CONSOLE_MCP, {"id": 2, "method": "tools/list"})["result"]["tools"]
-    assert tools == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC, NOTES_SPEC]
+    assert tools == [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC, NOTES_SPEC, MODULES_SPEC]
     # always in Claude's prompt: a tool deferred behind tool search shows only its name, its parameters get guessed
     assert all(t["_meta"] == {"anthropic/alwaysLoad": True} for t in tools)
     assert eng._console_mcp("x", CONSOLE_MCP, {"method": "notifications/initialized"}) == {"jsonrpc": "2.0", "result": {}}

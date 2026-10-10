@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import MutableHeaders
 
 from . import __version__, attachments, claude_cli, content, mcp, updater, winsys
+from . import addons as addons_mod
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors, web_domain)
 from .engine import Engine, TaskError, file_stamp
@@ -652,6 +653,36 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def project_move(body: dict = Body(...)):
         return engine.move_project(str(body.get("folder") or ""), str(body.get("target") or ""))
 
+    @app.get("/api/addons")
+    def addons_list():
+        return engine.list_addons()
+
+    @app.post("/api/addons/reveal")
+    def addons_reveal(body: dict = Body(default={})):
+        engine.addon_reveal(str(body.get("id") or ""))
+        return {"ok": True}
+
+    @app.post("/api/addons/{aid}/open")
+    def addon_open(aid: str):
+        return engine.addon_view(aid)
+
+    @app.post("/api/addons/{aid}/grant")
+    def addon_grant(aid: str, body: dict = Body(...)):
+        return engine.addon_grant(aid, bool(body.get("on")))
+
+    @app.get("/api/addons/{aid}/data")
+    def addon_data(aid: str):
+        return {"donnees": engine.addon_data(aid)}
+
+    @app.put("/api/addons/{aid}/data")
+    def addon_data_set(aid: str, body: dict = Body(...)):
+        return engine.addon_data_set(aid, str(body.get("cle") or ""), body.get("valeur"))
+
+    @app.post("/api/addons/{aid}/ask")
+    def addon_ask(aid: str, body: dict = Body(...)):
+        return engine.addon_ask(aid, str(body.get("consigne") or ""), str(body.get("format") or "texte"),
+                                str(body.get("modele") or ""), body.get("profile") or None)
+
     @app.get("/api/notes")
     def notes(folder: str | None = None):
         return {"notes": engine.notes(folder)}
@@ -1121,6 +1152,24 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         e = engine.contents.get(cid)
         if not e:
             return PlainTextResponse("Cet aperçu a expiré : rouvre-le depuis la console.", status_code=404)
+        if e.kind == "addon":  # a module (console/addons.py): its pages get the bridge, its files their type
+            base = f"http://{content_host}/v/{cid}/"
+            csp = addons_mod.policy(base, f"http://{content_host} {frame_parents()}")
+            heads = {"Content-Security-Policy": csp, "Referrer-Policy": "no-referrer", "Cache-Control": "no-store",
+                     "X-Content-Type-Options": "nosniff",
+                     # its scripts may be modules: fetched with CORS from the sandbox's opaque origin
+                     "Access-Control-Allow-Origin": "*"}
+            if not rest:
+                return Response(e.page, media_type="text/html; charset=utf-8", headers=heads)
+            p = e.resolve(rest) if e.resolve else None
+            if not p:
+                return PlainTextResponse("Introuvable.", status_code=404, headers=heads)
+            if p.suffix.lower() in (".html", ".htm"):
+                return Response(addons_mod.page(content.decode_html(p.read_bytes()), e.target).encode("utf-8"),
+                                media_type="text/html; charset=utf-8", headers=heads)
+            media = ("text/javascript" if p.suffix.lower() in (".js", ".mjs")
+                     else mimetypes.guess_type(p.name)[0] or "application/octet-stream")
+            return FileResponse(p, media_type=media, headers=heads)
         if e.kind != "page":  # an application written by Claude, or its shell: nothing next to them
             csp = (content.shell_policy(e.target, frame_parents()) if e.kind == "shell"
                    else content.app_policy(f"http://{content_host} {frame_parents()}"))

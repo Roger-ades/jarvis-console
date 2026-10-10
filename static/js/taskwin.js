@@ -1054,6 +1054,7 @@ export class TaskWindow {
     const x = p.input || {};
     if (x.quoi === "odoo") return this.odooCard(p);
     if (x.quoi === "rattacher") return this.attachCard(p);
+    if (x.quoi === "module") return this.moduleCard(p);
     const action = x.quoi === "action";
     const consigne = x.quoi === "consigne";
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
@@ -1123,6 +1124,30 @@ export class TaskWindow {
         h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },
           replace ? "Remplacer les liens" : now.length > 1 ? "Lier ces projets" : "Lier ce projet")),
     ]);
+    return el;
+  }
+
+  /** Claude proposes a module for JARVIS that nobody asked for (modules, proposer): the click is the request,
+   * and Claude writes it in the same turn. */
+  moduleCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Précisions pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v, title) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", { title }, v)) : null);
+    el.append(
+      this.apprHead("puzzle", x.existe ? "Amélioration de module proposée" : "Nouveau module proposé", `${x.icone || "🧩"} ${x.nom || x.id || ""}`),
+      h("div", { class: "appr-reason" }, x.description || p.reason),
+      h("div", { class: "prop-fields" }, ...[
+        field("Pourquoi", x.raison),
+        field("Dossier", x.id, x.dossier),
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, (x.existe ? "Claude modifiera ce module" : "Claude écrira ce module")
+        + " maintenant, puis l'ouvrira dans une fenêtre (bouton Modules). Il reste isolé, sans réseau ; s'il veut interroger Claude, "
+        + "il te demandera l'autorisation. Rien n'est écrit avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Non merci"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },
+          x.existe ? "Améliorer le module" : "Créer le module")));
     return el;
   }
 

@@ -101,6 +101,19 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
   (« synchronise le dossier Devis avec le Drive ») propose sur une carte : déplacer le dossier dans
   OneDrive, ou faire synchroniser une bibliothèque SharePoint par le client OneDrive puis l'ajouter au
   projet.
+- **Claude développe des modules pour JARVIS.** *Fait.* « Fais-moi un outil de suivi des devis » :
+  Claude écrit un module (outil, application, panneau) dans `addons/<id>/` (manifeste `addon.json` +
+  page web), le vérifie et l'ouvre par l'outil `modules` (lister, verifier, ouvrir, donnees). Le
+  format est décrit dans `addons/README.md`, réécrit au démarrage depuis `console/addons_readme.md` ;
+  le dossier est ouvert à toutes les discussions. Un module s'ouvre dans sa fenêtre (bouton
+  **Modules**, Ctrl+K) sur l'origine d'aperçu, dans un iframe isolé (origine opaque, sans réseau, ses
+  seuls fichiers) ; il parle à la console par `window.jarvis` : stockage propre (1 Mo), texte mis dans
+  la barre de commande, notification, lien web confirmé, et `demander` (question à Claude en courte
+  discussion sans fenêtre, seulement après un clic dans le module et si l'utilisateur a autorisé la
+  permission `claude` du manifeste). Sans demande, Claude peut aussi **proposer** un module utile
+  (`modules` → `proposer`) : une carte dans la discussion, au plus une par discussion ;
+  le clic vaut demande et il l'écrit dans le même tour. Le dossier `addons/` n'est pas
+  versionné (`.gitignore`).
 
 ### 1. Donner plus de moyens à Claude dans la console
 

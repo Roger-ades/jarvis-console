@@ -128,8 +128,8 @@ class Entry:
     remote: bool
     resolve: Callable[[str], Path | None] | None  # a file next to the page ("images/logo.png"), or None
     expires: float
-    kind: str = "page"   # page | app | shell
-    target: str = ""     # shell: the address of its application
+    kind: str = "page"   # page | app | addon | shell
+    target: str = ""     # shell: the address of its application; addon: the module's id
 
 
 class ContentStore:
@@ -157,6 +157,15 @@ class ContentStore:
         """An application and its shell: the address of the shell (address(cid) → its URL)."""
         app_cid = secrets.token_urlsafe(24)
         self.put(app_page(html), kind="app", cid=app_cid)
+        url = address(app_cid)
+        return self.put(shell_page(url, title), kind="shell", target=url)
+
+    def put_addon(self, entry: str, aid: str, resolve: Callable[[str], Path | None], title: str,
+                  address: Callable[[str], str]) -> str:
+        """A module (console/addons.py): its entry page and its folder behind one address, in a shell. The shell
+        allows the module's whole folder as frame (its other pages), nothing else."""
+        app_cid = secrets.token_urlsafe(24)
+        self.put(entry, kind="addon", cid=app_cid, resolve=resolve, target=aid)
         url = address(app_cid)
         return self.put(shell_page(url, title), kind="shell", target=url)
 
