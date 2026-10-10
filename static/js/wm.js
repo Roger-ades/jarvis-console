@@ -135,7 +135,7 @@ function measureDock() {
   const pad = parseFloat(document.documentElement.dataset.bar === "haut" ? cs.paddingTop : cs.paddingBottom) || 0;
   return Math.round(pad + 50 + (bar?.offsetHeight || 0) + (tb && !tb.hidden ? tb.offsetHeight : 0) + 10);
 }
-/** Where windows open, maximize and tile: beside the command bar (they can still be dragged under it). */
+/** Where windows open, maximize and tile: beside the command bar (dragged under it, they come back up on release). */
 function usable() {
   const b = bounds();
   const y = document.documentElement.dataset.bar === "haut" ? reservedH : 0;
@@ -143,14 +143,16 @@ function usable() {
 }
 function watchDock() {
   const dock = document.getElementById("dock");
-  if (!dock || typeof ResizeObserver === "undefined") return;
-  new ResizeObserver(() => {
+  if (!dock) return;
+  const measure = () => {
     const hh = measureDock();
     if (hh === reservedH) return;
     reservedH = hh;
     document.documentElement.style.setProperty("--dock-h", `${hh}px`);
     for (const w of wins.values()) if (!w.win) { fit(w.st); apply(w); }
-  }).observe(dock);
+  };
+  measure(); // now: the observer only reports once the page is shown (a console opened in a background tab)
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(measure).observe(dock);
 }
 watchDock();
 
@@ -178,9 +180,11 @@ function apply(w) {
 function fit(st) {
   const b = bounds(), u = usable();
   st.w = clamp(st.w || settings.default_width, 340, b.w);
-  st.h = clamp(st.h || settings.default_height, 180, b.h);
+  st.h = clamp(st.h || settings.default_height, 180, u.h);
   st.x = clamp(st.x ?? 20, -st.w + 120, b.w - 120);
-  st.y = clamp(st.y ?? u.y + 14, u.y, u.y + u.h - 36);
+  // the whole height stays in view: a window ending off the desktop or under the command bar (dragged there,
+  // or the desktop shrank, or the bar grew) goes back up, else the end of its conversation can't be reached
+  st.y = clamp(st.y ?? u.y + 14, u.y, u.y + u.h - st.h);
 }
 
 /** ephemeral: a preview window, not remembered across reloads nor minimized with the others.
@@ -321,6 +325,8 @@ function makeDraggable(id, handle) {
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
       document.body.classList.remove("dragging");
+      fit(w.st);
+      apply(w);
       persist();
     };
     handle.addEventListener("pointermove", move);
@@ -337,16 +343,16 @@ function startResize(e, id, dir) {
   e.stopPropagation();
   if (w.st.max) { w.st.max = false; apply(w); }
   const sx = e.clientX, sy = e.clientY, o = { ...w.st };
-  const b = bounds();
+  const b = bounds(), u = usable();
   const grip = e.currentTarget;
   grip.setPointerCapture(e.pointerId);
   document.body.classList.add("dragging");
   const move = (ev) => {
     const dx = ev.clientX - sx, dy = ev.clientY - sy;
     if (dir.includes("e")) w.st.w = clamp(o.w + dx, 340, b.w - o.x);
-    if (dir.includes("s")) w.st.h = clamp(o.h + dy, 180, b.h - o.y);
+    if (dir.includes("s")) w.st.h = clamp(o.h + dy, 180, u.y + u.h - o.y);
     if (dir.includes("w")) { const nw = clamp(o.w - dx, 340, o.x + o.w); w.st.x = o.x + o.w - nw; w.st.w = nw; }
-    if (dir.includes("n")) { const nh = clamp(o.h - dy, 180, o.y + o.h); w.st.y = o.y + o.h - nh; w.st.h = nh; }
+    if (dir.includes("n")) { const nh = clamp(o.h - dy, 180, o.y + o.h - u.y); w.st.y = o.y + o.h - nh; w.st.h = nh; }
     apply(w);
   };
   const up = () => {
