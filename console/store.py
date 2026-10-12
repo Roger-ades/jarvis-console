@@ -93,14 +93,30 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO events(task_id, seq, ts, kind, data) VALUES(?,?,?,?,?)",
                             (task_id, seq, ts, kind, json.dumps(data, ensure_ascii=False)))
 
-    def search_events(self, needle: str, limit: int = 200) -> list[dict]:
-        """Requests and answers containing the words (newest first), for the search."""
+    def search_events(self, needle: str, limit: int = 200, task_ids: list[str] | None = None) -> list[dict]:
+        """Requests and answers containing the words (newest first), for the search; only those of
+        `task_ids` when given."""
         pat = "%" + needle.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        among, args = "", []
+        if task_ids is not None:
+            if not task_ids:
+                return []
+            among, args = f" AND task_id IN ({','.join('?' * len(task_ids))})", list(task_ids)
         with self._lock:
             rows = self.db.execute(
-                "SELECT task_id, kind, data FROM events WHERE kind IN ('user','text','result') "
-                "AND data LIKE ? ESCAPE '\\' ORDER BY ts DESC LIMIT ?", (pat, limit)).fetchall()
-        return [{"task_id": r["task_id"], "kind": r["kind"], "data": json.loads(r["data"])} for r in rows]
+                "SELECT task_id, ts, kind, data FROM events WHERE kind IN ('user','text','result') "
+                f"AND data LIKE ? ESCAPE '\\'{among} ORDER BY ts DESC LIMIT ?", (pat, *args, limit)).fetchall()
+        return [{"task_id": r["task_id"], "ts": r["ts"], "kind": r["kind"], "data": json.loads(r["data"])} for r in rows]
+
+    def events_of_kind(self, task_ids: list[str], kind: str, limit: int = 200) -> list[dict]:
+        """The events of one kind of these tasks, newest first."""
+        if not task_ids:
+            return []
+        with self._lock:
+            rows = self.db.execute(
+                f"SELECT task_id, ts, data FROM events WHERE kind=? AND task_id IN ({','.join('?' * len(task_ids))}) "
+                "ORDER BY ts DESC LIMIT ?", (kind, *task_ids, limit)).fetchall()
+        return [{"task_id": r["task_id"], "ts": r["ts"], "data": json.loads(r["data"])} for r in rows]
 
     def events(self, task_id: str, after: int = 0, limit: int = 5000) -> list[dict]:
         with self._lock:

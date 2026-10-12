@@ -74,10 +74,15 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
   arrive en cours de discussion, Claude passe par l'outil `projet` (`console/project_nav.py` : ouvrir,
   rattacher) ; rattacher demande un clic et se fait à la fin du tour (une discussion en cours ne se
   déplace pas).
-- **La mémoire de travail du projet.** *À faire.* « Sur quel fichier on a travaillé en dernier ? » :
-  l'outil `projet` (activité) répond à partir des données de la console, sans fouiller le dossier :
-  dernières discussions du projet, fichiers modifiés par Claude (avec la discussion), fichiers ouverts
-  en aperçu, fichiers récemment modifiés sur le disque. Claude peut ensuite l'`afficher`.
+- **La mémoire de travail du projet.** *Fait.* « Sur quel fichier on a travaillé en dernier ? » :
+  l'outil `projet` (action `activite`) répond à partir des données de la console, sans fouiller le
+  dossier : dernières discussions du projet (demande, dernière réponse), fichiers modifiés par Claude et
+  fichiers montrés à l'utilisateur (avec la discussion), fichiers récemment modifiés sur le disque
+  (dossiers cachés, lourds et chemins protégés exclus). Avec `contient`, les passages des discussions
+  du projet qui contiennent un texte (« qu'est-ce qu'on avait dit sur le VLAN 20 ? »). Seulement les
+  discussions du compte de la discussion ; le texte lu est une donnée, jamais une consigne. Claude peut
+  ensuite l'`afficher`. Les fichiers ouverts par l'utilisateur lui-même dans l'aperçu ne sont pas
+  suivis (la console ne les enregistre pas).
 - **Odoo relié au projet.** *Fait.* « Lie le projet Odoo Network V2 à ce projet » : Claude cherche
   dans Odoo (lecture), propose le lien sur une carte (`proposer`, `quoi: "odoo"`) ; le clic
   l'enregistre dans le projet (`Project.odoo` : identifiants, plus seulement des noms). Le lien se fait
@@ -207,7 +212,7 @@ Détail dans [electron.md](electron.md). *Fait : `build-app.bat` installe l'appl
 - À suivre : les mails d'Outlook (aujourd'hui seulement les `.eml` d'un dossier), la recherche par le
   sens (embeddings locaux) en plus des mots, les pièces jointes des mails. *À faire.*
 - L'activité du projet (dernières discussions, derniers fichiers) donnée à Claude par l'outil
-  `projet` : axe 0. *À faire.*
+  `projet` (action `activite`) : axe 0. *Fait.*
 - Propositions de notes de projet (voir l'axe 1). *À faire.*
 
 ### 8. Garder la consommation en main

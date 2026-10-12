@@ -2042,8 +2042,10 @@ class Engine:
         args = args if isinstance(args, dict) else {}
         t = self._get(tid)
         action = str(args.get("action") or "").strip().lower()
+        if action == "activite":
+            return reply(*self.project_activity(tid, args))
         if action not in ("ouvrir", "rattacher"):
-            return reply("« action » vaut ouvrir ou rattacher.", True)
+            return reply("« action » vaut ouvrir, rattacher ou activite.", True)
         projects = self._account_projects(t["profile"])
         proj, many = project_nav.find(str(args.get("nom") or ""), projects)
         if not proj:
@@ -2078,6 +2080,75 @@ class Engine:
             reply(f"Accepté : la discussion passera dans le projet « {proj.name} » ({proj.folder}) à la fin de ce tour. "
                   "Termine ta réponse maintenant ; la suite de la discussion continuera dans ce dossier.")
         self._park(tid, run, appr, answer)
+
+    def project_activity(self, tid: str, args: dict) -> tuple[str, bool]:
+        """Tool "projet", action activite: what happened in a project, from the console's data, for the
+        discussions of this account only. With contient: the passages of its discussions containing a text."""
+        t = self._get(tid)
+        projects = self._account_projects(t["profile"])
+        name = str(args.get("nom") or "").strip()
+        if name:
+            proj, many = project_nav.find(name, projects)
+        else:
+            here = self._project(t.get("workdir") or "")
+            proj, many = (here if here in projects else None), []
+        if not proj:
+            known = many or projects
+            names = ", ".join(f"« {p.name} »" for p in known[:15])
+            lead = ("Plusieurs projets correspondent : " if many else "Projet introuvable. Projets du compte : " if name
+                    else "Cette discussion n'est dans aucun projet : donne nom. Projets du compte : ")
+            return lead + (names or "aucun") + ".", True
+        key = norm(proj.folder)
+        with self._lock:
+            mine = [x for x in self.tasks.values() if x["id"] != tid and x.get("profile") == t["profile"]
+                    and norm(x.get("workdir") or "") == key]
+
+        def last(x: dict) -> float:
+            return max(x.get("ended") or 0, x.get("started") or 0, x.get("created") or 0)
+
+        mine.sort(key=last, reverse=True)
+        titles = {x["id"]: x.get("title") or "" for x in mine}
+        needle = " ".join(str(args.get("contient") or "").split())
+        if needle:
+            if len(needle) < 2:
+                return "« contient » : au moins deux caractères.", True
+            found = self.store.search_events(needle, project_nav.MAX_HITS + 1, task_ids=list(titles))
+            who = {"user": "l'utilisateur", "text": "Claude", "result": "Claude"}
+            hits = [{"ts": e["ts"], "id": e["task_id"], "task": titles[e["task_id"]], "who": who[e["kind"]],
+                     "text": library.snippet(e["data"].get("text") or "", needle, 160)} for e in found]
+            self._audit("activité de projet lue", {"projet": proj.name, "contient": _clip(needle, 100), "passages": len(hits)}, t)
+            return project_nav.passages(proj.name, needle, hits[:project_nav.MAX_HITS], len(hits) > project_nav.MAX_HITS), False
+
+        shown_tasks = mine[:project_nav.MAX_TASKS]
+        tasks = [{"id": x["id"], "title": x.get("title") or "", "ts": last(x), "status": x.get("status") or "",
+                  "archived": x.get("archived"), "prompt": x.get("prompt") or "", "answer": x.get("result") or ""}
+                 for x in shown_tasks]
+        recent = [x["id"] for x in mine[:40]]  # the files: from the latest discussions only, it stays quick
+        changed, seen = [], set()
+        rows = [(r, x) for x in recent for r in self.changes.rows(x)]
+        for r, x in sorted(rows, key=lambda rx: rx[0].get("ts") or 0, reverse=True):
+            if norm(r.get("path") or "") in seen:
+                continue
+            seen.add(norm(r.get("path") or ""))
+            what = ("créé" if r.get("created") else "supprimé" if r.get("deleted")
+                    else f"+{r.get('added', 0)} −{r.get('removed', 0)}" if not r.get("binary") else "modifié")
+            if r.get("state") == "annule":
+                what += ", annulé depuis"
+            changed.append({"path": r["path"], "ts": r.get("ts") or 0, "what": what, "task": titles[x]})
+            if len(changed) >= project_nav.MAX_FILES:
+                break
+        shown, seen = [], set()
+        for e in self.store.events_of_kind(recent, "show", 200):
+            for p in e["data"].get("files") or []:
+                if norm(p) not in seen and len(shown) < project_nav.MAX_FILES:
+                    seen.add(norm(p))
+                    shown.append({"path": p, "ts": e["ts"], "task": titles[e["task_id"]]})
+        guard = self._doc_guard()
+        disk = project_nav.recent_on_disk(proj.folder, lambda p: bool(guard.forbidden_hit({"file_path": p}, "Read"))) \
+            if os.path.isdir(proj.folder) else []
+        self._audit("activité de projet lue", {"projet": proj.name, "discussions": len(tasks)}, t)
+        return project_nav.activity(proj.name, proj.folder, tasks, changed, shown, disk,
+                                    max(0, len(mine) - len(shown_tasks))), False
 
     def _move_after_turn(self, t: dict):
         """A move the user accepted (tool projet, rattacher): done once the turn is over."""
