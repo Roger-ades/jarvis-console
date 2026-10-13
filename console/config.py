@@ -94,6 +94,7 @@ class General(BaseModel):
     update_check: bool = True     # look for a new version on GitHub (git fetch) at start, then every 6 h
     setup_done: bool = True       # False on a fresh install: the first-run assistant opens
     ask_user_questions: bool = True
+    auto_title: bool = True       # after the first answer, Claude titles the discussion (one tiny Haiku request)
     # Context size (thousands of tokens) at which Claude Code compacts a session by itself. Opus runs with
     # a 1M window: left alone it compacts almost never, and every action re-reads the whole context.
     compact_at_k: int = Field(200, ge=0, le=1000)  # 0: Claude Code's own threshold

@@ -330,6 +330,8 @@ def summarize_target(tool: str, inp: dict) -> str:
             return "Odoo : " + ", ".join(str(p.get("name") or p.get("nom") or "") for p in inp.get("projets_odoo") or []
                                           if isinstance(p, dict))[:190]
         return str(inp.get("nom") or inp.get("description") or "")[:200]
+    if tool == "mcp__jarvis__retenir":
+        return " · ".join(str(inp[k]) for k in ("action", "competence", "fichier") if inp.get(k))[:200]
     if tool == "mcp__jarvis__presenter":
         return str(inp.get("titre") or "")[:200] or "affichage"
     if is_mcp(tool):

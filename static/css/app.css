@@ -1677,6 +1677,7 @@ tr.regard-pick > td, tr.regard-pick > th { background: color-mix(in srgb, var(--
 .pv-note > .i { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
 .pv-note > .i svg { width: 13px; height: 13px; }
 .chg-diff { flex: 1; min-height: 0; }
+.prop-diff { margin-top: 6px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
 .chg-diff table { width: 100%; border-collapse: collapse; font: 12px/1.55 var(--mono); }
 .chg-diff td { padding: 0 8px; vertical-align: top; }
 .chg-diff td.ln { width: 1%; min-width: 34px; text-align: right; color: var(--text-3); user-select: none; border-right: 1px solid var(--border); font-variant-numeric: tabular-nums; }

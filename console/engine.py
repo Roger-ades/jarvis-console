@@ -31,7 +31,7 @@ from . import documents as docs_mod
 from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
 from . import addons as addons_mod
-from . import notes_tool, odoo_link, office_link, project_nav, project_tools
+from . import knowledge, notes_tool, odoo_link, office_link, project_nav, project_tools
 from . import regard as regard_mod
 from . import results as results_mod
 from .config import (Config, ConfigStore, InputConstraint, Preset, Profile, ProjectRule, ToolRule, dump,
@@ -160,7 +160,10 @@ NOTES_TOOL = f"mcp__{CONSOLE_MCP}__notes"
 MODULES_TOOL = f"mcp__{CONSOLE_MCP}__modules"
 MODULES_SPEC = {"_meta": ALWAYS_LOAD, **addons_mod.SPEC}
 NOTES_SPEC = {"_meta": ALWAYS_LOAD, **notes_tool.SPEC}
-CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL, NOTES_TOOL, MODULES_TOOL}
+KNOWLEDGE_TOOL = f"mcp__{CONSOLE_MCP}__retenir"
+KNOWLEDGE_SPEC = {"_meta": ALWAYS_LOAD, **knowledge.SPEC}
+CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL, NOTES_TOOL, MODULES_TOOL,
+                 KNOWLEDGE_TOOL}
 DOCS_RESCAN = 15 * 60  # the document folders are walked again this often (only changed files are read)
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
@@ -2025,6 +2028,89 @@ class Engine:
                 reply("Acceptée, mais pas enregistrée : " + exc.message, True)
         self._park(tid, run, appr, answer)
 
+    # -------------------------------------------------------- what the user knows for all his projects (knowledge.py)
+    def _knowledge_dir(self, t: dict) -> tuple[Profile, Path]:
+        prof = self.cfg.profile(t.get("profile") or "") or Profile.model_validate(t["spec"]["profile"])
+        return prof, self._account_dir(prof)
+
+    def knowledge_for_claude(self, tid: str, args) -> tuple[str, bool]:
+        """Tool "retenir", actions lister and lire: the skills of the discussion's account. (proposer waits for
+        the user's click, see _propose_knowledge.)"""
+        args = args if isinstance(args, dict) else {}
+        _, base = self._knowledge_dir(self._get(tid))
+        action = str(args.get("action") or "").strip().lower()
+        try:
+            if action == "lister":
+                return knowledge.listing(base), False
+            if action == "lire":
+                return knowledge.read(base, args.get("competence"), args.get("fichier")), False
+        except knowledge.KnowledgeError as exc:
+            return str(exc)[:1].upper() + str(exc)[1:], True
+        if action == "proposer":
+            return "Cette action passe par la fenêtre de la discussion.", True
+        return "« action » vaut lister, lire ou proposer.", True
+
+    def _propose_knowledge(self, tid: str, run: Run, rid: str, msg: dict):
+        """Tool "retenir", action proposer: the differences on a card; the file is written only on the user's
+        click, and only if nobody changed it meanwhile."""
+        mid = msg.get("id")
+
+        def reply(text: str, failed: bool = False):
+            self._respond(run, rid, {"mcp_response": {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": text}], "isError": failed}}})
+
+        t = self._get(tid)
+        prof, base = self._knowledge_dir(t)
+        args = (msg.get("params") or {}).get("arguments") or {}
+        try:
+            prop, after = knowledge.proposal(base, args if isinstance(args, dict) else {})
+        except knowledge.KnowledgeError as exc:
+            return reply("Rien de proposé : " + str(exc), True)
+        proj = self._project(t.get("workdir") or "")
+        prop.update({"compte": prof.name, "projet": proj.name if proj else ""})
+        what = (f"de créer la compétence « {prop['competence']} »" if prop["nouvelle"]
+                else f"de {'modifier' if prop['mode'] == 'remplacer' else 'compléter'} {prop['fichier']} de la "
+                     f"compétence « {prop['competence']} »")
+        appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=KNOWLEDGE_TOOL, input=prop,
+                        reason=f"Claude propose {what}, pour tous les projets du compte {prof.name}.")
+
+        def answer(a: Approval):
+            if a.decision != "allow":
+                return reply("L'utilisateur n'a pas retenu la proposition" + (f" : {a.message}" if a.message else ".")
+                             + " N'insiste pas et ne l'écris pas toi-même.")
+            try:
+                reply(self._apply_knowledge(t, prof, prop, after))
+            except TaskError as exc:
+                reply("Acceptée, mais pas enregistrée : " + exc.message, True)
+            except OSError as exc:
+                reply(f"Acceptée, mais pas enregistrée : {exc}", True)
+        self._park(tid, run, appr, answer)
+
+    def _apply_knowledge(self, t: dict, prof: Profile, prop: dict, after: str) -> str:
+        path = Path(prop["chemin"])
+        now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+        if knowledge.fingerprint(now) != prop["empreinte"]:
+            raise TaskError(f"{prop['fichier']} a changé pendant la proposition : relis-le et propose de nouveau.")
+        # A skill validated as a button stays validated: the user has just seen the only change.
+        before = next((a for a in self.account_actions(prof.id) if a["name"] == prop["competence"]), None)
+        self._write_doc(path, after)
+        if before and before["status"] == "ok":
+            a = next((x for x in self.account_actions(prof.id) if x["name"] == prop["competence"]), None)
+            if a:
+                pins = self.store.kv_get("action_pins", {}) or {}
+                pins.setdefault(f"compte:{prof.id}", {})[a["name"]] = a["hash"]
+                self.store.kv_set("action_pins", pins)
+        self._audit("savoir du compte", {"compte": prof.name, "compétence": prop["competence"], "fichier": str(path),
+                                         "mode": "création" if prop["nouvelle"] else prop["mode"],
+                                         "ajouts": prop["ajouts"], "retraits": prop["retraits"],
+                                         "raison": prop.get("raison") or ""}, t)
+        self.bus.publish("account_actions", {"profile": prof.id})
+        done = (f"Compétence « {prop['competence']} » créée" if prop["nouvelle"]
+                else f"{prop['fichier']} de la compétence « {prop['competence']} » "
+                     + ("remplacé" if prop["mode"] == "remplacer" else "complété"))
+        return (f"{done} ({path}). Claude Code la charge dans tous les projets du compte {prof.name} quand le sujet "
+                "s'y prête, à partir des prochaines discussions.")
+
     # -------------------------------------------------------- the project follows the conversation (project_nav.py)
     def _account_projects(self, pid: str) -> list:
         return [p for p in self.cfg.projects if not p.profile or p.profile == pid]
@@ -3129,6 +3215,8 @@ class Engine:
                                     "subtype": msg.get("subtype"), "hint": hint or subtype_msg,
                                     "cost": msg.get("total_cost_usd"), "duration_ms": msg.get("duration_ms"),
                                     "turns": msg.get("num_turns"), "denials": denials})
+        if not is_error:
+            self._auto_title(t)
         if run.results >= run.sent:
             with self._lock:
                 # a move accepted (tool projet): the session ends here, what waits starts in the new folder
@@ -3253,6 +3341,9 @@ class Engine:
                 if name == MODULES_SPEC["name"] and str(((message.get("params") or {}).get("arguments") or {})
                                                         .get("action") or "").strip().lower() == "proposer":
                     return self._propose_module(tid, run, rid, message)
+                if name == KNOWLEDGE_SPEC["name"] and str(((message.get("params") or {}).get("arguments") or {})
+                                                          .get("action") or "").strip().lower() == "proposer":
+                    return self._propose_knowledge(tid, run, rid, message)
             return self._respond(run, rid, {"mcp_response": self._console_mcp(tid, req.get("server_name"), message)})
 
         self._respond(run, rid, error=f"Requête non prise en charge par la console : {sub}")
@@ -3273,7 +3364,7 @@ class Engine:
         if method == "tools/list":
             # (listed only when the user indexes documents: every tool weighs in every discussion's context)
             return ok({"tools": [SHOW_SPEC, RESULT_SPEC, PRESENT_SPEC, PROPOSE_SPEC, PROJECT_SPEC, NOTES_SPEC, MODULES_SPEC,
-                                 *([DOCS_SPEC] if self.cfg.documents.enabled else [])]})
+                                 KNOWLEDGE_SPEC, *([DOCS_SPEC] if self.cfg.documents.enabled else [])]})
         if method == "tools/call":
             if silent:
                 return ok({"content": [{"type": "text", "text": "Indisponible pendant un maintien du cache."}], "isError": True})
@@ -3293,6 +3384,8 @@ class Engine:
                 text, failed = self.notes_for_claude(tid, args)
             elif params.get("name") == MODULES_SPEC["name"]:
                 text, failed = self.addons_for_claude(tid, args)
+            elif params.get("name") == KNOWLEDGE_SPEC["name"]:
+                text, failed = self.knowledge_for_claude(tid, args)
             else:
                 text, failed = f"Outil inconnu : {params.get('name')}", True
             return ok({"content": [{"type": "text", "text": text}], "isError": failed})
@@ -4000,9 +4093,33 @@ class Engine:
                 self._save(t)
         return {"available": True, **a}
 
-    def ai_title(self, tid: str) -> dict:
+    # Internal discussions keep the name the console gave them.
+    NO_AUTO_TITLE = ("widget", "routine", "addon", "reglage")
+
+    def _auto_title(self, t: dict):
+        """After the first answer, Claude titles the discussion, once, in the background. Not when the
+        user already renamed it; a rename made while Claude looks for a title wins."""
+        if t.get("auto_titled") or not self.cfg.general.auto_title or t.get("origin") in self.NO_AUTO_TITLE:
+            return
+        with self._lock:
+            t["auto_titled"] = True
+            self._save(t, publish=False)
+        before = t["title"]
+        if before != _title(t.get("prompt") or ""):
+            return
+
+        def work():
+            try:
+                self.ai_title(t["id"], expect=before)
+            except TaskError:
+                pass   # no title found: the request stays the title, « Renommer avec l'IA » remains
+
+        threading.Thread(target=work, name=f"title-{t['id']}", daemon=True).start()
+
+    def ai_title(self, tid: str, expect: str | None = None) -> dict:
         """Rename a task after its content: one short Haiku request on the task's account, outside
-        the conversation (nothing is written in the session, a running task is not disturbed)."""
+        the conversation (nothing is written in the session, a running task is not disturbed).
+        expect: the title is changed only if it is still this one (automatic title)."""
         t = self._get(tid)
         prof = self.cfg.profile(t.get("profile") or "")
         if not prof:
@@ -4023,7 +4140,10 @@ class Engine:
         title = _clean_title(res.get("text"))
         if not title:
             raise TaskError(res.get("error") or "Claude n'a pas proposé de titre.", 502)
-        self._audit("tâche renommée par Claude", {"titre": title, "ancien": t["title"]}, t)
+        if expect is not None and (t["title"] != expect or tid not in self.tasks):
+            return self.public(t)
+        self._audit("tâche renommée par Claude", {"titre": title, "ancien": t["title"],
+                                                  **({"automatique": True} if expect is not None else {})}, t)
         return self.update_task(tid, {"title": title})
 
     # -------------------------------------------------------- archiving (docs/ihm.md, « Archivage des discussions »)

@@ -91,7 +91,7 @@ export async function undoChange(taskId, c, { redo = false, running = false, col
   }
 }
 
-function diffTable(d) {
+export function diffTable(d) {
   if (d.binary) return h("p", { class: "muted chg-note" }, "Fichier binaire : pas de différences ligne à ligne.");
   if (d.only_endings) return h("p", { class: "muted chg-note" }, "Seules les fins de ligne ou l'encodage ont changé.");
   const rows = d.lines.map((l) => h("tr", { class: l.k === "+" ? "add" : l.k === "-" ? "del" : l.k === "@" ? "hunk" : "" },

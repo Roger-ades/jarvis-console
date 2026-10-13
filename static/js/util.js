@@ -95,12 +95,14 @@ export const SHOW_TOOL = "mcp__jarvis__afficher";
 export const RESULT_TOOL = "mcp__jarvis__afficher_resultat";
 export const PRESENT_TOOL = "mcp__jarvis__presenter";
 export const PROPOSE_TOOL = "mcp__jarvis__proposer";
+export const KNOWLEDGE_TOOL = "mcp__jarvis__retenir";
 
 /** Icon of a tool call, by family. */
 export function toolIcon(name = "") {
   if (name === SHOW_TOOL || name === RESULT_TOOL) return "eye";
   if (name === PRESENT_TOOL) return "sparkle";
   if (name === PROPOSE_TOOL) return "bolt";
+  if (name === KNOWLEDGE_TOOL) return "brain";
   if (name.startsWith("mcp__")) return "plug";
   return ({
     Read: "file", NotebookRead: "file", Write: "edit", Edit: "edit", MultiEdit: "edit", NotebookEdit: "edit",
@@ -275,6 +277,7 @@ export function toolLabel(name) {
   if (!name) return "Outil";
   if (name === SHOW_TOOL || name === RESULT_TOOL || name === PRESENT_TOOL) return "Affichage";
   if (name === PROPOSE_TOOL) return "Proposition pour le projet";
+  if (name === KNOWLEDGE_TOOL) return "Savoir du compte";
   if (name.startsWith("mcp__")) {
     const [server, ...rest] = name.slice(5).split("__");
     return `${server.replace(/^claude_ai_/, "")} · ${rest.join("__")}`;

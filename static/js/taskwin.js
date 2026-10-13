@@ -5,7 +5,7 @@ import { mdElement } from "./md.js";
 import {
   ACTIVE, STATUS, confirmDialog, planProgress, statusLabel, copyText, dialog, fmtCost, fmtDuration, fmtTokens, h, iconBtn, modelName, toast, toolIcon, toolLabel,
 } from "./util.js";
-import { changesUpdated, counts, openChanges, openDiff } from "./changes.js";
+import { changesUpdated, counts, diffTable, openChanges, openDiff } from "./changes.js";
 import { openDisplayModal, openDisplayWindow, renderDisplay, setAnswer, setDoc } from "./display.js";
 import * as regard from "./regard.js";
 import { paint, taskTint } from "./tint.js";
@@ -1055,6 +1055,7 @@ export class TaskWindow {
     if (x.quoi === "odoo") return this.odooCard(p);
     if (x.quoi === "rattacher") return this.attachCard(p);
     if (x.quoi === "module") return this.moduleCard(p);
+    if (x.quoi === "savoir") return this.knowledgeCard(p);
     const action = x.quoi === "action";
     const consigne = x.quoi === "consigne";
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
@@ -1096,6 +1097,36 @@ export class TaskWindow {
       consigne && x.remplace === true && x.actuelle ? h("details", {}, h("summary", { class: "muted" }, "Consigne actuelle, qui sera remplacée"),
         h("pre", { class: "prop-code" }, x.actuelle)) : null,
     ].filter(Boolean));
+    return el;
+  }
+
+  /** Claude proposes to add to a skill of the account (tool retenir): what every project will know, shown as
+   * differences and written only on the click. */
+  knowledgeCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v, title) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", { title }, v)) : null);
+    const replace = x.mode === "remplacer" && !x.nouveau_fichier;
+    const title = x.nouvelle ? "Nouvelle compétence proposée" : replace ? "Correction de compétence proposée" : "À retenir pour tous les projets";
+    const sizes = `+${x.ajouts || 0}${x.retraits ? ` −${x.retraits}` : ""} lignes`;
+    el.append(...[
+      this.apprHead("brain", title, `Compétence « ${x.competence || ""} »`),
+      h("div", { class: "appr-reason" }, x.raison || p.reason),
+      h("div", { class: "prop-fields" }, ...[
+        field("Fichier", `${x.fichier || ""} · ${sizes}`, x.chemin),
+        field("Compte", x.compte),
+        field("Vient de", x.projet ? `projet « ${x.projet} »` : ""),
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, "Claude Code lira ce texte dans tous les projets de ce compte dès que le sujet s'y prête. "
+        + "Relis-le : une règle fausse se retrouverait partout. Rien n'est écrit avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },
+          x.nouvelle ? "Créer la compétence" : replace ? "Enregistrer la correction" : "Retenir")),
+      h("details", { open: true }, h("summary", { class: "muted" }, "Différences"),
+        h("div", { class: "prop-diff" }, diffTable(x.diff || { lines: [] }))),
+    ]);
     return el;
   }
 

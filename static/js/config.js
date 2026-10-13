@@ -211,6 +211,7 @@ function tabGeneral() {
       text("Dossier des pièces jointes", `${g}.attachments_dir`, { placeholder: "~/ClaudeConsole/pieces-jointes", cls: "wide",
         help: "Chaque tâche y a son sous-dossier (date_identifiant), ajouté à ses dossiers de travail. Rien n'y est effacé automatiquement." }),
       check("Questions interactives (AskUserQuestion)", `${g}.ask_user_questions`, { help: "Claude peut te poser des questions dans la fenêtre." }),
+      check("Titre automatique des discussions", `${g}.auto_title`, { help: "Après la première réponse, Claude donne un titre à la discussion (une toute petite requête Haiku). Pas si tu l'as déjà renommée." }),
       check("Lire les limites des comptes au démarrage", `${g}.limits_on_start`, { help: "Si la dernière mesure date de plus de 3 h : une toute petite requête (Haiku) par compte. Sinon elles se mettent à jour à chaque tâche." }),
       lines("Variables d'environnement retirées", `${g}.env_strip`, { help: "Motifs retirés de l'environnement des tâches (ANTHROPIC_* évite toute facturation par clé API)." }),
     )),

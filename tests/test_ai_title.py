@@ -55,3 +55,37 @@ def test_title_cleanup():
     assert _clean_title("# Pourquoi ça plante ?") == "Pourquoi ça plante ?"
     assert _clean_title("   \n") == ""
     assert len(_clean_title("mot " * 40)) <= 80
+
+
+def test_the_first_answer_titles_the_discussion_once(engine):
+    engine.cfg.general.auto_title = True
+    tid = done_task(engine, "Prépare le devis Dupont pour trois caméras dôme")
+    wait_for(lambda: engine.tasks[tid]["title"] == "Prépare le devis Dupont pour")
+    assert engine.tasks[tid]["auto_titled"]
+    engine.update_task(tid, {"title": "Devis Dupont"})
+    engine._auto_title(engine.tasks[tid])   # a later answer: no new title
+    time.sleep(0.5)
+    assert engine.tasks[tid]["title"] == "Devis Dupont"
+
+
+def test_a_rename_by_the_user_wins(engine):
+    engine.cfg.general.auto_title = True
+    t = engine.create_task("Audit du réseau du site de Lyon", profile="work", preset="lecture")
+    engine.update_task(t["id"], {"title": "Lyon"})
+    wait_for(lambda: engine.tasks[t["id"]].get("auto_titled") and t["id"] not in engine.runs)
+    time.sleep(0.5)
+    assert engine.tasks[t["id"]]["title"] == "Lyon"
+    # renamed while Claude was looking: the title found is dropped
+    assert engine.ai_title(t["id"], expect="autre chose")["title"] == "Lyon"
+
+
+def test_no_automatic_title_when_disabled_or_for_internal_tasks(engine):
+    tid = done_task(engine, "Prépare le devis Dupont pour trois caméras dôme")
+    time.sleep(0.5)
+    assert engine.tasks[tid]["title"] != "Prépare le devis Dupont pour" and not engine.tasks[tid].get("auto_titled")
+    engine.cfg.general.auto_title = True
+    t = engine.create_task("Prépare le devis Dupont pour trois caméras dôme", profile="work", preset="lecture",
+                           origin="routine")
+    wait_for(lambda: task_status(engine, t["id"]) in ("done", "error") and t["id"] not in engine.runs)
+    time.sleep(0.5)
+    assert not engine.tasks[t["id"]].get("auto_titled")

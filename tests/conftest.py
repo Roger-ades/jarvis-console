@@ -29,6 +29,7 @@ def make_config(tmp: Path):
     cfg = default_config()
     cfg.general.attachments_dir = str(tmp / "pieces-jointes")
     cfg.general.limits_on_start = False  # tested on its own: no background request during other tests
+    cfg.general.auto_title = False       # idem: titles stay those of the requests
     for p in cfg.profiles:
         p.workdir = str(tmp / "work" / p.id)
         p.config_dir = str(tmp / "cfg" / p.id)
