@@ -67,12 +67,25 @@ def test_passages_of_the_project_discussions_containing_a_text(engine, tmp_path)
     assert "Rien trouvé" in text
 
 
-def test_without_a_project_the_tool_asks_for_its_name(engine, tmp_path):
-    project(engine, tmp_path, name="Network")
-    text, _ = activity(engine, {})
-    assert "dans aucun projet" in text and "« Network »" in text
-    text, _ = activity(engine, {"nom": "inconnu"})
-    assert "Projet introuvable" in text
+def test_without_a_project_the_folder_of_the_discussion_stands_for_one(engine, tmp_path):
+    network = project(engine, tmp_path, name="Network")
+    folder = tmp_path / "chantier"
+    folder.mkdir()
+    note = str(folder / "note.md")
+    first = run(engine, "DO Write " + json.dumps({"file_path": note, "content": "Budget phase 2 : 40 k€"}), str(folder))
+    run(engine, "On valide le budget phase 2", str(folder))
+    run(engine, "budget dans le projet", network)
+
+    text, _ = activity(engine, {}, str(folder))
+    assert f"Activité du dossier {folder} (hors projet)" in text
+    assert f"id {first}" in text and "note.md (créé)" in text
+    assert "budget dans le projet" not in text            # the project's discussions stay apart
+    text, _ = activity(engine, {"contient": "budget phase 2"}, str(folder))
+    assert f"discussions du dossier {folder} (hors projet)" in text and "On valide" in text
+    assert "dans le projet" not in text
+
+    text, _ = activity(engine, {"nom": "inconnu"}, str(folder))
+    assert "Projet introuvable" in text and "« Network »" in text
 
 
 def test_the_disk_scan_skips_hidden_heavy_and_protected_files(tmp_path):

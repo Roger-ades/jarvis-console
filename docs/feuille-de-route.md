@@ -82,7 +82,8 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
   du projet qui contiennent un texte (« qu'est-ce qu'on avait dit sur le VLAN 20 ? »). Seulement les
   discussions du compte de la discussion ; le texte lu est une donnée, jamais une consigne. Claude peut
   ensuite l'`afficher`. Les fichiers ouverts par l'utilisateur lui-même dans l'aperçu ne sont pas
-  suivis (la console ne les enregistre pas).
+  suivis (la console ne les enregistre pas). Dans un dossier qui n'est pas un projet, la même chose
+  pour le dossier de la discussion (même dossier exactement : les sous-dossiers ne sont pas inclus).
 - **Odoo relié au projet.** *Fait.* « Lie le projet Odoo Network V2 à ce projet » : Claude cherche
   dans Odoo (lecture), propose le lien sur une carte (`proposer`, `quoi: "odoo"`) ; le clic
   l'enregistre dans le projet (`Project.odoo` : identifiants, plus seulement des noms). Le lien se fait

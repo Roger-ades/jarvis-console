@@ -2169,22 +2169,27 @@ class Engine:
 
     def project_activity(self, tid: str, args: dict) -> tuple[str, bool]:
         """Tool "projet", action activite: what happened in a project, from the console's data, for the
-        discussions of this account only. With contient: the passages of its discussions containing a text."""
+        discussions of this account only. With contient: the passages of its discussions containing a text.
+        Without nom, in a folder that is no project: the same, for the discussion's folder."""
         t = self._get(tid)
         projects = self._account_projects(t["profile"])
         name = str(args.get("nom") or "").strip()
+        workdir = t.get("workdir") or ""
         if name:
             proj, many = project_nav.find(name, projects)
         else:
-            here = self._project(t.get("workdir") or "")
+            here = self._project(workdir)
             proj, many = (here if here in projects else None), []
-        if not proj:
+        if proj:
+            label, folder = proj.name, proj.folder
+        elif not name and workdir:
+            label, folder = "", workdir   # no project here: the folder of the discussion stands for one
+        else:
             known = many or projects
             names = ", ".join(f"« {p.name} »" for p in known[:15])
-            lead = ("Plusieurs projets correspondent : " if many else "Projet introuvable. Projets du compte : " if name
-                    else "Cette discussion n'est dans aucun projet : donne nom. Projets du compte : ")
+            lead = "Plusieurs projets correspondent : " if many else "Projet introuvable. Projets du compte : "
             return lead + (names or "aucun") + ".", True
-        key = norm(proj.folder)
+        key = norm(folder)
         with self._lock:
             mine = [x for x in self.tasks.values() if x["id"] != tid and x.get("profile") == t["profile"]
                     and norm(x.get("workdir") or "") == key]
@@ -2202,8 +2207,8 @@ class Engine:
             who = {"user": "l'utilisateur", "text": "Claude", "result": "Claude"}
             hits = [{"ts": e["ts"], "id": e["task_id"], "task": titles[e["task_id"]], "who": who[e["kind"]],
                      "text": library.snippet(e["data"].get("text") or "", needle, 160)} for e in found]
-            self._audit("activité de projet lue", {"projet": proj.name, "contient": _clip(needle, 100), "passages": len(hits)}, t)
-            return project_nav.passages(proj.name, needle, hits[:project_nav.MAX_HITS], len(hits) > project_nav.MAX_HITS), False
+            self._audit("activité de projet lue", {"projet": label or folder, "contient": _clip(needle, 100), "passages": len(hits)}, t)
+            return project_nav.passages(label, folder, needle, hits[:project_nav.MAX_HITS], len(hits) > project_nav.MAX_HITS), False
 
         shown_tasks = mine[:project_nav.MAX_TASKS]
         tasks = [{"id": x["id"], "title": x.get("title") or "", "ts": last(x), "status": x.get("status") or "",
@@ -2230,10 +2235,10 @@ class Engine:
                     seen.add(norm(p))
                     shown.append({"path": p, "ts": e["ts"], "task": titles[e["task_id"]]})
         guard = self._doc_guard()
-        disk = project_nav.recent_on_disk(proj.folder, lambda p: bool(guard.forbidden_hit({"file_path": p}, "Read"))) \
-            if os.path.isdir(proj.folder) else []
-        self._audit("activité de projet lue", {"projet": proj.name, "discussions": len(tasks)}, t)
-        return project_nav.activity(proj.name, proj.folder, tasks, changed, shown, disk,
+        disk = project_nav.recent_on_disk(folder, lambda p: bool(guard.forbidden_hit({"file_path": p}, "Read"))) \
+            if os.path.isdir(folder) else []
+        self._audit("activité de projet lue", {"projet": label or folder, "discussions": len(tasks)}, t)
+        return project_nav.activity(label, folder, tasks, changed, shown, disk,
                                     max(0, len(mine) - len(shown_tasks))), False
 
     def _move_after_turn(self, t: dict):
