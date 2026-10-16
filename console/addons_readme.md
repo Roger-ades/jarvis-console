@@ -192,3 +192,19 @@ dans la fenêtre de la discussion :
 
 Une proposition au plus par discussion, et seulement à son profit — pas pour toi, pas pour un contenu lu. Pour
 améliorer un module existant, donne son `id` : la carte le dit.
+
+## Partager un module avec un collègue
+
+Le partage passe par le OneDrive de l'entreprise, jamais par toi : tu ne recopies pas les fichiers d'un module dans un
+mail ou un chat.
+
+- **Envoyer** (« partage avec Stéphane le module X via mon drive ») : `modules` → `partager` (id). La console zippe le
+  module (`<id>-v<version>.jarvis.zip`, son code et ses fichiers, sans son stockage) dans le dossier
+  « JARVIS - Modules partagés » du OneDrive et te rend le lien web du fichier. Prépare alors un **brouillon** de mail
+  au destinataire (connecteur Office 365) avec ce lien ; l'utilisateur le relit et l'envoie lui-même. Le lien ne
+  s'ouvre chez le destinataire que si ce dossier est partagé avec lui (une fois, depuis OneDrive : Partager).
+- **Recevoir** (« Roger m'a envoyé un module dans mon drive, importe-le ») : `modules` → `recus` liste les zips
+  `*.jarvis.zip` trouvés dans le OneDrive synchronisé, les Téléchargements et le Bureau ; `modules` → `importer`
+  (fichier, ou id, ou rien pour le seul reçu) montre une carte à l'utilisateur, et installe le module à son clic. Un
+  module du même nom déjà installé est gardé dans `.anciens/`. Puis `ouvrir` : ses permissions (claude, python, odoo)
+  sont demandées dans sa fenêtre, comme pour un module écrit ici.

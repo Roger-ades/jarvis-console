@@ -324,7 +324,7 @@ def summarize_target(tool: str, inp: dict) -> str:
     if tool == "mcp__jarvis__afficher_resultat":
         return " · ".join(str(inp[k]) for k in ("outil", "contient", "id") if inp.get(k))[:200] or "dernier résultat"
     if tool == "mcp__jarvis__modules":
-        return " ".join(str(inp[k]) for k in ("action", "id", "tache") if inp.get(k))[:200]
+        return " ".join(str(inp[k]) for k in ("action", "id", "tache", "fichier") if inp.get(k))[:200]
     if tool == "mcp__jarvis__projet":
         return f"{inp.get('action') or inp.get('quoi') or ''} {inp.get('nom') or inp.get('projet') or ''}".strip()[:200]
     if tool == "mcp__jarvis__proposer":

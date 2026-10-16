@@ -307,6 +307,11 @@ SPEC = {
         "vérification. action = donnees (id) : lit son stockage, pour déboguer. action = executer (id, tache, params) : "
         "lance une tâche Python du module et attend sa fin (son résultat et ses dernières lignes de sortie te "
         "reviennent) ; l'utilisateur valide sur une carte si son code n'est pas encore autorisé. "
+        "action = partager (id, dossier facultatif) : quand l'utilisateur veut envoyer un module à un collègue, le zippe "
+        "dans son OneDrive (dossier « JARVIS - Modules partagés ») et te rend le lien, pour un brouillon de mail. "
+        "action = recus : les modules reçus (zips *.jarvis.zip de son OneDrive, ses Téléchargements, son Bureau). "
+        "action = importer (fichier ou id facultatifs) : installe un module reçu, après validation de l'utilisateur sur une "
+        "carte (un module déjà là est gardé dans .anciens). "
         "action = proposer (id, nom, description, "
         "raison) : quand l'utilisateur n'a rien demandé mais qu'un module l'aiderait (un besoin qui revient, un suivi à "
         "garder, un calcul refait à la main), propose-le-lui sur une carte ; son clic vaut demande, et tu l'écris alors "
@@ -316,10 +321,16 @@ SPEC = {
         "type": "object",
         "required": ["action"],
         "properties": {
-            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "executer", "proposer"]},
+            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "executer", "partager",
+                                                         "recus", "importer", "proposer"]},
+            "fichier": {"type": "string", "description": "importer : le chemin du zip reçu (donné par recus) ; sans lui, "
+                                                         "le plus récent reçu (de ce module si id est donné)."},
+            "dossier": {"type": "string", "description": "partager : un autre dossier où déposer le zip (par défaut "
+                                                         "« JARVIS - Modules partagés » du OneDrive)."},
             "tache": {"type": "string", "description": "executer : le nom de la tâche dans les « taches » de addon.json."},
             "params": {"type": "object", "description": "executer : les paramètres de la tâche (jarvis.params)."},
-            "id": {"type": "string", "description": "verifier, ouvrir, donnees, executer : le nom du dossier du module. proposer : "
+            "id": {"type": "string", "description": "verifier, ouvrir, donnees, executer, partager, importer : le nom du "
+                                                    "dossier du module. proposer : "
                                                     "celui du module à créer (minuscules, chiffres, tirets), ou d'un "
                                                     "module existant à améliorer."},
             "nom": {"type": "string", "description": "proposer : le nom affiché du module."},
