@@ -31,6 +31,7 @@ from . import documents as docs_mod
 from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
 from . import addons as addons_mod
+from . import addon_tasks, odoo_api
 from . import knowledge, notes_tool, odoo_link, office_link, project_nav, project_tools
 from . import regard as regard_mod
 from . import results as results_mod
@@ -419,6 +420,8 @@ class Engine:
             pass
         self._addon_asks: dict[str, str] = {}   # module -> its question to Claude in progress (task id)
         self._addon_lock = threading.Lock()
+        self._addon_runs: dict[str, addon_tasks.Execution] = {}  # Python tasks of the modules, by run id
+        self._addon_run_waiters: dict[str, list] = {}            # run id -> callbacks at its end (tool modules)
         try:  # the format, for Claude (rewritten so it follows the console's version)
             readme = (Path(__file__).with_name("addons_readme.md")).read_text("utf-8")
             target = self.addons_dir / addons_mod.README
@@ -574,6 +577,8 @@ class Engine:
             self._release_approvals(run, "Arrêt du serveur.")
             if run.proc and run.proc.poll() is None:
                 claude_cli.kill_tree(run.proc.pid)
+        for ex in list(self._addon_runs.values()):
+            ex.stop("Interrompue : arrêt du serveur.")
 
     # -------------------------------------------------------- task creation
     def _profile_alias(self, alias: str) -> str | None:
@@ -1040,6 +1045,8 @@ class Engine:
                     self.cancel(tid, "Arrêtée par l'arrêt d'urgence.")
                 except TaskError:
                     pass
+            for ex in list(self._addon_runs.values()):
+                ex.stop("Arrêtée par l'arrêt d'urgence.")
         self.bus.publish("state", self.state())
         self._wake.set()
         return self.state()
@@ -3343,9 +3350,12 @@ class Engine:
                     return self._propose(tid, run, rid, message)
                 if name == PROJECT_SPEC["name"]:
                     return self._project_tool(tid, run, rid, message)
-                if name == MODULES_SPEC["name"] and str(((message.get("params") or {}).get("arguments") or {})
-                                                        .get("action") or "").strip().lower() == "proposer":
-                    return self._propose_module(tid, run, rid, message)
+                if name == MODULES_SPEC["name"]:
+                    action = str(((message.get("params") or {}).get("arguments") or {}).get("action") or "").strip().lower()
+                    if action == "proposer":
+                        return self._propose_module(tid, run, rid, message)
+                    if action == "executer":
+                        return self._addon_execute(tid, run, rid, message)
                 if name == KNOWLEDGE_SPEC["name"] and str(((message.get("params") or {}).get("arguments") or {})
                                                           .get("action") or "").strip().lower() == "proposer":
                     return self._propose_knowledge(tid, run, rid, message)
@@ -4898,8 +4908,13 @@ class Engine:
 
     def _addon_public(self, a: dict, grants: set[str] | None = None) -> dict:
         grants = self._addon_grants() if grants is None else grants
-        return {**{k: v for k, v in a.items() if k != "folder"},
-                "autorise": not a["permissions"] or addons_mod.permission_key(a) in grants}
+        key = addons_mod.permission_key(a)
+        out = {**{k: v for k, v in a.items() if k != "folder"},
+               "autorise": not a["permissions"] or key in grants}
+        if "python" in a["permissions"]:  # granted before, for other code: its scripts changed since
+            out["scripts"] = addons_mod.python_files(a)
+            out["code_change"] = not out["autorise"] and any(g.rsplit("|", 1)[0] == key.rsplit("|", 1)[0] for g in grants)
+        return out
 
     def list_addons(self) -> dict:
         grants = self._addon_grants()
@@ -5006,6 +5021,157 @@ class Engine:
         self.bus.publish("addon_answer", out)
         self._forget_reader(t["id"])
 
+    # Python tasks of the modules (console/addon_tasks.py): run by the console, no model
+    def _addon_task(self, a: dict, name: str) -> dict:
+        """The task as the manifest declares it, or why it cannot run."""
+        name = str(name or "").strip()
+        if self.emergency:
+            raise TaskError("Arrêt d'urgence actif : aucune tâche ne se lance.", 409)
+        if name not in a["taches"]:
+            raise TaskError(f"Tâche inconnue : « {name} » (celles de {a['id']} : {', '.join(a['taches']) or 'aucune'}).", 404)
+        if "python" not in a["permissions"]:
+            raise TaskError("Ce module ne déclare pas la permission « python » dans son addon.json.", 403)
+        if a["problemes"]:
+            raise TaskError(f"Le module « {a['nom']} » est à corriger : " + " ; ".join(a["problemes"]), 409)
+        return a["taches"][name]
+
+    def addon_run(self, aid: str, tache: str, params=None, by: str = "module", t: dict | None = None,
+                  once: bool = False, on_end=None) -> dict:
+        """jarvis.executer (the module's window) or the tool modules (Claude, after a card when the code is not
+        granted: once). One task at a time per module; on_end(execution) when it ends."""
+        a = self._addon(aid)
+        task = self._addon_task(a, tache)
+        if not once and addons_mod.permission_key(a) not in self._addon_grants():
+            raise TaskError(f"Le module « {a['nom']} » n'est pas autorisé à lancer ses scripts Python "
+                            "(ou ils ont changé depuis) : autorise-le d'abord.", 403)
+        with self._addon_lock:
+            if any(x.a["id"] == a["id"] and x.fin is None for x in self._addon_runs.values()):
+                raise TaskError("Une tâche de ce module tourne déjà.", 429)
+            ended = sorted((x for x in self._addon_runs.values() if x.fin), key=lambda x: x.fin)
+            for x in ended[:-20]:
+                self._addon_runs.pop(x.id, None)
+            try:
+                ex = addon_tasks.Execution(secrets.token_hex(6), a, str(tache).strip(), params, self.data_dir,
+                                           self._addon_run_changed, by)
+            except ValueError as exc:
+                raise TaskError(str(exc), 413) from None
+            self._addon_runs[ex.id] = ex
+            if on_end:
+                self._addon_run_waiters[ex.id] = [on_end]
+        try:
+            ex.start()
+        except OSError as exc:
+            with self._addon_lock:
+                self._addon_runs.pop(ex.id, None)
+                self._addon_run_waiters.pop(ex.id, None)
+            raise TaskError(f"Python n'a pas pu démarrer : {exc}", 500) from None
+        self._audit("tâche de module lancée", {"module": a["id"], "tache": ex.name, "script": task["script"],
+                                                "par": by, "odoo": "odoo" in a["permissions"]}, t)
+        self.bus.publish("addon_run", self._run_event(ex))
+        return ex.public()
+
+    def _run_event(self, ex: addon_tasks.Execution) -> dict:
+        out = ex.public()
+        if ex.fin is None:  # the result and the output once, at the end
+            out.pop("resultat", None)
+            out.pop("sortie", None)
+        return out
+
+    def _addon_run_changed(self, ex: addon_tasks.Execution):
+        self.bus.publish("addon_run", self._run_event(ex))
+        if ex.fin is None:
+            return
+        self._audit("tâche de module finie", {"module": ex.a["id"], "tache": ex.name, "etat": ex.etat,
+                                               "erreur": ex.erreur, "durée": round(ex.fin - ex.debut, 1),
+                                               "requetes": ex.requetes})
+        with self._addon_lock:
+            waiters = self._addon_run_waiters.pop(ex.id, [])
+        for fn in waiters:
+            try:
+                fn(ex)
+            except Exception:  # noqa: BLE001 - a discussion gone meanwhile
+                pass
+
+    def _addon_execution(self, rid: str) -> addon_tasks.Execution:
+        ex = self._addon_runs.get(str(rid or ""))
+        if not ex:
+            raise TaskError("Exécution inconnue.", 404)
+        return ex
+
+    def addon_run_status(self, rid: str) -> dict:
+        return self._addon_execution(rid).public()
+
+    def addon_run_stop(self, rid: str) -> dict:
+        ex = self._addon_execution(rid)
+        ex.stop()
+        return ex.public()
+
+    def _addon_execute(self, tid: str, run: Run, rid: str, msg: dict):
+        """modules, action executer: Claude runs a task of a module and gets its end. Code not granted (new, or
+        changed since): a card first, whose allow runs it this once."""
+        mid = msg.get("id")
+
+        def reply(text: str, failed: bool = False):
+            self._respond(run, rid, {"mcp_response": {"jsonrpc": "2.0", "id": mid, "result": {
+                "content": [{"type": "text", "text": text}], "isError": failed}}})
+
+        args = (msg.get("params") or {}).get("arguments") or {}
+        t = self._get(tid)
+        try:
+            a = self._addon(args.get("id"))
+        except TaskError:
+            return reply(f"Module introuvable : « {args.get('id') or ''} ».", True)
+        name, params = str(args.get("tache") or "").strip(), args.get("params")
+        if params is not None and not isinstance(params, dict):
+            return reply("« params » : un objet JSON.", True)
+        try:
+            self._addon_task(a, name)
+        except TaskError as exc:
+            return reply(str(exc), True)
+
+        def go(once: bool):
+            try:
+                self.addon_run(a["id"], name, params, by="claude", t=t, once=once,
+                               on_end=lambda ex: reply(ex.summary(), ex.etat != "terminee"))
+            except TaskError as exc:
+                reply(str(exc), True)
+
+        if addons_mod.permission_key(a) in self._addon_grants():
+            return go(False)
+        odoo = "odoo" in a["permissions"]
+        appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="permission", tool=MODULES_TOOL,
+                        input={"action": "executer", "id": a["id"], "tache": name, "params": params or {},
+                               "scripts": addons_mod.python_files(a), "permissions": a["permissions"]},
+                        reason=(f"Claude veut lancer la tâche Python « {name} » du module « {a['nom']} » : ses scripts "
+                                "tournent sur ce PC avec tes droits" + (", et lisent Odoo (lecture seule) avec la clé "
+                                "de la console" if odoo else "") + ". Autoriser cette fois ?"))
+
+        def answer(ap: Approval):
+            if ap.decision != "allow":
+                return reply("L'utilisateur n'a pas autorisé cette tâche" + (f" : {ap.message}" if ap.message else ".")
+                             + " Ne la relance pas sans qu'il le demande.", True)
+            go(True)
+        self._park(tid, run, appr, answer)
+
+    # the console's Odoo access for the tasks (console/odoo_api.py): the key never leaves the console
+    def odoo_api_settings(self) -> dict:
+        return odoo_api.public(odoo_api.load(self.data_dir))
+
+    def odoo_api_save(self, url: str, base: str, login: str, cle: str | None) -> dict:
+        try:
+            s = odoo_api.save(self.data_dir, url, base, login, cle)
+        except odoo_api.OdooError as exc:
+            raise TaskError(str(exc)) from None
+        self._audit("accès Odoo des modules réglé", {"adresse": s["url"], "base": s["base"], "login": s["login"],
+                                                      "clé": "retirée" if cle == "-" else "changée" if cle else "inchangée"})
+        return odoo_api.public(s)
+
+    def odoo_api_test(self) -> dict:
+        try:
+            return {"ok": True, **odoo_api.Client(odoo_api.load(self.data_dir), timeout=30).test()}
+        except odoo_api.OdooError as exc:
+            return {"ok": False, "erreur": str(exc)}
+
     def _propose_module(self, tid: str, run: Run, rid: str, msg: dict):
         """modules, action proposer: Claude suggests a module nobody asked for; the user's click on the card is the
         request, and Claude writes it in the same turn. Nothing is written by the console itself."""
@@ -5049,10 +5215,10 @@ class Engine:
             if not found:
                 return head + "\nAucun module pour l'instant.", False
             return head + "\n" + "\n".join(addons_mod.describe(a) for a in found), False
-        if action == "proposer":
-            return "Cette action passe par la fenêtre de la discussion.", True  # (see _propose_module)
+        if action in ("proposer", "executer"):
+            return "Cette action passe par la fenêtre de la discussion.", True  # (see _propose_module, _addon_execute)
         if action not in ("verifier", "ouvrir", "donnees"):
-            return "« action » vaut lister, verifier, ouvrir, donnees ou proposer.", True
+            return "« action » vaut lister, verifier, ouvrir, donnees, executer ou proposer.", True
         try:
             a = self._addon(args.get("id"))
         except TaskError:
@@ -5072,7 +5238,8 @@ class Engine:
         granted = not a["permissions"] or addons_mod.permission_key(a) in self._addon_grants()
         return (f"Module « {a['nom']} » ouvert (ou rechargé) dans une fenêtre de la console."
                 + ("" if granted else " Il demande la permission " + ", ".join(a["permissions"])
-                   + " : l'utilisateur doit l'autoriser dans sa fenêtre avant que jarvis.demander fonctionne.")
+                   + " : l'utilisateur doit l'autoriser dans sa fenêtre avant que jarvis.demander ou jarvis.executer "
+                     "fonctionne.")
                 + ("\n" + "\n".join(f"attention : {w}" for w in a["avertissements"]) if a["avertissements"] else "")), False
 
     # ------------------------------------------------------------ widgets (console/widgets.py)

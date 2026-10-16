@@ -683,6 +683,32 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         return engine.addon_ask(aid, str(body.get("consigne") or ""), str(body.get("format") or "texte"),
                                 str(body.get("modele") or ""), body.get("profile") or None)
 
+    @app.post("/api/addons/{aid}/run")
+    def addon_run(aid: str, body: dict = Body(...)):
+        return engine.addon_run(aid, str(body.get("tache") or ""), body.get("params"))
+
+    @app.get("/api/addons/runs/{rid}")
+    def addon_run_status(rid: str):
+        return engine.addon_run_status(rid)
+
+    @app.post("/api/addons/runs/{rid}/stop")
+    def addon_run_stop(rid: str):
+        return engine.addon_run_stop(rid)
+
+    @app.get("/api/odoo-api")
+    def odoo_api_get():
+        return engine.odoo_api_settings()
+
+    @app.put("/api/odoo-api")
+    def odoo_api_put(body: dict = Body(...)):
+        cle = body.get("cle")
+        return engine.odoo_api_save(str(body.get("url") or ""), str(body.get("base") or ""),
+                                    str(body.get("login") or ""), str(cle) if cle else None)
+
+    @app.post("/api/odoo-api/test")
+    def odoo_api_test():
+        return engine.odoo_api_test()
+
     @app.get("/api/notes")
     def notes(folder: str | None = None):
         return {"notes": engine.notes(folder)}

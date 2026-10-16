@@ -12,7 +12,7 @@ import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
-import { addonAnswered, addonItems, addonOpened, addonsChanged, initAddons } from "./addons.js";
+import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, initAddons } from "./addons.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
 import { openConfig, updateProbe } from "./config.js";
@@ -96,7 +96,7 @@ async function boot() {
     inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
     account_actions: () => loadAccountActions(profiles()),
     widgets: widgetsChanged,
-    addons: addonsChanged, addon_open: addonOpened, addon_answer: addonAnswered,
+    addons: addonsChanged, addon_open: addonOpened, addon_answer: addonAnswered, addon_run: addonRunChanged,
     odoo_tasks: projectSuiviChanged,
     office_suivi: projectSuiviChanged,
     // Claude opened a project (tool projet), or a discussion just moved into one

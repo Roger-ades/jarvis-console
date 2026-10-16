@@ -2,7 +2,8 @@
 // addons/ each. The button Modules lists them; each one opens in a window of its own, in a sandboxed frame of the
 // preview origin without network. What it does beyond its window comes here as a message (window.jarvis of the
 // bridge) and is answered only for a frame of one of these windows: its storage, a text put in the command bar or
-// a question to Claude (both after a click in the module), a web page (after a confirmation).
+// a question to Claude (both after a click in the module), a web page (after a confirmation), one of its Python
+// tasks (console/addon_tasks.py: run by the console, without a model, once the user granted its code).
 import { api } from "./api.js";
 import { colorOf, paint } from "./tint.js";
 import { $, confirmDialog, h, toast } from "./util.js";
@@ -13,6 +14,7 @@ let ctx = null, modules = [], folder = "";
 const wins = new Map();     // module id -> {id, mod, frame, grant, last, note}
 const pending = new Map();  // task id of a question -> {source, msgId}
 const early = new Map();    // answers arrived before the reply of /ask
+const runs = new Map();     // module id -> {reply, progress} of its Python task in progress (jarvis.executer)
 const GAP = 1200;           // ms between two sends (bar, question, notification) of one module
 const URL_AGE = 11 * 3600e3;
 
@@ -125,14 +127,37 @@ async function load_(w) {
   } catch (e) { toast(e.message, "err"); }
 }
 
-/** A module asking for more than its window: the user grants it here, once (until its permissions change). */
+/** What the module's manifest asks, in words. */
+function powers(m) {
+  const out = [];
+  if (m.permissions.includes("claude")) out.push("poser des questions à Claude (une courte discussion de ton compte, avec ses autorisations habituelles)");
+  if (m.permissions.includes("python")) out.push(`lancer ses scripts Python sur ce PC, avec tes droits (${(m.scripts || []).join(", ") || "aucun"})`);
+  if (m.permissions.includes("odoo")) out.push("lire Odoo depuis ces scripts, en lecture seule, avec la clé API de la console");
+  return out;
+}
+
+/** A module asking for more than its window: the user grants it here, once (until its permissions or its Python
+ * code change). */
 function grantBar(w) {
   const m = w.mod;
   w.grant.hidden = !m.permissions.length || m.autorise;
   if (w.grant.hidden) return;
+  const changed = m.permissions.includes("python") && m.code_change;
   w.grant.replaceChildren(
-    h("span", {}, `Ce module demande à pouvoir poser des questions à Claude (une courte discussion de ton compte, avec ses autorisations habituelles).`),
+    h("span", {}, (changed ? "Les scripts de ce module ont changé. " : "") + `Ce module demande à pouvoir ${powers(m).join(" ; ")}.`),
     h("button", { type: "button", class: "btn small primary", on: { click: () => grant(w, true) } }, "Autoriser"));
+}
+
+/** The confirmation before a first question or task: everything the module asks, granted together. */
+async function grantDialog(w) {
+  const m = w.mod;
+  const ok = await confirmDialog(`Autoriser « ${m.nom} » ?`, h("div", {},
+    h("p", {}, "Ce module demande à pouvoir :"),
+    h("ul", {}, ...powers(m).map((x) => h("li", {}, x))),
+    m.permissions.includes("python")
+      ? h("p", { class: "muted" }, "Ses scripts tournent comme un programme de ce PC : n'autorise que du code que tu veux lancer. S'ils changent, la console te redemandera.")
+      : h("p", { class: "muted" }, "Tu peux retirer l'autorisation en supprimant le module ou en changeant ses permissions.")), "Autoriser");
+  return ok && (await grant(w, true));
 }
 
 async function grant(w, on) {
@@ -146,15 +171,20 @@ wm.onDocument((doc) => doc.defaultView.addEventListener("message", onMessage));
 async function onMessage(ev) {
   const d = ev.data;
   if (!d || d.jarvisAddon !== 1 || ev.origin !== "null" || typeof d.id !== "number") return;
+  // the answer goes back on the request's own port (console/addons.py, BRIDGE): a message posted from here
+  // to the module's window would come from this page, which in a native window is not the module's top
+  const port = ev.ports?.[0];
+  const reply = (ok, v) => {
+    const msg = ok ? { jarvisAddon: 1, id: d.id, ok: true, valeur: v ?? null } : { jarvisAddon: 1, id: d.id, ok: false, erreur: String(v) };
+    try { if (port) { port.postMessage(msg); port.close(); } else ev.source?.postMessage(msg, "*"); }
+    catch { /* the module went away */ }
+  };
+  const progress = (texte) => { try { port?.postMessage({ jarvisAddon: 1, id: d.id, progres: String(texte ?? "") }); } catch { /* gone */ } };
   let w = null;
   for (const x of wins.values()) {
     try { if (ev.source && ev.source === x.frame.contentWindow?.[0]) w = x; } catch { /* not ours */ }
   }
-  if (!w) return;
-  const reply = (ok, v) => {
-    try { ev.source.postMessage(ok ? { jarvisAddon: 1, id: d.id, ok: true, valeur: v ?? null } : { jarvisAddon: 1, id: d.id, ok: false, erreur: String(v) }, "*"); }
-    catch { /* the module went away */ }
-  };
+  if (!w) return reply(false, "Fenêtre du module introuvable : ferme-la et rouvre le module.");
   const base = `/api/addons/${encodeURIComponent(w.aid)}`;
   const inside = () => w.frame.ownerDocument.activeElement === w.frame; // the user is working in this module
   const paced = () => { const now = Date.now(); if (now - w.last < GAP) return false; w.last = now; return true; };
@@ -179,17 +209,25 @@ async function onMessage(ev) {
         if (!inside()) return reply(false, "Seulement après un clic de l'utilisateur dans le module.");
         if (!paced()) return reply(false, "Trop de demandes à la suite.");
         if (!w.mod.permissions.includes("claude")) return reply(false, "Le module doit déclarer la permission « claude » dans addon.json.");
-        if (!w.mod.autorise) {
-          const ok = await confirmDialog(`Autoriser « ${w.mod.nom} » à demander à Claude ?`, h("div", {},
-            h("p", {}, "Chaque question devient une courte discussion de ton compte, sans fenêtre, avec ses autorisations et validations habituelles ; la réponse revient au module."),
-            h("p", { class: "muted" }, "Tu peux retirer l'autorisation en supprimant le module ou en changeant ses permissions.")), "Autoriser");
-          if (!ok || !(await grant(w, true))) return reply(false, "Refusé par l'utilisateur.");
-        }
+        if (!w.mod.autorise && !(await grantDialog(w))) return reply(false, "Refusé par l'utilisateur.");
         const r = await api(`${base}/ask`, { method: "POST", body: { consigne: String(d.consigne || ""),
           format: d.format === "json" ? "json" : "texte", modele: String(d.modele || ""), profile: ctx.currentProfile() } });
         const got = early.get(r.task_id);
         if (got) { early.delete(r.task_id); return got.ok ? reply(true, got.valeur) : reply(false, got.erreur); }
         pending.set(r.task_id, { reply });
+        return undefined;
+      }
+      case "executer": {
+        if (!w.mod.permissions.includes("python")) return reply(false, "Le module doit déclarer la permission « python » dans addon.json.");
+        if (!w.mod.taches?.[String(d.tache || "")]) return reply(false, `Tâche inconnue : ${d.tache} (les « taches » de addon.json).`);
+        if (runs.has(w.aid)) return reply(false, "Une tâche de ce module tourne déjà.");
+        if (!w.mod.autorise && !(await grantDialog(w))) return reply(false, "Refusé par l'utilisateur.");
+        runs.set(w.aid, { reply, progress, id: null });
+        try {
+          const r = await api(`${base}/run`, { method: "POST", body: { tache: String(d.tache), params: d.params ?? null } });
+          const p = runs.get(w.aid);
+          if (p && p.reply === reply) p.id = r.id;
+        } catch (e) { runs.delete(w.aid); throw e; }
         return undefined;
       }
       case "ouvrir": {
@@ -210,6 +248,22 @@ async function onMessage(ev) {
       default: return reply(false, `Inconnu : ${d.type}`);
     }
   } catch (e) { return reply(false, e.message); }
+}
+
+/** The server: a Python task of a module moved on, or ended. Started from its window, it answers jarvis.executer;
+ * started by Claude, the module's window (if open) is reloaded once it ended well, to show the new data. */
+export function addonRunChanged(r) {
+  const p = runs.get(r.module);
+  const mine = p && (p.id === null || p.id === r.id);
+  if (r.fin == null) { if (mine && r.progres) p.progress(r.progres); return; }
+  if (mine) {
+    runs.delete(r.module);
+    if (r.etat === "terminee") p.reply(true, r.resultat ?? null);
+    else p.reply(false, r.erreur || "La tâche a échoué.");
+    return;
+  }
+  const w = wins.get(r.module);
+  if (w && r.etat === "terminee" && wm.has(w.id)) load_(w);
 }
 
 /** The server: Claude answered a module's question. */

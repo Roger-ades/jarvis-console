@@ -13,7 +13,9 @@ page (static/js/addons.js):
 - jarvis.envoyer: puts a text in the command bar, the user sends it or not;
 - jarvis.demander: a question to Claude, answered in the module (permission "claude" in the manifest, granted
   once by the user; a short discussion of the account, with its preset and validations, then deleted);
-- jarvis.ouvrir: an https page, proposed to the user like a link of an answer.
+- jarvis.ouvrir: an https page, proposed to the user like a link of an answer;
+- jarvis.executer: one of its Python tasks ("taches" of the manifest, permission "python"), run by the console
+  without a model (console/addon_tasks.py), reading Odoo through the console's key if it asks "odoo".
 """
 from __future__ import annotations
 
@@ -24,7 +26,13 @@ from pathlib import Path
 
 MANIFEST = "addon.json"
 ID_RX = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
-PERMISSIONS = {"claude": "demander à Claude (une courte discussion du compte, avec ses autorisations)"}
+PERMISSIONS = {
+    "claude": "demander à Claude (une courte discussion du compte, avec ses autorisations)",
+    "python": "lancer ses scripts Python sur ce PC (ses « taches », avec tes droits, dans son dossier)",
+    "odoo": "lire Odoo, en lecture seule, avec la clé API de la console (depuis ses scripts Python)",
+}
+TASK_RX = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
+TASK_TIME = (10, 300, 1800)   # s: least, default, most of a task's duree_max
 MAX_FILES = 300
 MAX_FILE = 5 * 1024 * 1024
 MAX_TOTAL = 20 * 1024 * 1024
@@ -87,7 +95,7 @@ def read(folder: Path) -> dict:
     if unknown:
         problems.append("permissions inconnues : " + ", ".join(unknown) + f" (possibles : {', '.join(PERMISSIONS)})")
     perms = sorted({p for p in perms if p in PERMISSIONS})
-    size, count, sig = 0, 0, hashlib.sha256()
+    size, count, sig, code = 0, 0, hashlib.sha256(), hashlib.sha256()
     if folder.is_dir():
         for p in files(folder):
             count += 1
@@ -95,6 +103,11 @@ def read(folder: Path) -> dict:
             size += st.st_size
             rel = p.relative_to(folder).as_posix()
             sig.update(f"{rel}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+            if p.suffix.lower() == ".py":
+                try:
+                    code.update(rel.encode() + b"\0" + p.read_bytes() + b"\0")
+                except OSError:
+                    code.update(rel.encode() + b"\0?\0")
             if st.st_size > MAX_FILE:
                 problems.append(f"{rel} : plus de {MAX_FILE // 1024 // 1024} Mo")
             elif p.suffix.lower() in TEXT and st.st_size < 2 * 1024 * 1024:
@@ -110,6 +123,8 @@ def read(folder: Path) -> dict:
         problems.append(f"{size // 1024 // 1024} Mo : {MAX_TOTAL // 1024 // 1024} Mo au plus")
     if not resolve(folder, entry) or Path(entry).suffix.lower() not in (".html", ".htm"):
         problems.append(f"page d'entrée introuvable : {entry} (une page .html du module)")
+
+    tasks = _tasks(folder, raw.get("taches"), perms, problems, warnings)
 
     def dim(k, lo, hi, default):
         try:
@@ -127,6 +142,8 @@ def read(folder: Path) -> dict:
         "largeur": dim("largeur", 320, 1800, 820),
         "hauteur": dim("hauteur", 240, 1400, 640),
         "permissions": perms,
+        "taches": tasks,
+        "code": code.hexdigest()[:16],
         "fichiers": count,
         "taille": size,
         "signature": sig.hexdigest()[:16],
@@ -134,6 +151,37 @@ def read(folder: Path) -> dict:
         "avertissements": warnings[:10],
         "folder": str(folder),
     }
+
+
+def _tasks(folder: Path, raw, perms: list[str], problems: list[str], warnings: list[str]) -> dict:
+    """The manifest's "taches": {"nom": {"script": "x.py", "description": "...", "duree_max": 600}}."""
+    if raw in (None, {}, []):
+        if "python" in perms:
+            warnings.append("permission « python » sans « taches » dans addon.json")
+        return {}
+    if not isinstance(raw, dict):
+        problems.append("« taches » : un objet {nom: {script, description, duree_max}} est attendu")
+        return {}
+    out = {}
+    for name, t in list(raw.items())[:20]:
+        t = {"script": t} if isinstance(t, str) else t if isinstance(t, dict) else {}
+        script = str(t.get("script") or "").replace("\\", "/").lstrip("/")
+        if not TASK_RX.match(str(name)):
+            problems.append(f"tâche « {name} » : nom en minuscules, chiffres, tirets ou _")
+            continue
+        if not script.lower().endswith(".py") or not resolve(folder, script):
+            problems.append(f"tâche « {name} » : script introuvable ({script or 'vide'}, un fichier .py du module)")
+            continue
+        try:
+            secs = int(max(TASK_TIME[0], min(TASK_TIME[2], float(t.get("duree_max") or TASK_TIME[1]))))
+        except (TypeError, ValueError):
+            secs = TASK_TIME[1]
+        out[str(name)] = {"script": script, "description": _s(t.get("description"), 300), "duree_max": secs}
+    if out and "python" not in perms:
+        problems.append("des « taches » demandent la permission « python » dans addon.json")
+    if "odoo" in perms and "python" not in perms:
+        warnings.append("la permission « odoo » ne sert qu'aux scripts Python (permission « python »)")
+    return out
 
 
 def scan(root: Path) -> list[dict]:
@@ -159,47 +207,66 @@ def resolve(folder: Path, rel: str) -> Path | None:
 
 
 def permission_key(a: dict) -> str:
-    """What the user grants: this module with these permissions (its code may change, its powers may not)."""
-    return f"{a['id']}|{','.join(a['permissions'])}"
+    """What the user grants: this module with these permissions (its page may change, its powers may not); with
+    "python", its Python code as it is too: a script changed is a new program, granted again."""
+    key = f"{a['id']}|{','.join(a['permissions'])}"
+    return key + f"|{a['code']}" if "python" in a["permissions"] else key
+
+
+def python_files(a: dict) -> list[str]:
+    """The module's Python files, what "python" grants (shown to the user before)."""
+    folder = Path(a["folder"])
+    return [p.relative_to(folder).as_posix() for p in files(folder) if p.suffix.lower() == ".py"][:50]
 
 
 # ---------------------------------------------------------------- pages
 # The bridge goes in front of each HTML page of the module. It speaks to the console page (window.top) by
-# messages; the console checks the frame is one of its module windows before answering.
+# messages; the console checks the frame is one of its module windows before answering. Each request
+# carries a MessagePort of its own and the answer comes back on it: never a message to the module's window,
+# whose sender would be the console's page, which in the desktop app ("Intégré au bureau") is not the
+# module's window.top but the hidden JARVIS window; and no other frame can answer in the console's place.
 BRIDGE = """<script>(function(){
 for (const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCSessionDescription",
                  "RTCIceCandidate","RTCRtpSender","RTCRtpReceiver"]) { try { delete window[k]; } catch (e) {} }
 let seq = 0;
-const waiting = new Map();
-window.addEventListener("message", (ev) => {
-  const d = ev.data;
-  if (!d || d.jarvisAddon !== 1 || ev.source !== window.top || !waiting.has(d.id)) return;
-  const w = waiting.get(d.id);
-  waiting.delete(d.id);
-  if (d.ok) w.resolve(d.valeur); else w.reject(new Error(d.erreur || "Refusé par la console."));
-});
-const call = (type, data) => new Promise((resolve, reject) => {
+const QUICK = 20000;  // ms: storage, bar, notification (a question to Claude or a confirmation may take longer)
+const call = (type, data, ms, onProgress) => new Promise((resolve, reject) => {
   const id = ++seq;
-  waiting.set(id, {resolve, reject});
-  window.top.postMessage(Object.assign({jarvisAddon: 1, id: id, type: type}, data || {}), "*");
+  const ch = new MessageChannel();
+  let timer = 0;
+  const done = () => { clearTimeout(timer); ch.port1.onmessage = null; ch.port1.close(); };
+  ch.port1.onmessage = (ev) => {
+    const d = ev.data;
+    if (!d || d.jarvisAddon !== 1 || d.id !== id) return;
+    if (d.progres !== undefined) { try { onProgress && onProgress(d.progres); } catch (e) {} return; }
+    done();
+    if (d.ok) resolve(d.valeur); else reject(new Error(d.erreur || "Refusé par la console."));
+  };
+  if (ms) timer = setTimeout(() => { done(); reject(new Error("La console n'a pas répondu (" + type + ").")); }, ms);
+  window.top.postMessage(Object.assign({jarvisAddon: 1, id: id, type: type}, data || {}), "*", [ch.port2]);
 });
 const text = (v) => typeof v === "string" ? v : JSON.stringify(v, null, 2);
 Object.defineProperty(window, "jarvis", {value: Object.freeze({
   module: __ID__,
   donnees: Object.freeze({
-    lire(cle) { return call("lire", {cle: String(cle)}); },
-    ecrire(cle, valeur) { return call("ecrire", {cle: String(cle), valeur: valeur === undefined ? null : valeur}); },
-    supprimer(cle) { return call("ecrire", {cle: String(cle), valeur: null}); },
-    cles() { return call("cles"); },
+    lire(cle) { return call("lire", {cle: String(cle)}, QUICK); },
+    ecrire(cle, valeur) { return call("ecrire", {cle: String(cle), valeur: valeur === undefined ? null : valeur}, QUICK); },
+    supprimer(cle) { return call("ecrire", {cle: String(cle), valeur: null}, QUICK); },
+    cles() { return call("cles", null, QUICK); },
   }),
-  envoyer(contenu) { return call("envoyer", {contenu: text(contenu)}); },
+  envoyer(contenu) { return call("envoyer", {contenu: text(contenu)}, QUICK); },
   demander(consigne, options) {
     const o = options || {};
     return call("demander", {consigne: text(consigne), format: o.format === "json" ? "json" : "texte",
                              modele: o.modele ? String(o.modele) : ""});
   },
   ouvrir(url) { return call("ouvrir", {url: String(url || "")}); },
-  notifier(texte) { return call("notifier", {texte: String(texte || "")}); },
+  notifier(texte) { return call("notifier", {texte: String(texte || "")}, QUICK); },
+  executer(tache, params, options) {
+    const o = options || {};
+    return call("executer", {tache: String(tache || ""), params: params === undefined ? null : params}, 0,
+                typeof o.progres === "function" ? o.progres : null);
+  },
 }), writable: false, configurable: false});
 })();</script>"""
 STYLE = ("<style>html{color-scheme:light dark}body{margin:12px 14px;font:14px/1.45 'Segoe UI',system-ui,"
@@ -231,10 +298,16 @@ SPEC = {
         "d'en écrire un). Un module = addon.json (nom, description, icone, entree, largeur, hauteur, permissions) + une "
         "page HTML et ses fichiers (JS, CSS, images, données JSON). Il s'ouvre dans une fenêtre de la console, isolé et "
         "sans réseau ; window.jarvis lui donne un stockage (donnees.lire/ecrire), envoyer (texte dans la barre), "
-        "demander (une question à Claude, permission \"claude\"), ouvrir (une page https), notifier. "
+        "demander (une question à Claude, permission \"claude\"), ouvrir (une page https), notifier, executer (une "
+        "tâche Python du module, déclarée dans \"taches\", permission \"python\" ; avec \"odoo\", elle lit Odoo en lecture "
+        "seule par la clé de la console). Pour des données à rafraîchir (Odoo surtout), écris une tâche Python plutôt "
+        "que jarvis.demander : la console la lance sans modèle, rien ne passe par toi, zéro jeton. "
         "action = lister : les modules et leurs problèmes. action = verifier (id) : ce qui empêche le module de "
         "s'ouvrir ou sera bloqué. action = ouvrir (id) : l'ouvre (ou le recharge) dans une fenêtre, après "
-        "vérification. action = donnees (id) : lit son stockage, pour déboguer. action = proposer (id, nom, description, "
+        "vérification. action = donnees (id) : lit son stockage, pour déboguer. action = executer (id, tache, params) : "
+        "lance une tâche Python du module et attend sa fin (son résultat et ses dernières lignes de sortie te "
+        "reviennent) ; l'utilisateur valide sur une carte si son code n'est pas encore autorisé. "
+        "action = proposer (id, nom, description, "
         "raison) : quand l'utilisateur n'a rien demandé mais qu'un module l'aiderait (un besoin qui revient, un suivi à "
         "garder, un calcul refait à la main), propose-le-lui sur une carte ; son clic vaut demande, et tu l'écris alors "
         "dans ce même tour. Écris les fichiers avec tes outils habituels ; après chaque modification, ouvre-le pour que "
@@ -243,8 +316,10 @@ SPEC = {
         "type": "object",
         "required": ["action"],
         "properties": {
-            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "proposer"]},
-            "id": {"type": "string", "description": "verifier, ouvrir, donnees : le nom du dossier du module. proposer : "
+            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "executer", "proposer"]},
+            "tache": {"type": "string", "description": "executer : le nom de la tâche dans les « taches » de addon.json."},
+            "params": {"type": "object", "description": "executer : les paramètres de la tâche (jarvis.params)."},
+            "id": {"type": "string", "description": "verifier, ouvrir, donnees, executer : le nom du dossier du module. proposer : "
                                                     "celui du module à créer (minuscules, chiffres, tirets), ou d'un "
                                                     "module existant à améliorer."},
             "nom": {"type": "string", "description": "proposer : le nom affiché du module."},
@@ -279,6 +354,8 @@ def describe(a: dict) -> str:
             + f" ({a['fichiers']} fichier{'s' if a['fichiers'] > 1 else ''}, {max(1, a['taille'] // 1024)} Ko, "
               f"entrée {a['entree']}, permissions : {perms})")
     out = [head]
+    out += [f"  tâche {n} : {t['script']}, {t['duree_max']} s au plus" + (f" — {t['description']}" if t["description"] else "")
+            for n, t in a.get("taches", {}).items()]
     out += [f"  problème : {p}" for p in a["problemes"]]
     out += [f"  attention : {w}" for w in a["avertissements"]]
     return "\n".join(out)

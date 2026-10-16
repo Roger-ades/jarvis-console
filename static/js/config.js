@@ -510,8 +510,54 @@ function tabIntegrations() {
     section("Contraintes sur les paramètres", "Refuse un appel si un paramètre sort des valeurs permises. Chemin pointé dans les paramètres de l'outil (ex. model, values.state). Valeurs séparées par des virgules.",
       h("table", { class: "tbl" }, h("thead", {}, h("tr", {}, h("th", {}, "Outil"), h("th", {}, "Paramètre"), h("th", {}, "Valeurs permises"), h("th", {}, "Valeurs interdites"), h("th", {}, "Note"), h("th", {}))), consBody),
       h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: () => { draft.constraints.push({ tool: "mcp__serveur__outil", path: "champ", allowed: ["valeur"], forbidden: null, note: "" }); markDirty(); renderCons(); } } }, "Ajouter une contrainte"))),
+    odooModules(),
   );
   return out;
+}
+
+/** The Odoo access of the modules' Python tasks (data/odoo-api.json): saved on its own, not with the draft. */
+function odooModules() {
+  const inp = (type, placeholder) => h("input", { type, placeholder, autocomplete: "off", spellcheck: "false" });
+  const url = inp("text", "https://monentreprise.odoo.com"), base = inp("text", "nom de la base"),
+    login = inp("text", "utilisateur@exemple.com"), cle = inp("password", "clé API");
+  const field = (label, el, help) => h("label", { class: "field" }, h("span", {}, label), el, help ? h("small", {}, help) : null);
+  const state = h("div", { class: "muted" }, "Lecture…");
+  const drop = h("button", { type: "button", class: "btn small ghost" }, "Retirer la clé");
+  const say = (cls, msg) => { state.className = cls; state.textContent = msg; };
+  const show = (s) => {
+    url.value = s.url || ""; base.value = s.base || ""; login.value = s.login || ""; cle.value = "";
+    cle.placeholder = s.cle ? "enregistrée (vide : la garder)" : "clé API";
+    drop.hidden = !s.cle;
+    say(s.pret ? "line ok" : "muted", s.pret ? "Prêt : les modules autorisés peuvent lire Odoo." : "Pas encore réglé.");
+  };
+  const save = async (key) => {
+    try {
+      show(await api("/api/odoo-api", { method: "PUT", body: { url: url.value.trim(), base: base.value.trim(), login: login.value.trim(), cle: key } }));
+      toast("Accès Odoo des modules enregistré.");
+      return true;
+    } catch (e) { say("line err", e.message); return false; }
+  };
+  const test = async () => {
+    if (!(await save(cle.value || null))) return;
+    say("muted", "Test en cours…");
+    try {
+      const r = await api("/api/odoo-api/test", { method: "POST" });
+      say(r.ok ? "line ok" : "line err", r.ok ? `Connecté : ${r.nom || login.value} · Odoo ${r.version || "?"} · ${r.protocole}` : r.erreur);
+    } catch (e) { say("line err", e.message); }
+  };
+  drop.addEventListener("click", async () => {
+    if (await confirmDialog("Retirer la clé API ?", "Les tâches Python des modules ne pourront plus lire Odoo.", "Retirer")) save("-");
+  });
+  drop.hidden = true;
+  api("/api/odoo-api").then(show).catch((e) => say("line err", e.message));
+  return section("Odoo pour les modules (lecture seule)",
+    "Les tâches Python des modules lisent Odoo avec cette clé, sans passer par Claude ni consommer de jetons ; la console n'autorise que des lectures. Mets de préférence la clé d'un utilisateur Odoo en lecture seule. Gardée dans data/, jamais réaffichée ni donnée aux modules. Enregistrée par ses propres boutons, pas par celui du bas.",
+    grid(field("Adresse", url), field("Base", base, "vide : celle de l'adresse"), field("Utilisateur (login)", login),
+      field("Clé API", cle, "Odoo : Préférences → Sécurité du compte → Nouvelle clé API")),
+    h("div", { class: "row" },
+      h("button", { type: "button", class: "btn small primary", on: { click: () => save(cle.value || null) } }, "Enregistrer"),
+      h("button", { type: "button", class: "btn small", on: { click: test } }, "Tester"), drop),
+    state);
 }
 
 function tabModels() {
