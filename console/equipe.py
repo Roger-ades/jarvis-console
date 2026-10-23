@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
+import unicodedata
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import Body, FastAPI
 
@@ -97,10 +99,17 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         root = Path(folder)
         if not root.is_dir():
             return fail(HubError("Dossier introuvable.", 404))
-        updated = cfg()
-        target = next((p for p in updated.projects if _same(p.folder, folder)), None)
-        if target is None:
-            return fail(HubError("Fais d'abord de ce dossier un projet JARVIS.", 409))
+        hub = cfg().hub
+        try:
+            listed = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/projects")
+        except HubError as exc:
+            return fail(exc)
+        remote = next((p for p in listed.get("projects", []) if p.get("id") == team_id), None)
+        if remote is None:
+            return fail(HubError("Projet d'équipe introuvable sur le hub.", 404))
+        other = next((p for p in cfg().projects if p.team_id == team_id and not _same(p.folder, folder)), None)
+        if other is not None:
+            return fail(HubError(f"Ce projet d'équipe est déjà relié à {other.folder}.", 409))
         marker = root / MARKER
         try:
             current = marker.read_text(encoding="utf-8").strip()
@@ -119,11 +128,75 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         if missing:
             ignore.write_text((existing.rstrip() + "\n" + "\n".join(missing) + "\n").lstrip("\n") if existing else STIGNORE,
                               encoding="utf-8")
-        target.team_id = team_id
-        cfg_store.save(updated, "projet d'équipe rejoint")
+        updated = cfg()
+        target = next((p for p in updated.projects if _same(p.folder, folder)), None)
+        if target is None:
+            # Pas encore de projet JARVIS sur ce dossier : il prend le nom et la couleur du hub.
+            fields = {"folder": str(folder), "name": str(remote.get("name") or team_id)[:60], "team_id": team_id}
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", remote.get("color") or ""):
+                fields["color"] = remote["color"].lower()
+            try:
+                engine.save_project(fields)
+            except TaskError as exc:
+                return fail(HubError(exc.message, exc.status))
+        else:
+            target.team_id = team_id
+            cfg_store.save(updated, "projet d'équipe rejoint")
+            engine.bus.publish("projects", {"projects": engine.projects()})
         store.audit("projet d'équipe rejoint", {"projet": team_id})
         engine.bus.publish("config", {"reason": "équipe"})
-        return {"ok": True, "folder": folder, "syncthing": _link_sync(client, cfg().hub, team_id, str(folder), data_dir)}
+        return {"ok": True, "folder": folder, "syncthing": _link_sync(client, cfg().hub, remote, str(folder), data_dir)}
+
+    @app.post("/api/hub/create")
+    def create(body: dict = Body(...)):
+        """Fait du projet JARVIS de ce dossier un projet d'équipe (administrateur du hub)."""
+        hub = cfg().hub
+        folder = expand_path(str(body.get("folder") or ""))
+        local = next((p for p in cfg().projects if _same(p.folder, folder)), None) if folder else None
+        if local is None:
+            return fail(HubError("Projet JARVIS introuvable pour ce dossier.", 404))
+        if local.team_id:
+            return fail(HubError("Ce projet est déjà un projet d'équipe.", 409))
+        name = str(body.get("name") or local.name).strip()[:80]
+        team_id = slug(str(body.get("id") or name))
+        if not team_id:
+            return fail(HubError("Nom de projet requis."))
+        fields = {"id": team_id, "name": name, "syncthing_folder": team_id,
+                  "preset": local.preset or "assiste", "model": local.model, "effort": local.effort}
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", local.color or ""):
+            fields["color"] = local.color
+        try:
+            client.call(hub.url, hub.fingerprint, "POST", "/api/v1/projects", fields)
+        except HubError as exc:
+            return fail(exc)
+        store.audit("projet d'équipe créé", {"projet": team_id})
+        return join({"team_id": team_id, "folder": str(folder)})
+
+    @app.get("/api/hub/users")
+    def users():
+        hub = cfg().hub
+        try:
+            return client.call(hub.url, hub.fingerprint, "GET", "/api/v1/users")
+        except HubError as exc:
+            return fail(exc)
+
+    @app.get("/api/hub/members")
+    def members(project: str):
+        hub = cfg().hub
+        try:
+            return client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/projects/{_q(project)}/members")
+        except HubError as exc:
+            return fail(exc)
+
+    @app.put("/api/hub/members")
+    def put_members(body: dict = Body(...)):
+        hub = cfg().hub
+        project = str(body.get("project") or "")
+        try:
+            return client.call(hub.url, hub.fingerprint, "PUT", f"/api/v1/projects/{_q(project)}/members",
+                               {"members": body.get("members") or []})
+        except HubError as exc:
+            return fail(exc)
 
     @app.get("/api/hub/presence")
     def presence():
@@ -137,7 +210,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     def conversations(project: str):
         hub = cfg().hub
         try:
-            return client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/projects/{project}/conversations")
+            return client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/projects/{_q(project)}/conversations")
         except HubError as exc:
             return fail(exc)
 
@@ -145,7 +218,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     def messages(project: str):
         hub = cfg().hub
         try:
-            return client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/projects/{project}/messages")
+            return client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/projects/{_q(project)}/messages")
         except HubError as exc:
             return fail(exc)
 
@@ -154,7 +227,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         hub = cfg().hub
         project = str(body.get("project") or "")
         try:
-            return client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{project}/messages",
+            return client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{_q(project)}/messages",
                                {"text": str(body.get("text") or ""), "refs": body.get("refs") or []})
         except HubError as exc:
             return fail(exc)
@@ -195,7 +268,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
             "stats": json.dumps({k: info[k] for k in ("odoo", "mail", "sharepoint", "outside")}),
         })
         try:
-            return client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{project}/conversations",
+            return client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{_q(project)}/conversations",
                                content=blob, query=query)
         except HubError as exc:
             return fail(exc)
@@ -212,7 +285,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
             return fail(HubError("Compte, dossier ou conversation manquant."))
         try:
             blob = client.call(hub.url, hub.fingerprint, "GET",
-                               f"/api/v1/conversations/{conversation}/archive", raw=True)
+                               f"/api/v1/conversations/{_q(conversation)}/archive", raw=True)
             new_id = share.install_transcript(prof, folder, blob)
             return engine.resume_session(profile, new_id, prompt, fork=False, workdir=folder)
         except HubError as exc:
@@ -224,11 +297,30 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
 
     @app.post("/api/hub/syncthing")
     def syncthing_start():
+        """Démarre Syncthing et relie chaque projet d'équipe de ce poste : sert aussi de réparation."""
         try:
             syncbox.start(data_dir)
-            return {"ok": True, "device_id": syncbox.device_id(data_dir)}
+            device = syncbox.device_id(data_dir)
         except (OSError, TimeoutError, ValueError) as exc:
             return fail(HubError(str(exc)))
+        return {"ok": True, "device_id": device, "projects": relink()}
+
+    def relink() -> dict:
+        hub = cfg().hub
+        linked = [p for p in cfg().projects if p.team_id]
+        if not (linked and hub.enabled and hub.fingerprint and client.token()):
+            return {}
+        try:
+            found = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/projects").get("projects", [])
+        except HubError as exc:
+            return {p.team_id: {"ok": False, "error": exc.message} for p in linked}
+        listed = {p["id"]: p for p in found}
+        out = {}
+        for proj in linked:
+            remote = listed.get(proj.team_id)
+            out[proj.team_id] = (_link_sync(client, hub, remote, proj.folder, data_dir) if remote
+                                 else {"ok": False, "error": "plus membre de ce projet"})
+        return out
 
     @app.post("/api/hub/memory")
     def memory(body: dict = Body(...)):
@@ -260,6 +352,13 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         return {"ok": True}
 
     def loop():
+        # Après un redémarrage du poste, la synchro des projets d'équipe reprend d'elle-même.
+        try:
+            # Seulement si Syncthing est déjà installé : le démarrage ne télécharge rien.
+            if cfg().hub.enabled and syncbox.binary_of(data_dir).is_file() and any(p.team_id for p in cfg().projects):
+                relink()
+        except Exception:
+            pass
         while True:
             time.sleep(30)
             try:
@@ -282,17 +381,31 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     threading.Thread(target=loop, name="hub-presence", daemon=True).start()
 
 
-def _link_sync(client: HubClient, hub, team_id: str, folder: str, data_dir: Path) -> dict:
-    """Inscrit ce poste auprès de Syncthing du serveur. L'échec ne défait pas le projet."""
+def _link_sync(client: HubClient, hub, project: dict, folder: str, data_dir: Path) -> dict:
+    """Le serveur crée ou ouvre le dossier du projet, puis ce poste le partage. L'échec ne défait pas le projet."""
+    team_id = project["id"]
     try:
+        syncbox.start(data_dir)
+        local = syncbox.device_id(data_dir)
         remote = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/syncthing")["device_id"]
-        listed = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/projects")
-        row = next((p for p in listed.get("projects", []) if p.get("id") == team_id), {})
-        local = syncbox.share(data_dir, folder, row.get("syncthing_folder") or team_id, remote)
-        client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{team_id}/sync", {"device_id": local})
+        client.call(hub.url, hub.fingerprint, "POST", f"/api/v1/projects/{_q(team_id)}/sync", {"device_id": local})
+        syncbox.share(data_dir, folder, project.get("syncthing_folder") or team_id, remote,
+                      label=project.get("name") or team_id, host=urlsplit(hub.url).hostname or "")
         return {"ok": True, "device_id": local}
+    except HubError as exc:
+        return {"ok": False, "error": exc.message}
     except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": str(exc) or exc.__class__.__name__}
+
+
+def slug(text: str) -> str:
+    """Identifiant d'un projet d'équipe : minuscules, chiffres et tirets, sans accents."""
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", "-", plain).strip("-")[:40].rstrip("-")
+
+
+def _q(value: str) -> str:
+    return quote(value, safe="")
 
 
 def _same(a, b) -> bool:

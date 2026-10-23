@@ -81,6 +81,17 @@ def create_app(db: HubDB) -> FastAPI:
             raise HTTPException(404, {"error": "projet introuvable"}) from None
         return {"api": API, "project": project}
 
+    @app.get("/api/v1/users")
+    def users(user: dict = Depends(current_user)):
+        # Les comptes actifs, pour choisir les membres d'un projet : ni jeton ni empreinte.
+        return {"api": API, "users": [{"id": u["id"], "name": u["name"], "color": u["color"]} for u in db.users()]}
+
+    @app.get("/api/v1/projects/{project_id}/members")
+    def get_members(project_id: str, user: dict = Depends(current_user)):
+        state, _project = db.access(user["id"], project_id, manage=False)
+        _raise_access(state)
+        return {"api": API, "members": db.members(project_id)}
+
     @app.put("/api/v1/projects/{project_id}/members")
     def put_members(project_id: str, body: MembersIn, user: dict = Depends(current_user)):
         _need_manage(db, user, project_id)
@@ -127,7 +138,8 @@ def create_app(db: HubDB) -> FastAPI:
         _raise_access(state)
         from .sync_link import register
         try:
-            register(body.device_id, project["syncthing_folder"] or project["id"])
+            register(body.device_id, project["syncthing_folder"] or project["id"],
+                     label=project["name"], name=f"{user['id']}-{body.device_id[:7]}")
         except ValueError as exc:
             raise HTTPException(422, {"error": str(exc)}) from exc
         return {"api": API, "ok": True}
@@ -260,6 +272,8 @@ def create_app(db: HubDB) -> FastAPI:
             raise HTTPException(404, {"error": "introuvable"}) from None
         except PermissionError:
             raise HTTPException(403, {"error": "réservé à l'auteur"}) from None
+        except ValueError as exc:
+            raise HTTPException(422, {"error": str(exc)}) from exc
         return {"api": API, "message": message}
 
     return app

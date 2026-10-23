@@ -2181,3 +2181,13 @@ html.glass.dialog-doc #modal-root > .overlay:not(:first-child) > .dialog { box-s
 .glass.widget-doc .dsp-kpi { background: color-mix(in srgb, var(--surface-2) 82%, transparent); box-shadow: var(--float-1); }
 .glass.widget-doc .wg-head { background: linear-gradient(180deg, color-mix(in srgb, var(--pc, var(--accent)) 14%, transparent), transparent);
   border-bottom-color: var(--border-2); }
+
+/* Équipe : en-tête du projet partagé, ajout d'un membre, fil */
+.team-sec { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.team-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.team-head h4, .team-title { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.team-title { margin: 6px 2px 4px; }
+.team-add { display: flex; gap: 8px; align-items: flex-end; padding: 6px 2px; }
+.team-add select, .team-add textarea { flex: 1; min-width: 0; }
+.hrow select { flex: none; width: auto; }
+.hrow .ht.wrap { white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 500; }

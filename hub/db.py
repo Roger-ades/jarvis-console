@@ -182,6 +182,13 @@ class HubDB:
             return None
         return _user(row)
 
+    def users(self) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT id, name, color, admin, created FROM users WHERE revoked IS NULL ORDER BY id"
+            ).fetchall()
+        return [_user(r) for r in rows]
+
     # ------------------------------------------------------------- projects
     def create_project(self, actor: str, fields: dict) -> dict:
         def go():
@@ -331,6 +338,10 @@ class HubDB:
             "SELECT id FROM users WHERE id=? AND revoked IS NULL", (user_id,)
         ).fetchone()
 
+    def members(self, project_id: str) -> list[dict]:
+        with self._lock:
+            return self._members(project_id)
+
     def members_known(self, ids: list[str]) -> list[str]:
         missing = []
         with self._lock:
@@ -371,9 +382,9 @@ class HubDB:
             now = time.time()
             if parent:
                 row = self.db.execute(
-                    "SELECT author_id, rev, removed FROM conversations WHERE id=?", (parent,)
+                    "SELECT project_id, author_id, rev, removed FROM conversations WHERE id=?", (parent,)
                 ).fetchone()
-                if row is None or row["removed"] is not None:
+                if row is None or row["removed"] is not None or row["project_id"] != project_id:
                     raise KeyError(parent)
                 if row["author_id"] != author:
                     raise PermissionError("auteur")
@@ -474,8 +485,10 @@ class HubDB:
             now = time.time()
             if delete:
                 self.db.execute("UPDATE messages SET deleted=?, text='' WHERE id=?", (now, msg_id))
+            elif text:
+                self.db.execute("UPDATE messages SET text=?, edited=? WHERE id=?", (text, now, msg_id))
             else:
-                self.db.execute("UPDATE messages SET text=?, edited=? WHERE id=?", (text or "", now, msg_id))
+                raise ValueError("texte vide")
             self._audit(actor, "message.edit", {"id": msg_id, "deleted": delete})
             return self._message(msg_id)
 

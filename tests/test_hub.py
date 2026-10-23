@@ -145,20 +145,93 @@ def test_a_shared_conversation_is_a_zip_the_author_can_revise(db, api, monkeypat
     assert api.get(f"/api/v1/conversations/{conv_id}/archive", headers=_auth(roger)).content == b"v2"
 
 
-def test_a_poste_registers_on_the_project_folder(db, api, monkeypatch):
+class FakeSyncthing:
+    """L'API REST de Syncthing réduite à ses appareils et ses dossiers."""
+
+    def __init__(self):
+        self.devices, self.folders, self.calls = {}, {}, []
+
+    def __call__(self, method, path, body=None):
+        self.calls.append((method, path))
+        kind, key = path.split("/")[-2:]
+        store = self.devices if kind == "devices" else self.folders
+        if method == "GET":
+            return store.get(key)
+        if method == "PUT":
+            store[key] = body
+        elif method == "PATCH":
+            store[key].update(body)
+        return None
+
+
+def test_a_poste_registers_on_the_project_folder(db, api, monkeypatch, tmp_path):
     token = db.add_user("roger")
     api.post("/api/v1/projects", headers=_auth(token), json={
         "id": "offre", "name": "Offres", "syncthing_folder": "essai",
     })
     bad = api.post("/api/v1/projects/offre/sync", headers=_auth(token), json={"device_id": "nope"})
     assert bad.status_code == 422
-    calls = []
-    monkeypatch.setattr("hub.sync_link.subprocess.run", lambda cmd, **kwargs: calls.append(cmd))
+    fake = FakeSyncthing()
+    monkeypatch.setattr("hub.sync_link._rest", fake)
+    monkeypatch.setattr("hub.sync_link.PROJECTS", tmp_path / "projets")
     device = "KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE"
+    other = "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
     ok = api.post("/api/v1/projects/offre/sync", headers=_auth(token), json={"device_id": device})
     assert ok.status_code == 200 and ok.json()["ok"] is True
-    assert calls[0][-1] == device
-    assert "essai" in calls[1]
+    folder = fake.folders["essai"]
+    assert folder["label"] == "Offres" and folder["versioning"]["type"] == "staggered"
+    assert (tmp_path / "projets" / "essai").is_dir()
+    assert device in fake.devices
+    again = api.post("/api/v1/projects/offre/sync", headers=_auth(token), json={"device_id": device})
+    assert again.status_code == 200 and len(folder["devices"]) == 1
+    api.post("/api/v1/projects/offre/sync", headers=_auth(token), json={"device_id": other})
+    assert [d["deviceID"] for d in fake.folders["essai"]["devices"]] == [device, other]
+
+
+def test_a_syncthing_refusal_reaches_the_poste(db, api, monkeypatch):
+    token = db.add_user("roger")
+    api.post("/api/v1/projects", headers=_auth(token), json={"id": "offre", "name": "Offres"})
+
+    def down(method, path, body=None):
+        raise ValueError("Syncthing injoignable sur le serveur")
+
+    monkeypatch.setattr("hub.sync_link._rest", down)
+    device = "KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE"
+    failed = api.post("/api/v1/projects/offre/sync", headers=_auth(token), json={"device_id": device})
+    assert failed.status_code == 422 and "injoignable" in failed.json()["error"]
+
+
+def test_members_and_users_are_listed_without_tokens(db, api):
+    roger = db.add_user("roger")
+    paul = db.add_user("paul")
+    api.post("/api/v1/projects", headers=_auth(roger), json={"id": "offre", "name": "Offres"})
+    users = api.get("/api/v1/users", headers=_auth(paul)).json()["users"]
+    assert [u["id"] for u in users] == ["paul", "roger"] and "token_hash" not in users[0]
+    assert api.get("/api/v1/projects/offre/members", headers=_auth(paul)).status_code == 404
+    members = api.get("/api/v1/projects/offre/members", headers=_auth(roger)).json()["members"]
+    assert [(m["id"], m["role"]) for m in members] == [("roger", "administrateur")]
+
+
+def test_an_empty_edit_keeps_the_message(db, api):
+    roger = db.add_user("roger")
+    api.post("/api/v1/projects", headers=_auth(roger), json={"id": "offre", "name": "Offres"})
+    sent = api.post("/api/v1/projects/offre/messages", headers=_auth(roger), json={"text": "Bonjour"})
+    msg_id = sent.json()["message"]["id"]
+    assert api.patch(f"/api/v1/messages/{msg_id}", headers=_auth(roger), json={}).status_code == 422
+    listed = api.get("/api/v1/projects/offre/messages", headers=_auth(roger)).json()["messages"]
+    assert listed[-1]["text"] == "Bonjour"
+
+
+def test_a_conversation_is_revised_only_inside_its_project(db, api):
+    roger = db.add_user("roger")
+    for pid in ("offre", "autre"):
+        api.post("/api/v1/projects", headers=_auth(roger), json={"id": pid, "name": pid})
+    made = api.post("/api/v1/projects/offre/conversations?title=Point&session=s1&mode=stripped",
+                    headers=_auth(roger), content=b"v1")
+    conv_id = made.json()["conversation"]["id"]
+    moved = api.post(f"/api/v1/projects/autre/conversations?title=Point&session=s1&mode=stripped&parent={conv_id}",
+                     headers=_auth(roger), content=b"v2")
+    assert moved.status_code == 404
 
 
 def test_the_server_device_id_uses_the_syncthing_2_subcommand(db, api, monkeypatch):
