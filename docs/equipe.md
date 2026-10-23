@@ -7,11 +7,9 @@ Cowork), avec un serveur Debian de la boîte.
 
 ## En place au 23 octobre 2026
 
-La Debian est en service. Le code de la console qui lui parle est dans ce dépôt ; le
-hub qui tourne sur le serveur n'a encore que les comptes, les projets, les membres et
-le journal. Un `git push` de `main` dépose une demande : le hub tire la copie et se
-relance tout seul. Rien à taper sur la Debian, le résultat s'affiche à la fin du push.
-Ça vaut une fois que le service tourne avec le code qui sait le faire.
+La Debian est en service, et le hub tourne avec ce code (reprise faite le 23 octobre
+après le push). Un `git push` de `main` dépose une demande : le hub tire la copie et se
+relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à jour.`
 
 **Sur la Debian**
 
@@ -20,8 +18,10 @@ relance tout seul. Rien à taper sur la Debian, le résultat s'affiche à la fin
   (`jarvis-server`, port 23). GitHub n'est plus l'origine des mises à jour.
 - Syncthing `syncthing@jarvis` (v2, canal stable), interface seulement sur
   `127.0.0.1:8384`. Appareil `KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE`,
-  nom SRV-DEBIAN. Dossier d'essai `essai` → `/var/lib/jarvis/projets/essai`, versions
-  échelonnées, 90 jours (`maxAge` 7776000 secondes).
+  nom SRV-DEBIAN. Le hub crée lui-même le dossier d'un projet d'équipe à la première
+  inscription d'un poste : `/var/lib/jarvis/projets/<id>`, versions échelonnées,
+  90 jours (`maxAge` 7776000 secondes). Dossiers présents : `essai` (relié à la main au
+  départ) et `essai-equipe` (essai de bout en bout du 23 octobre).
 - Hub `jarvis-hub.service` : `127.0.0.1:8770`, données `/var/lib/jarvis-hub/hub.db`.
   Santé vérifiée depuis le poste : `https://10.20.10.249:8443/health`.
 - nginx : site à part, port **8443**, nom `jarvis.ades-securite.com`, certificat
@@ -41,14 +41,28 @@ relance tout seul. Rien à taper sur la Debian, le résultat s'affiche à la fin
 
 - Configuration → Équipe : adresse, activation, empreinte à confirmer, jeton (fichier
   `data/hub-token`, jamais dans `config.json` ni dans la page), « Démarrer la synchro ».
-- Projet → Équipe : Membres (liste, présence, Rejoindre), Conversations, Fil.
-- Rejoindre écrit `.jarvis-projet` et `.stignore`, pose `team_id` sur le projet, lance
-  Syncthing du poste (binaire dans les données de JARVIS, `127.0.0.1:8384`) et demande
-  au hub d'inscrire ce poste sur le dossier du projet.
+- Projet → Équipe : le projet d'équipe du dossier et ses membres, la liste des projets
+  d'équipe (Rejoindre), la présence ; onglets Conversations et Fil.
+- Un administrateur du hub fait d'un projet JARVIS un projet d'équipe (« Faire de ce
+  projet un projet d'équipe ») : le hub le crée, ce poste le rejoint aussitôt.
+- Membres : l'administrateur du hub ou du projet ajoute un collègue, change son rôle
+  (administrateur, membre) ou le retire. Les jetons ne sortent jamais du hub.
+- Rejoindre écrit `.jarvis-projet` et `.stignore`, pose `team_id` sur le projet (le
+  projet JARVIS est créé avec le nom et la couleur du hub s'il n'existe pas), lance
+  Syncthing du poste (binaire dans les données de JARVIS, `127.0.0.1:8384`), demande au
+  hub d'inscrire ce poste, puis partage le dossier avec la Debian en lui donnant son
+  adresse (`tcp://<hub>:22000`, utile quand le VPN bloque la découverte). Tout est sans
+  effet s'il est déjà fait ; un même projet ne se relie pas à deux dossiers.
+- La synchro reprend d'elle-même au démarrage de la console ; « Relancer la synchro »
+  (écran Équipe) et « Démarrer la synchro » (Configuration) relient à nouveau chaque
+  projet d'équipe du poste.
+- Windows (amd64, arm64) et macOS (universel) : Syncthing v2.1.7 téléchargé à la
+  première synchro, vérifié contre la somme SHA-256 publiée avec la version.
 - Partager une discussion du dossier (aperçu de ce qui est sensible, mode complet ou
   sans résultats d'outils, chemins remplacés par `{{PROJET}}`). Reprendre la ramène
   dans le dossier et continue avec le compte Claude de la personne.
-- Fil : envoyer et lire les messages du projet. Mémoire : « Copier dans la mémoire
+- Fil : envoyer et lire les messages du projet ; il se relit toutes les 15 secondes
+  tant qu'il est affiché. Une modification vide est refusée (422). Mémoire : « Copier dans la mémoire
   d'équipe » écrit `MEMOIRE-EQUIPE.md` et l'ajoute au `CLAUDE.md` du dossier.
 
 **Pas encore**
@@ -62,8 +76,9 @@ relance tout seul. Rien à taper sur la Debian, le résultat s'affiche à la fin
   que Claude modifie, et JARVIS n'avertit pas avant d'écrire un fichier déjà ouvert
   chez un collègue. Les conflits `*.sync-conflict-*` ne sont pas signalés.
 - La console interroge le hub ; elle ne suit pas encore le flux `/events`.
-- Pas d'écran d'administration dans JARVIS : comptes, projets et membres se gèrent
-  en ligne de commande sur la Debian.
+- Les comptes se créent et se révoquent encore en ligne de commande sur la Debian.
+  Renommer ou supprimer un projet d'équipe : ni écran ni route (`essai-equipe` reste
+  donc sur le hub et sur le serveur).
 - Validations depuis le téléphone, et les scripts de projet : hors de ce chantier.
 
 Contexte retenu :
@@ -129,7 +144,8 @@ Le partage ne se fait pas à la main dans une autre application. « Rejoindre »
 marqueur et le `.stignore`, puis Syncthing lancé par JARVIS (binaire dans les données
 de la console, interface seulement sur `127.0.0.1:8384`) partage le dossier avec
 l'appareil Debian. Le hub, qui tourne sous `jarvis`, inscrit ce poste sur le dossier
-du projet. « Rejoindre » lance ce moteur ; Configuration → Équipe, « Démarrer la
+du projet par l'API REST de Syncthing (clé lue dans sa `config.xml`), et crée ce
+dossier, versionné, s'il n'existe pas encore. « Rejoindre » lance ce moteur ; Configuration → Équipe, « Démarrer la
 synchro », le fait aussi sans rejoindre un projet.
 
 ## 2. Le hub
@@ -201,10 +217,12 @@ Les transcriptions partagées sont des fichiers à part :
 
 ```
 GET    /api/v1/me
+GET    /api/v1/users                        comptes actifs (id, nom, couleur)
 GET    /api/v1/projects                     projets dont je suis membre
 POST   /api/v1/projects                     (admin) créer
 PUT    /api/v1/projects/{p}                 (admin) nom, couleur, réglages, dossier Syncthing
-PUT    /api/v1/projects/{p}/members         (admin)
+GET    /api/v1/projects/{p}/members         membres et rôles
+PUT    /api/v1/projects/{p}/members         (admin du hub ou du projet)
 GET    /api/v1/events?since=<curseur>       flux SSE : messages, présence, conversations
 POST   /api/v1/presence                     battement toutes les 30 s
 GET    /api/v1/syncthing                    identifiant de l'appareil Debian
@@ -242,7 +260,8 @@ quitte jamais Python, et une page compromise ne peut pas joindre le hub.
 
 ## 3. Projets d'équipe et présence
 
-*En place : liste, Rejoindre, ligne de présence. Pas encore : réglages communs repris
+*En place : liste, création depuis un projet JARVIS, membres, Rejoindre, ligne de
+présence. Pas encore : réglages communs repris
 chez soi, fichiers dans la présence, avertissement avant écriture, conflits Syncthing.*
 
 - Dans **Projets**, une section « Équipe » liste les projets dont on est membre. Pour un
@@ -327,7 +346,7 @@ reprises par d'autres restent sur leurs postes : l'écran de publication le dit.
 
 ## 5. Le fil du projet
 
-*En place : onglet Fil, envoyer et relire les messages. Pas encore : compteur de non-lus,
+*En place : onglet Fil, envoyer et relire les messages (relu toutes les 15 s). Pas encore : compteur de non-lus,
 mentions, modifier ou effacer depuis l'écran, références, notifications, cache hors ligne.*
 
 Un fil de messages par projet, dans la fenêtre du projet (onglet **Fil**). Le compteur
@@ -382,10 +401,12 @@ reste. Pour partager un savoir du projet :
 ## Où on en est
 
 0. **Debian.** *En service* : Syncthing avec versions, pare-feu, nginx sur le 8443,
-   sauvegarde de nuit, hub systemd. Le dossier d'essai se relie depuis JARVIS.
-1. **Hub et projets d'équipe.** *En place* pour les comptes, les jetons, les projets,
-   les membres, Configuration → Équipe et Rejoindre. La présence signale une session
-   ouverte. Restent les réglages communs repris chez soi et le signalement des conflits.
+   sauvegarde de nuit, hub systemd. Le hub crée le dossier de chaque projet d'équipe.
+1. **Hub et projets d'équipe.** *En place* pour les comptes, les jetons, les projets
+   (créés depuis JARVIS), les membres (gérés depuis JARVIS), Configuration → Équipe et
+   Rejoindre, sur Windows et macOS. La présence signale une session ouverte. Restent
+   les réglages communs repris chez soi, le signalement des conflits, renommer ou
+   supprimer un projet.
 2. **Conversations partagées.** *En place* pour publier et reprendre. Restent la lecture
    sans import, la mise à jour, le retrait depuis l'écran et la reprise liée (« suite de »).
 3. **Fil du projet.** *En place* pour écrire et lire. Restent le temps réel, les non-lus,
@@ -394,8 +415,10 @@ reste. Pour partager un savoir du projet :
    avec le compte Claude de la personne qui le demande, sans publier le résumé.
 
 Tests : `tests/test_hub.py`, `tests/test_equipe.py`, `tests/test_share.py` (jeton jamais
-en clair, membres, archives, masquage des chemins, inscription Syncthing). Pas encore
-deux consoles de démonstration bout en bout.
+en clair, membres, archives, masquage des chemins, inscription Syncthing, création et
+rejointe d'un projet). Essai réel le 23 octobre avec un poste : projet `essai-equipe`
+créé, poste inscrit, fichier reçu par le serveur (100 %), fil et membres relus. Pas
+encore d'essai avec deux postes.
 
 Ce qui ne change pas : chaque Jarvis reste local et autonome, la politique
 d'autorisations, les aperçus, les profils et leurs comptes.
@@ -405,8 +428,6 @@ d'autorisations, les aperçus, les profils et leurs comptes.
 - Durée de conservation des conversations partagées et des messages (illimitée, 1 an…) ?
   Les versions de fichiers, elles, sont à 90 jours.
 - Les deux collègues ont-ils déjà Jarvis et un compte Claude Team chacun ?
-- Postes uniquement Windows pour l'instant : le moteur embarqué est le binaire Windows
-  amd64 v2.1.7. Un Mac aurait le même principe, avec son propre binaire.
 
 Tranché : l'adresse du hub est `https://10.20.10.249:8443`
 (`jarvis.ades-securite.com`), LAN `10.20.10.0/24`, VPN `10.10.0.0/24`. Les mises à jour

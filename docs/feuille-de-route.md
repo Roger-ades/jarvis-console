@@ -33,7 +33,7 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | Validations depuis le téléphone | À faire |
 | `lancer_discussion`, outils-scripts | À faire |
 | Vue « Consommation » | À faire |
-| Hub d'équipe | Partiel (Debian en service ; partage, reprise, fil et synchro dans JARVIS — détail au 23 octobre dans [equipe.md](equipe.md)) |
+| Hub d'équipe | Partiel (Debian en service ; création, membres, partage, reprise, fil et synchro Windows/macOS dans JARVIS, essai réel avec un poste — détail au 23 octobre dans [equipe.md](equipe.md)) |
 
 ## Ce qui fait encore sortir de Jarvis (ou faire à la main)
 
@@ -53,7 +53,7 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | S'y retrouver dans des centaines de discussions | Archivage à la main ou après N jours d'inactivité ; les archivées restent dans l'historique et Ctrl+K | `Engine.archive_tasks`, `Engine.auto_archive` | Fait |
 | Reprendre une discussion après 2 ou 3 heures | Le cache a expiré : tout le contexte est réécrit en cache, sauf « Garder au chaud » activé à la main | `Engine.keep_warm` | Partiel |
 | Être loin du PC | La console n'écoute que `127.0.0.1` ; une validation demandée par une routine attend le retour de l'utilisateur. Le hub d'équipe, lui, est joignable en LAN et VPN | `console/__main__.py`, `console/presence.py` | À faire |
-| Travailler sur les mêmes dossiers que les collègues | Hub sur la Debian, Syncthing lancé par JARVIS, partage et reprise d'une discussion, fil du projet. Pas encore le téléphone, ni l'avertissement quand deux personnes touchent le même fichier | [equipe.md](equipe.md) | Partiel |
+| Travailler sur les mêmes dossiers que les collègues | Hub sur la Debian, projets d'équipe créés et membres gérés depuis JARVIS, Syncthing lancé par JARVIS (Windows et macOS), partage et reprise d'une discussion, fil du projet. Pas encore le téléphone, ni l'avertissement quand deux personnes touchent le même fichier | [equipe.md](equipe.md) | Partiel |
 | Réagir à un événement (mail reçu, fichier déposé) | Les routines ne partent qu'à heure fixe ou à intervalle | `console/routines.py` | À faire |
 | Retrouver ce qu'une routine a produit | Boîte de réception | [boite-de-reception.md](boite-de-reception.md) | Fait |
 | Lancer une commande générale du compte d'un clic | Actions du compte en boutons | [boite-de-reception.md](boite-de-reception.md) | Fait |
@@ -315,13 +315,16 @@ Un bouton « Compacter et mettre en pause » couvre le cas où l'on sait qu'on r
 11. `lancer_discussion`, puis les outils-scripts. *À faire.*
 12. Hub d'équipe ([equipe.md](equipe.md)). *Partiel, 23 octobre 2026.* La Debian est en
     service : dépôt git (plus GitHub), Syncthing, pare-feu, nginx sur le port 8443,
-    hub et sauvegarde de nuit. Dans JARVIS : Configuration → Équipe, Rejoindre, partage
-    et reprise d'une discussion, fil, copie vers la mémoire d'équipe, Syncthing lancé
-    par la console. Le service en ligne n'a encore que les comptes et les projets :
-    conversations, fil, présence et inscription Syncthing suivent le prochain envoi.
-    Ensuite un push de main met le hub à jour sans commande sur la Debian.
-    Restent la lecture sans reprise, les non-lus, les conflits de fichiers et les
-    validations depuis le téléphone.
+    hub et sauvegarde de nuit. Dans JARVIS : Configuration → Équipe, création d'un
+    projet d'équipe et gestion de ses membres, Rejoindre (le projet JARVIS se crée au
+    besoin), partage et reprise d'une discussion, fil relu toutes les 15 s, copie vers
+    la mémoire d'équipe. Syncthing est lancé par la console sur Windows et macOS, le
+    hub crée le dossier versionné du projet sur le serveur, la synchro reprend au
+    démarrage. Un push de main met le hub à jour sans commande sur la Debian. Essai réel
+    le 23 octobre avec un poste (projet `essai-equipe`, fichier reçu par le serveur).
+    Restent l'essai à deux postes, renommer ou supprimer un projet, la lecture sans
+    reprise, les non-lus, les conflits de fichiers et les validations depuis le
+    téléphone.
 
 ## Ce qui est en place (étape 1)
 
