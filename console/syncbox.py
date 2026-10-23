@@ -61,11 +61,16 @@ def device_id(data_dir: Path) -> str:
     exe = binary_of(data_dir)
     if not exe.is_file():
         raise FileNotFoundError("syncthing")
-    out = subprocess.check_output(
-        [str(exe), "--device-id", "--home", str(home_of(data_dir))],
-        text=True, timeout=20,
-    )
-    found = out.strip().splitlines()[-1].strip()
+    # Syncthing 2 n'accepte plus --device-id : c'est une sous-commande, --home reste global.
+    try:
+        out = subprocess.check_output(
+            [str(exe), "--home", str(home_of(data_dir)), "device-id"],
+            text=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.SubprocessError as exc:
+        raise ValueError("Syncthing n'a pas donné l'identifiant de ce poste.") from exc
+    lines = out.strip().splitlines()
+    found = lines[-1].strip() if lines else ""
     if not DEVICE.match(found):
         raise ValueError("identifiant Syncthing illisible")
     return found

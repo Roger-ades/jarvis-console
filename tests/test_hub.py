@@ -161,6 +161,30 @@ def test_a_poste_registers_on_the_project_folder(db, api, monkeypatch):
     assert "essai" in calls[1]
 
 
+def test_the_server_device_id_uses_the_syncthing_2_subcommand(db, api, monkeypatch):
+    import subprocess
+
+    token = db.add_user("roger")
+    device = "KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE"
+    calls = []
+
+    def answer(cmd, **kwargs):
+        calls.append(cmd)
+        return device + "\n"
+
+    monkeypatch.setattr("hub.sync_link.subprocess.check_output", answer)
+    ok = api.get("/api/v1/syncthing", headers=_auth(token))
+    assert ok.status_code == 200 and ok.json()["device_id"] == device
+    assert calls[0][1:] == ["device-id"]
+
+    def refuse(cmd, **kwargs):
+        raise subprocess.CalledProcessError(80, cmd)
+
+    monkeypatch.setattr("hub.sync_link.subprocess.check_output", refuse)
+    down = api.get("/api/v1/syncthing", headers=_auth(token))
+    assert down.status_code == 503 and "Syncthing" in down.json()["error"]
+
+
 def test_health_needs_no_token(api):
     assert api.get("/health").json() == {"api": 1, "ok": True}
     assert api.get("/api/v1/me").status_code == 401

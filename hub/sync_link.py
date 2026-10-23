@@ -17,8 +17,13 @@ def binary() -> str:
 
 
 def local_id() -> str:
-    out = subprocess.check_output([binary(), "--device-id"], text=True, timeout=20)
-    found = out.strip().splitlines()[-1].strip()
+    # Syncthing 2 n'accepte plus --device-id : c'est une sous-commande.
+    try:
+        out = subprocess.check_output([binary(), "device-id"], text=True, timeout=20)
+    except subprocess.SubprocessError as exc:
+        raise ValueError("Syncthing n'a pas donné son identifiant") from exc
+    lines = out.strip().splitlines()
+    found = lines[-1].strip() if lines else ""
     if not DEVICE.match(found):
         raise ValueError("identifiant Syncthing illisible")
     return found
