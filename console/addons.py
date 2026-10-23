@@ -268,17 +268,90 @@ Object.defineProperty(window, "jarvis", {value: Object.freeze({
                 typeof o.progres === "function" ? o.progres : null);
   },
 }), writable: false, configurable: false});
+// the console's look: its theme and the account's color, now and each time they change (on a port it keeps)
+try {
+  const look = new MessageChannel();
+  look.port1.onmessage = (ev) => {
+    const d = ev.data || {}, root = document.documentElement;
+    if (typeof d.theme === "string") root.setAttribute("data-theme", d.theme);
+    if (typeof d.couleur === "string" && /^#[0-9a-f]{3,8}$/i.test(d.couleur)) root.style.setProperty("--pc", d.couleur);
+  };
+  window.top.postMessage({jarvisAddon: 1, id: 0, type: "apparence"}, "*", [look.port2]);
+} catch (e) {}
 })();</script>"""
-STYLE = ("<style>html{color-scheme:light dark}body{margin:12px 14px;font:14px/1.45 'Segoe UI',system-ui,"
-         "sans-serif}</style>")
+# The console's look, in a layer of its own: the module's styles (outside any layer) always win over it. Its
+# variables are the console's (--surface, --text, --accent, --pc the account's color, --elev-n, --sink...),
+# following the console's theme (data-theme on <html>, kept up to date by the bridge).
+_DARK = ("--bg:#141a23;--bg-2:#171e28;--surface:#1c2430;--surface-2:#222b38;--surface-3:#2a3442;--surface-4:#343f4e;"
+         "--border:rgba(160,186,214,.09);--border-2:rgba(160,186,214,.16);--border-3:rgba(160,186,214,.28);"
+         "--text:#e7edf4;--text-2:#aab6c3;--text-3:#74828f;--text-4:#535f6d;"
+         "--accent:#72c9ff;--accent-2:#3d9fe0;--accent-ink:#03121d;--accent-soft:rgba(114,201,255,.12);"
+         "--ok:#4fd3a0;--warn:#f0b45c;--err:#f26b80;--info:#a3adff;--violet:#b69cff;"
+         "--ok-soft:rgba(79,211,160,.1);--warn-soft:rgba(240,180,92,.1);--err-soft:rgba(242,107,128,.1);"
+         "--code-bg:#171d26;--hi:rgba(255,255,255,.06);--sh:0,0,0;--k:1;color-scheme:dark")
+_LIGHT = ("--bg:#eef1f5;--bg-2:#f6f8fa;--surface:#fff;--surface-2:#f6f8fa;--surface-3:#eef2f6;--surface-4:#e3e9ef;"
+          "--border:rgba(20,40,60,.08);--border-2:rgba(20,40,60,.14);--border-3:rgba(20,40,60,.26);"
+          "--text:#0f1b27;--text-2:#3f5163;--text-3:#6c7c8c;--text-4:#9aa7b3;"
+          "--accent:#0a78b8;--accent-2:#06659c;--accent-ink:#fff;--accent-soft:rgba(10,120,184,.09);"
+          "--ok:#0c8a5b;--warn:#b36b00;--err:#c9304a;--info:#4652c9;--violet:#6f4fd6;"
+          "--ok-soft:rgba(12,138,91,.08);--warn-soft:rgba(179,107,0,.08);--err-soft:rgba(201,48,74,.07);"
+          "--code-bg:#f3f6f9;--hi:rgba(255,255,255,.85);--sh:15,27,39;--k:.4;color-scheme:light")
+STYLE = (
+    "<style>@layer jarvis{"
+    f":root{{{_DARK};--pc:var(--accent);"
+    "--font:'Segoe UI Variable Text','Segoe UI',system-ui,-apple-system,sans-serif;"
+    "--font-display:'Segoe UI Variable Display','Segoe UI Variable Text','Segoe UI',system-ui,sans-serif;"
+    "--mono:'Cascadia Mono','Cascadia Code',Consolas,monospace;--r:8px;--r-lg:12px;"
+    "--elev-1:inset 0 1px 0 var(--hi),0 1px 2px rgba(var(--sh),calc(.22*var(--k))),0 3px 8px -4px rgba(var(--sh),calc(.35*var(--k)));"
+    "--elev-2:inset 0 1px 0 var(--hi),0 2px 4px rgba(var(--sh),calc(.2*var(--k))),0 12px 26px -12px rgba(var(--sh),calc(.55*var(--k)));"
+    "--elev-3:0 10px 30px -14px rgba(var(--sh),calc(.6*var(--k))),0 3px 8px -4px rgba(var(--sh),calc(.35*var(--k)));"
+    "--sink:inset 0 2px 4px -1px rgba(var(--sh),calc(.35*var(--k)))}"
+    f":root[data-theme=clair]{{{_LIGHT}}}"
+    f"@media (prefers-color-scheme:light){{:root[data-theme=systeme]{{{_LIGHT}}}}}"
+    "*,::before,::after{box-sizing:border-box}"
+    "body{margin:12px 14px;font:13px/1.5 var(--font);color:var(--text);background:var(--surface);"
+    "-webkit-font-smoothing:antialiased}"
+    "h1,h2,h3{font-family:var(--font-display);font-weight:600;color:var(--text)}"
+    "a{color:var(--accent)}::selection{background:color-mix(in srgb,var(--accent) 30%,transparent)}"
+    "button,input,select,textarea{font:inherit;color:var(--text)}"
+    "button{cursor:pointer;padding:5px 12px;border-radius:var(--r);border:1px solid var(--border-2);background:var(--surface-2);"
+    "box-shadow:inset 0 1px 0 var(--hi),0 1px 2px rgba(var(--sh),calc(.25*var(--k)));transition:background .15s,border-color .15s}"
+    "button:hover{background:var(--surface-3);border-color:var(--border-3)}"
+    "button:active{box-shadow:var(--sink)}button:disabled{opacity:.45;cursor:default}"
+    "button.primary,button.primaire,button[type=submit]{background:var(--accent);border-color:transparent;color:var(--accent-ink);"
+    "font-weight:600;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 2px 6px -2px color-mix(in srgb,var(--accent) 50%,transparent)}"
+    "button.primary:hover,button.primaire:hover,button[type=submit]:hover{background:color-mix(in srgb,var(--accent) 88%,white)}"
+    "input:not([type=checkbox],[type=radio],[type=range],[type=color]),select,textarea{padding:6px 9px;border-radius:var(--r);"
+    "border:1px solid var(--border-2);background:var(--bg-2);box-shadow:var(--sink)}"
+    "select option{background:var(--surface);color:var(--text)}"
+    ":is(input,select,textarea):hover{border-color:var(--border-3)}"
+    ":focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:1px}"
+    "input[type=checkbox],input[type=radio],input[type=range],progress{accent-color:var(--accent)}"
+    "table{border-collapse:collapse}th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--border)}"
+    "th{color:var(--text-3);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:var(--surface)}"
+    "tbody tr:hover td{background:var(--surface-2)}"
+    "pre,code,kbd{font-family:var(--mono);font-size:12px}pre{padding:10px 12px;border-radius:var(--r);background:var(--code-bg);"
+    "box-shadow:var(--sink);overflow:auto}"
+    "hr{border:0;border-top:1px solid var(--border)}"
+    "dialog{color:var(--text);background:var(--surface);border:0;border-radius:14px;padding:16px 18px;"
+    "box-shadow:var(--elev-3),0 0 0 1px var(--border-2),inset 0 1px 0 var(--hi)}"
+    "dialog::backdrop{background:rgba(var(--sh),calc(.45*var(--k)+.1));backdrop-filter:blur(3px)}"
+    "::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}"
+    "::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:9px;border:2px solid transparent;background-clip:padding-box}"
+    "::-webkit-scrollbar-thumb:hover{background:var(--border-3);border:2px solid transparent;background-clip:padding-box}"
+    "}</style>")
+THEMES = {"sombre", "clair", "systeme"}
 _DOCTYPE = re.compile(r"^\s*(?:﻿)?\s*<!doctype\b[^>]*>", re.I)
 _REFRESH = re.compile(r"<meta\b[^>]*\bhttp-equiv\s*=\s*['\"]?\s*refresh\b[^>]*>", re.I)
 
 
-def page(html: str, aid: str) -> str:
-    """An HTML page of the module, after the bridge and a base style (the module's own style wins)."""
+def page(html: str, aid: str, theme: str = "sombre") -> str:
+    """An HTML page of the module, after the bridge and the console's look (the module's own style wins), in the
+    console's theme (the module's own <html> tag only adds its attributes to this one)."""
     html = _DOCTYPE.sub("", _REFRESH.sub("", html))
-    return f'<!doctype html><meta charset="utf-8">{BRIDGE.replace("__ID__", json.dumps(aid))}{STYLE}' + html
+    theme = theme if theme in THEMES else "sombre"
+    return (f'<!doctype html><html data-theme="{theme}"><meta charset="utf-8">'
+            f'{BRIDGE.replace("__ID__", json.dumps(aid))}{STYLE}' + html)
 
 
 def policy(base: str, ancestors: str) -> str:

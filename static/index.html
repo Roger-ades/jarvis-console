@@ -38,51 +38,58 @@
       <button class="btn ghost" id="btn-notes" title="Notes générales et de projet, avec rappels">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/><path d="M8.5 8.5h7M8.5 12h4.5"/></svg><span class="lbl">Notes</span><span class="nt-count" hidden></span>
       </button>
-      <div class="menu-wrap">
-        <button class="btn ghost" id="btn-addons" title="Modules : outils et panneaux développés par Claude pour JARVIS">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4.5a2 2 0 0 1 4 0V6h3a1 1 0 0 1 1 1v3h-1.5a2 2 0 0 0 0 4H18v3a1 1 0 0 1-1 1h-3v-1.5a2 2 0 0 0-4 0V18H7a1 1 0 0 1-1-1v-3h1.5a2 2 0 0 0 0-4H6V7a1 1 0 0 1 1-1h3z"/></svg><span class="lbl">Modules</span>
+      <div class="menu-wrap more-wrap">
+        <button class="btn ghost" id="btn-more" title="Discussions, routines, outils, ranger les fenêtres" aria-label="Plus" aria-haspopup="menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 12h.01M12 12h.01M18 12h.01"/></svg><span class="lbl">Plus</span>
         </button>
-        <div class="menu ad-menu" id="menu-addons" hidden></div>
-      </div>
-      <button class="btn ghost" id="btn-history" title="Historique des tâches">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Historique</span>
-      </button>
-      <button class="btn ghost" id="btn-routines" title="Routines : tâches planifiées">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M12 13v3l2 1.5"/></svg><span class="lbl">Routines</span>
-      </button>
-      <div class="menu-wrap">
-        <button class="btn ghost" id="btn-claudeai" title="Ouvrir claude.ai (conversations, projets, partage)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg><span class="lbl">claude.ai</span>
-        </button>
-        <div class="menu" id="menu-claudeai" hidden>
-          <div class="menu-title">Dans ton navigateur</div>
-          <a href="https://claude.ai/recents" target="_blank" rel="noopener noreferrer">Conversations</a>
-          <a href="https://claude.ai/projects" target="_blank" rel="noopener noreferrer">Projets et partage</a>
-          <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code sur le web</a>
-          <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Usage et crédits</a>
-          <a href="https://claude.ai/admin-settings/organization" target="_blank" rel="noopener noreferrer">Administration (Team)</a>
-          <hr>
-          <div class="menu-note">Conversations, projets, Cowork et partage restent sur claude.ai : aucune API ne permet de les lire depuis la console.</div>
+        <div class="menu more-menu" id="menu-more" hidden>
+          <button class="btn ghost" id="btn-history" title="Discussions de JARVIS, et celles de Claude Desktop ou de la CLI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span class="lbl">Discussions</span>
+          </button>
+          <button class="btn ghost" id="btn-sessions" title="Discussions tenues dans Claude Desktop ou la CLI">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Hors JARVIS</span>
+          </button>
+          <button class="btn ghost" id="btn-routines" title="Routines : tâches planifiées">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M12 13v3l2 1.5"/></svg><span class="lbl">Routines</span>
+          </button>
+          <div class="menu-wrap">
+            <button class="btn ghost" id="btn-addons" title="Outils et panneaux développés par Claude pour JARVIS">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4.5a2 2 0 0 1 4 0V6h3a1 1 0 0 1 1 1v3h-1.5a2 2 0 0 0 0 4H18v3a1 1 0 0 1-1 1h-3v-1.5a2 2 0 0 0-4 0V18H7a1 1 0 0 1-1-1v-3h1.5a2 2 0 0 0 0-4H6V7a1 1 0 0 1 1-1h3z"/></svg><span class="lbl">Outils</span>
+            </button>
+            <div class="menu ad-menu" id="menu-addons" hidden></div>
+          </div>
+          <div class="menu-wrap">
+            <button class="btn ghost" id="btn-claudeai" title="Ouvrir claude.ai (conversations, projets, partage)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></svg><span class="lbl">claude.ai</span>
+            </button>
+            <div class="menu" id="menu-claudeai" hidden>
+              <div class="menu-title">Dans ton navigateur</div>
+              <a href="https://claude.ai/recents" target="_blank" rel="noopener noreferrer">Conversations</a>
+              <a href="https://claude.ai/projects" target="_blank" rel="noopener noreferrer">Projets et partage</a>
+              <a href="https://claude.ai/code" target="_blank" rel="noopener noreferrer">Claude Code sur le web</a>
+              <a href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Usage et crédits</a>
+              <a href="https://claude.ai/admin-settings/organization" target="_blank" rel="noopener noreferrer">Administration (Team)</a>
+              <hr>
+              <div class="menu-note">Conversations, projets, Cowork et partage restent sur claude.ai : aucune API ne permet de les lire depuis la console.</div>
+            </div>
+          </div>
+          <div class="menu-wrap">
+            <button class="btn ghost" id="btn-arrange" title="Ranger les fenêtres">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbl">Ranger</span>
+            </button>
+            <div class="menu" id="menu-arrange" hidden>
+              <button data-arrange="cascade">Cascade</button>
+              <button data-arrange="mosaique">Mosaïque</button>
+              <hr>
+              <button data-arrange="minimize">Tout réduire</button>
+              <button data-arrange="restore">Tout restaurer</button>
+              <hr>
+              <button data-arrange="close" title="Ctrl+Alt+W">Tout fermer</button>
+            </div>
+          </div>
         </div>
       </div>
-      <button class="btn ghost" id="btn-sessions" title="Sessions Claude Code existantes (Claude Desktop, CLI, console)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg><span class="lbl">Sessions</span>
-      </button>
-      <div class="menu-wrap">
-        <button class="btn ghost" id="btn-arrange" title="Ranger les fenêtres">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span class="lbl">Ranger</span>
-        </button>
-        <div class="menu" id="menu-arrange" hidden>
-          <button data-arrange="cascade">Cascade</button>
-          <button data-arrange="mosaique">Mosaïque</button>
-          <hr>
-          <button data-arrange="minimize">Tout réduire</button>
-          <button data-arrange="restore">Tout restaurer</button>
-          <hr>
-          <button data-arrange="close" title="Ctrl+Alt+W">Tout fermer</button>
-        </div>
-      </div>
-      <button class="btn ghost" id="btn-config" title="Configuration (Ctrl+virgule)">
+      <button class="btn ghost" id="btn-config" title="Configuration (Ctrl+virgule)" aria-label="Configuration">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="lbl">Configuration</span>
       </button>
       <button class="btn danger" id="btn-emergency" title="Stoppe toutes les tâches et bloque les nouvelles">Arrêt d'urgence</button>
@@ -100,14 +107,6 @@
       </div>
       <div id="inbox-peek" class="inbox-peek" hidden></div>
       <div id="home" class="home-grid"></div>
-      <p class="empty-keys">
-        <span><kbd>Ctrl</kbd><kbd>K</kbd> rechercher</span>
-        <span><kbd>@work</kbd><kbd>@perso</kbd> compte</span>
-        <span><kbd>/</kbd> skills</span>
-        <span><kbd>Alt</kbd><kbd>1</kbd> <kbd>2</kbd> profil</span>
-        <span><kbd>↑</kbd> rappel</span>
-        <span><kbd>Ctrl</kbd><kbd>,</kbd> configuration</span>
-      </p>
     </div>
     <!-- displays of Claude pinned to the desktop, under the windows (widgets.js) -->
     <aside id="widgets" class="widgets" aria-label="Widgets" hidden></aside>
@@ -132,7 +131,7 @@
           <select id="opt-workdir" aria-label="Dossier de travail"></select>
         </label>
         <button type="button" id="opt-summary" class="chip-select opts-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="opt-panel"
-                title="Réglages de la demande : modèle, autorisations, effort, mode équipe">
+                title="Réglages de la demande">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.7 1.8 1.8.7-1.8.7L19 22l-.7-1.8-1.8-.7 1.8-.7z"/></svg>
           <span id="opt-summary-text">Réglages</span>
         </button>
@@ -142,6 +141,7 @@
           </button>
         </div>
       </div>
+      <div id="folder-pop" hidden></div>
       <div id="opt-panel" class="opt-panel" role="dialog" aria-label="Réglages de la demande" hidden>
         <div class="opt-head">Réglages de la prochaine demande</div>
         <label class="opt-row">
@@ -149,7 +149,7 @@
           <select id="opt-model" aria-label="Modèle"></select>
         </label>
         <label class="opt-row">
-          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Autorisations</span>
+          <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Ce que Claude peut faire</span>
           <select id="opt-preset" aria-label="Autorisations"></select>
         </label>
         <label class="opt-row">
@@ -169,12 +169,12 @@
     </form>
   </div>
 
-  <aside id="inbox" class="drawer wide" hidden aria-label="Boîte de réception"></aside>
-  <aside id="history" class="drawer" hidden aria-label="Historique"></aside>
-  <aside id="sessions" class="drawer wide" hidden aria-label="Sessions Claude Code"></aside>
-  <aside id="routines" class="drawer wide" hidden aria-label="Routines"></aside>
-  <aside id="project" class="drawer wide" hidden aria-label="Projet"></aside>
-  <aside id="notes" class="drawer wide" hidden aria-label="Notes"></aside>
+  <aside id="inbox" class="drawer wide" hidden aria-label="Boîte de réception" data-regard="Boîte de réception"></aside>
+  <aside id="history" class="drawer" hidden aria-label="Discussions" data-regard="Discussions"></aside>
+  <aside id="sessions" class="drawer wide" hidden aria-label="Hors JARVIS" data-regard="Hors JARVIS"></aside>
+  <aside id="routines" class="drawer wide" hidden aria-label="Routines" data-regard="Routines"></aside>
+  <aside id="project" class="drawer wide" hidden aria-label="Projet" data-regard="Projet"></aside>
+  <aside id="notes" class="drawer wide" hidden aria-label="Notes" data-regard="Notes"></aside>
   <div id="modal-root"></div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <div id="reminders" class="reminders" aria-live="assertive"></div>

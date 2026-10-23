@@ -8,6 +8,7 @@ import { mdElement } from "./md.js";
 import { confirmDialog, copyText, dialog, downloadBlob, h, ICONS, toast } from "./util.js";
 import { projectFor, projects as allProjects } from "./projects.js";
 import { colorOf, paint } from "./tint.js";
+import * as regardMod from "./regard.js";
 import * as wm from "./wm.js";
 
 const IMG = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
@@ -293,6 +294,14 @@ export async function openPreview(opts) {
   const regard = opts.url ? { type: "page", url: opts.url } : { type: "fichier", path: opts.path, ...(opts.taskId ? { task: opts.taskId } : {}) };
   wm.register(id, el, { handle: head, ephemeral: true, size: SIZES[kind] || SIZES.other, fresh: true,
     meta: { title, subtitle: opts.path || opts.url, color: colorOf(opts.color), icon: kind === "image" ? "image" : kind === "web" ? "globe" : "file", onClose: close, regard } });
+  if (kind === "pdf" || kind === "html") {
+    actions.append(act("clipboard", "Joindre le texte copié", async () => {
+      let text = "";
+      try { text = await navigator.clipboard.readText(); } catch { /* the click is required; a refusal says so */ }
+      if (!regardMod.joinText(text, regard)) toast("Rien dans le presse-papiers, ou la lecture a été refusée.", "err");
+      else toast("Le texte copié partira avec le prochain message.", "ok");
+    }));
+  }
   const fitImage = (img) => img.addEventListener("load", () => {
     if (img.naturalWidth) wm.setSize(id, Math.max(360, img.naturalWidth + 34), Math.max(220, img.naturalHeight + 86));
   }, { once: true });
@@ -327,6 +336,25 @@ export async function openPreview(opts) {
   editBtn.hidden = true;
   saveBtn.hidden = true;
   actions.append(editBtn, saveBtn, act("external", "Ouvrir avec l'application", () => openWith(false)), act("folder", "Afficher dans le dossier", () => openWith(true)));
+  if (kind === "pdf") {
+    let loaded = false;
+    actions.append(act("file", "Texte sélectionnable", async () => {
+      const box = body.querySelector(".pv-pdf-text");
+      const frame = body.querySelector(".pv-pdf iframe, iframe.pv-frame");
+      if (!box) return;
+      const show = box.hidden;
+      box.hidden = !show;
+      if (frame) frame.hidden = show;
+      if (!show || loaded) return;
+      try {
+        const got = await api(src.text(path));
+        const pages = String(got.text || "").split("\f");
+        box.replaceChildren(...(pages.length ? pages : [""]).map((page, i) => h("section", { "data-page": String(i + 1) },
+          h("h4", {}, `Page ${i + 1}`), h("pre", { class: "pv-pre" }, page))));
+        loaded = true;
+      } catch (e) { box.replaceChildren(h("div", { class: "line err" }, e.message)); }
+    }));
+  }
   let blob = null, stamp = "", where = path, remote = false, first = true, busy = false, focus = opts.focus || null;
   el.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S") && editing) { e.preventDefault(); saveEdit(); }
@@ -383,7 +411,9 @@ export async function openPreview(opts) {
       node.addEventListener("click", () => node.classList.toggle("full"));
       if (first) fitImage(node);
     } else if (kind === "pdf") {
-      node = h("iframe", { class: "pv-frame", src: pdfUrl(url), title: baseName(path) });
+      node = h("div", { class: "pv-pdf" },
+        h("iframe", { class: "pv-frame", src: pdfUrl(url), title: baseName(path) }),
+        h("div", { class: "pv-pdf-text", hidden: true }));
     } else if (kind === "html") {
       // local HTML, with its styles and the images next to it, from the preview origin; never its scripts
       node = htmlFrame((r) => { remote ||= r; return api(src.frame(path, r)); }, baseName(path), remote);

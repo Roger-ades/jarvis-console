@@ -26,6 +26,8 @@ const ROOT = app.isPackaged && process.env.JARVIS_ROOT ? path.resolve(process.en
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
 const HEAD_H = 38;                       // a window's header (.win-head): the native buttons sit in it
+// macOS: the traffic lights (16px tall with their hit area) centered on a strip of the given height
+const lights = (h) => ({ titleBarStyle: "hidden", trafficLightPosition: { x: 14, y: Math.round((h - 16) / 2) } });
 const WIN_PREFIX = "jarvis-win:";        // window.open name of a native window: jarvis-win:<id>
 const SHORTCUT = "CommandOrControl+Alt+J";
 const MODES = ["integre", "fenetre"];
@@ -50,6 +52,18 @@ let bar = null;
 let barPinned = false;                   // stays when the user clicks elsewhere
 let barHold = false;                     // a file picker of the bar is open: it does not hide meanwhile
 const BAR_W = 820;
+// Windows 11 (22H2+) and macOS: the windows of "Intégré au bureau" are of frosted glass (acrylic, vibrancy),
+// the widgets of mica (a quieter vibrancy); the page leaves its background clear so the material shows.
+// Elsewhere they stay opaque, and also when the setting "Effet verre" is off or the system reduces transparency
+// (Windows: "Effets de transparence" off; macOS: "Réduire la transparence"), read at start.
+const GLASS_OK = (IS_MAC || (IS_WIN && Number(os.release().split(".")[2]) >= 22621)) && process.env.JARVIS_GLASS !== "0";
+let GLASS = GLASS_OK;
+/** The material under a window (GLASS), by kind: "window" loses its frost while in the background (a cue of
+ * depth); "widget" (never focused) keeps it on macOS. The command bar has none (barOptions). */
+const material = (kind) => !GLASS ? {} : IS_MAC
+  ? (kind === "window" ? { vibrancy: "under-window" } : { vibrancy: "popover", visualEffectState: "active" })
+  : { backgroundMaterial: kind === "widget" ? "mica" : "acrylic" };
+const CLEAR = "#00000000";
 // started with the session (--demarrage): nothing shows until the user opens JARVIS (notification area,
 // shortcut, launcher); the windows the page opens meanwhile wait hidden
 let discreet = process.argv.includes("--demarrage");
@@ -203,14 +217,22 @@ function send(id, type, extra = {}) {
   if (hub && !hub.isDestroyed()) hub.webContents.send("jarvis:win-event", { id, type, ...extra });
 }
 
+/** Background and title strip of a framed window: the theme's color, or clear over the glass. */
+function glassOptions() {
+  const color = GLASS ? CLEAR : overlay.color;
+  return {
+    backgroundColor: color, ...material("window"),
+    ...(IS_MAC ? lights(HEAD_H)
+      : { titleBarStyle: "hidden", titleBarOverlay: { color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
+  };
+}
+
 function nativeOptions(f) {
   const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width: f.width })
     ? { x: f.left, y: f.top } : nextPosition(f.width, f.height);
   return {
     ...pos, width: f.width || 820, height: f.height || 560, minWidth: 360, minHeight: 200, show: !discreet, title: "JARVIS",
-    icon: ICON, backgroundColor: overlay.color, autoHideMenuBar: true,
-    ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
-      : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
+    icon: ICON, autoHideMenuBar: true, ...glassOptions(),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true },
   };
 }
@@ -225,16 +247,15 @@ function frameOptions(f, hidden) {
     ? { x: f.left, y: f.top } : { x: Math.round(a.x + (a.width - width) / 2), y: Math.round(a.y + (a.height - height) / 2) };
   return {
     ...pos, width, height, minWidth: 320, minHeight: 160, show: !hidden && !discreet, title: "JARVIS", icon: ICON,
-    backgroundColor: overlay.color, autoHideMenuBar: true,
-    ...(IS_MAC ? { titleBarStyle: "hiddenInset" }
-      : { titleBarStyle: "hidden", titleBarOverlay: { color: overlay.color, symbolColor: overlay.symbolColor, height: HEAD_H } }),
+    autoHideMenuBar: true, ...glassOptions(),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true },
   };
 }
 
 /** A widget ("Intégré au bureau"): a display of Claude pinned to the desktop of the OS, without frame nor
  * taskbar entry, under the windows the user works in (it never takes the keyboard by itself). Transparent:
- * the page draws the card (rounded corners, border, shadow) as on the JARVIS desktop. */
+ * the page draws the card (rounded corners, border, shadow) as on the JARVIS desktop; over its material (GLASS),
+ * the OS draws the corners and the shadow and the card fills the window. */
 function widgetOptions(f) {
   const width = f.width || 380, height = f.height || 420;
   const pos = f.left !== undefined && f.top !== undefined && onScreen({ x: f.left, y: f.top, width }) ? { x: f.left, y: f.top }
@@ -242,7 +263,8 @@ function widgetOptions(f) {
   return {
     ...pos, width, height, minWidth: 260, minHeight: 140, frame: false, skipTaskbar: true, show: false,
     maximizable: false, minimizable: false, fullscreenable: false, title: "Widget — JARVIS", icon: ICON,
-    transparent: true, backgroundColor: "#00000000", hasShadow: false, autoHideMenuBar: true,
+    ...(GLASS ? { backgroundColor: CLEAR, ...material("widget") } : { transparent: true, backgroundColor: CLEAR, hasShadow: false }),
+    autoHideMenuBar: true,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
   };
 }
@@ -275,8 +297,9 @@ function barOptions() {
   const a = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
   const y = barPlace === "haut" ? Math.round(a.y + 8) : Math.round(a.y + a.height - barH - 12);
   return { x: Math.round(a.x + (a.width - BAR_W) / 2), y, width: BAR_W, height: barH,
-    frame: false, transparent: true, backgroundColor: "#00000000",
-    hasShadow: false, resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
+    // transparent even over the glass: a frosted tray around the prompt rendered badly, the prompt floats alone
+    frame: false, transparent: true, backgroundColor: CLEAR, hasShadow: false,
+    resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
     alwaysOnTop: true, show: false, title: "JARVIS — nouvelle demande", icon: ICON,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true } };
 }
@@ -644,7 +667,7 @@ function createSiteWindow(partition, label, url) {
   const win = new BrowserWindow({
     ...nextPosition(1180, 820), width: 1180, height: 820, minWidth: 520, minHeight: 320, show: !discreet, title: label,
     icon: ICON, backgroundColor: c.bg, autoHideMenuBar: true,
-    ...(IS_MAC ? { titleBarStyle: "hiddenInset" } : { titleBarStyle: "hidden", titleBarOverlay: { color: c.bg, symbolColor: c.text, height: SITE_BAR_H } }),
+    ...(IS_MAC ? lights(SITE_BAR_H) : { titleBarStyle: "hidden", titleBarOverlay: { color: c.bg, symbolColor: c.text, height: SITE_BAR_H } }),
     webPreferences: { preload: path.join(__dirname, "site-preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   siteSession(partition);
@@ -927,6 +950,7 @@ function updateTray(s = {}) {
 
 // ------------------------------------------------------------------ the page's requests
 ipcMain.on("jarvis:mode", (e) => { e.returnValue = fromConsole(e) ? mode : null; });
+ipcMain.on("jarvis:glass", (e) => { e.returnValue = fromConsole(e) && GLASS; });
 
 ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
   if (!fromConsole(e)) return false;
@@ -937,7 +961,8 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
     // (the framed windows keep their own colors)
     const targets = id ? [children.get(String(id))] : [...children].filter(([k]) => !k.startsWith("cadre-") && !k.startsWith("widget-")).map(([, w]) => w);
     if (!id) overlay = { color: c.color, symbolColor: c.symbolColor };
-    for (const w of targets) if (w && !w.isDestroyed() && !IS_MAC) { try { w.setTitleBarOverlay(c); w.setBackgroundColor(c.color); } catch { /* old platform */ } }
+    if (GLASS) c.color = CLEAR;
+    for (const w of targets) if (w && !w.isDestroyed() && !IS_MAC) { try { w.setTitleBarOverlay(c); if (!GLASS) w.setBackgroundColor(c.color); } catch { /* old platform */ } }
     return true;
   }
   if (op === "arrange") return arrange(data);
@@ -1005,6 +1030,13 @@ ipcMain.handle("jarvis:win", (e, { op, id, data } = {}) => {
 
 ipcMain.on("jarvis:status", (e, s) => { if (fromConsole(e)) updateTray(s); });
 
+ipcMain.on("jarvis:regard", (e, payload) => {
+  if (!fromConsole(e)) return;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.webContents !== e.sender && !win.isDestroyed()) win.webContents.send("jarvis:regard", payload);
+  }
+});
+
 ipcMain.on("jarvis:notify", (e, p) => {
   if (!fromConsole(e) || !p || typeof p !== "object") return;
   notify({ tid: String(p.tid || ""), aid: String(p.aid || ""), kind: String(p.kind || ""), title: String(p.title || ""),
@@ -1018,6 +1050,18 @@ ipcMain.handle("jarvis:site-logout", (e) => (fromConsole(e) ? logoutSites() : fa
 ipcMain.handle("jarvis:launcher", (e) => {
   if (!fromConsole(e)) return { error: "refusé" };
   try { return { paths: createLauncher() }; } catch (err) { return { error: String(err.message || err) }; }
+});
+
+/** "Effet verre" changed in the configuration: the windows get (or lose) their material on a relaunch. */
+ipcMain.on("jarvis:glass-state", (e) => {
+  e.returnValue = fromConsole(e) ? { possible: GLASS_OK, on: GLASS, reduced: nativeTheme.prefersReducedTransparency === true } : null;
+});
+ipcMain.handle("jarvis:relaunch", (e) => {
+  if (!fromConsole(e)) return false;
+  quitting = true;
+  app.relaunch();
+  app.exit(0);
+  return true;
 });
 
 ipcMain.handle("jarvis:switch-mode", (e, m) => {
@@ -1066,6 +1110,7 @@ async function main() {
   try {
     const { config } = await call(port, "/api/config", { token });
     if (MODES.includes(config?.ui?.bureau)) mode = config.ui.bureau;
+    GLASS = GLASS_OK && config?.ui?.verre !== false && nativeTheme.prefersReducedTransparency !== true;
     watchBarEdge(config?.ui?.bar_edge === true);
     setBarPlace(config?.ui?.bar_place);
   } catch { /* default mode */ }

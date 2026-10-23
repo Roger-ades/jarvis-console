@@ -11,7 +11,7 @@ import { pinButton } from "./viewer.js";
 import * as wm from "./wm.js";
 
 let ctx = null, modules = [], folder = "";
-const wins = new Map();     // module id -> {id, mod, frame, grant, last, note}
+const wins = new Map();     // module id -> {id, mod, frame, grant, last, note, looks}
 const pending = new Map();  // task id of a question -> {source, msgId}
 const early = new Map();    // answers arrived before the reply of /ask
 const runs = new Map();     // module id -> {reply, progress} of its Python task in progress (jarvis.executer)
@@ -24,6 +24,8 @@ export async function initAddons(context) {
   const btn = $("#btn-addons"), menu = $("#menu-addons");
   btn?.addEventListener("click", async (e) => {
     e.stopPropagation();
+    $("#menu-claudeai").hidden = true;
+    $("#menu-arrange").hidden = true;
     menu.hidden = !menu.hidden;
     if (!menu.hidden) { renderMenu(); await load(); renderMenu(); }
   });
@@ -44,7 +46,7 @@ function renderMenu() {
     disabled: m.problemes.length ? true : undefined, on: { click: () => { menu.hidden = true; openAddon(m.id); } } },
     h("span", { class: "ad-emoji" }, emoji(m)),
     h("span", { class: "ad-t" }, h("b", {}, m.nom), h("small", {}, m.problemes.length ? `⚠ ${m.problemes[0]}` : m.description || m.id))));
-  menu.replaceChildren(h("div", { class: "menu-title" }, "Modules de JARVIS"),
+  menu.replaceChildren(h("div", { class: "menu-title" }, "Outils de JARVIS"),
     ...(rows.length ? rows : [h("div", { class: "menu-note" }, "Aucun module pour l'instant. Demande à Claude d'en développer un : un outil, un tableau, un panneau qui reste dans JARVIS.")]),
     h("hr"),
     h("button", { type: "button", on: { click: () => { menu.hidden = true; askClaude(); } } }, "Demander un nouveau module à Claude…"),
@@ -90,7 +92,7 @@ export async function openAddon(aid, { reload = false } = {}) {
   const m = r.module;
   const id = `addon-${aid}`;
   const frame = h("iframe", { class: "ad-frame", title: m.nom, referrerpolicy: "no-referrer", allow: "clipboard-write" });
-  const w = { id, aid, mod: m, frame, last: 0, at: 0, grant: h("div", { class: "ad-grant", hidden: true }) };
+  const w = { id, aid, mod: m, frame, last: 0, at: 0, grant: h("div", { class: "ad-grant", hidden: true }), looks: new Set() };
   const close = () => { wm.unregister(id); wins.delete(aid); };
   const act = (ic, label, fn) => h("button", { type: "button", class: "icon-btn", title: label, "aria-label": label, svg: ic, on: { click: fn } });
   w.title = h("span", { class: "win-title" }, m.nom);
@@ -121,6 +123,7 @@ async function load_(w) {
     const r = await api(`/api/addons/${encodeURIComponent(w.aid)}/open`, { method: "POST" });
     w.mod = r.module;
     w.title.textContent = r.module.nom;
+    w.looks.clear();
     w.frame.src = r.url;
     w.at = Date.now();
     grantBar(w);
@@ -185,6 +188,10 @@ async function onMessage(ev) {
     try { if (ev.source && ev.source === x.frame.contentWindow?.[0]) w = x; } catch { /* not ours */ }
   }
   if (!w) return reply(false, "Fenêtre du module introuvable : ferme-la et rouvre le module.");
+  if (d.type === "apparence") { // the bridge keeps this port: the theme and the color follow on it
+    if (port) { w.looks.add(port); try { port.postMessage(look()); } catch { w.looks.delete(port); } }
+    return undefined;
+  }
   const base = `/api/addons/${encodeURIComponent(w.aid)}`;
   const inside = () => w.frame.ownerDocument.activeElement === w.frame; // the user is working in this module
   const paced = () => { const now = Date.now(); if (now - w.last < GAP) return false; w.last = now; return true; };
@@ -248,6 +255,18 @@ async function onMessage(ev) {
       default: return reply(false, `Inconnu : ${d.type}`);
     }
   } catch (e) { return reply(false, e.message); }
+}
+
+/** The console's look, for a module's page: its theme and the account's color. */
+const look = () => ({ theme: document.documentElement.getAttribute("data-theme") || "sombre", couleur: colorOf(ctx.color?.()) });
+
+/** The theme (or the account) changed: the open modules follow. */
+export function addonsRetheme() {
+  if (!wins.size) return; // (also before initAddons)
+  const l = look();
+  for (const w of wins.values()) {
+    for (const p of w.looks) { try { p.postMessage(l); } catch { w.looks.delete(p); } }
+  }
 }
 
 /** The server: a Python task of a module moved on, or ended. Started from its window, it answers jarvis.executer;

@@ -27,6 +27,7 @@ from . import addons as addons_mod
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors, web_domain)
 from .engine import Engine, TaskError, file_stamp
+from .equipe import mount as mount_equipe
 from .permissions import LOCKED_RULES
 from .store import Store
 
@@ -255,6 +256,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                                              "origine": headers.get("origin", ""), "hôte": headers.get("host", "")})
 
     app.add_middleware(Guard, check=check, on_reject=rejected_call, csp=console_csp(port), content_host=content_host)
+    mount_equipe(app, data_dir, cfg_store, engine, store)
 
     @app.exception_handler(TaskError)
     async def task_error(_req, exc: TaskError):
@@ -639,6 +641,37 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.post("/api/projects/office/refresh")
     def project_office_refresh(body: dict = Body(...)):
         return engine.office_refresh(str(body.get("folder") or ""))
+
+    @app.get("/api/office/account")
+    def office_account(profile: str):
+        return engine.office_account_state(profile)
+
+    @app.post("/api/office/account/refresh")
+    def office_account_refresh(body: dict = Body(...)):
+        return engine.office_account_refresh(str(body.get("profile") or ""))
+
+    @app.post("/api/office/account/local")
+    def office_account_local(body: dict = Body(...)):
+        return engine.office_local(str(body.get("profile") or ""), str(body.get("title") or ""),
+                                   str(body.get("id") or ""), body.get("done") is True)
+
+    @app.post("/api/projects/odoo/direct")
+    def project_odoo_direct(body: dict = Body(...)):
+        try:
+            task_id = int(body.get("id") or 0)
+            project_id = int(body.get("project") or 0)
+        except (TypeError, ValueError):
+            return _err(400, "Identifiant Odoo invalide.")
+        return engine.odoo_direct(str(body.get("folder") or ""), str(body.get("action") or ""),
+                                  task_id, project_id, str(body.get("name") or ""))
+
+    @app.get("/api/consumption")
+    def consumption():
+        return engine.consumption()
+
+    @app.post("/api/tasks/{tid}/lesson")
+    def task_lesson(tid: str, body: dict = Body(...)):
+        return engine.apply_lesson(tid, str(body.get("ou") or ""), str(body.get("texte") or ""))
 
     @app.post("/api/projects/follow")
     def project_follow(body: dict = Body(...)):
@@ -1191,7 +1224,8 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
             if not p:
                 return PlainTextResponse("Introuvable.", status_code=404, headers=heads)
             if p.suffix.lower() in (".html", ".htm"):
-                return Response(addons_mod.page(content.decode_html(p.read_bytes()), e.target).encode("utf-8"),
+                return Response(addons_mod.page(content.decode_html(p.read_bytes()), e.target,
+                                                engine.cfg.general.theme).encode("utf-8"),
                                 media_type="text/html; charset=utf-8", headers=heads)
             media = ("text/javascript" if p.suffix.lower() in (".js", ".mjs")
                      else mimetypes.guess_type(p.name)[0] or "application/octet-stream")
@@ -1203,7 +1237,8 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                 return PlainTextResponse("Introuvable.", status_code=404, headers={"Content-Security-Policy": csp})
             return Response(e.page, media_type="text/html; charset=utf-8",
                             headers={"Content-Security-Policy": csp, "Referrer-Policy": "no-referrer"})
-        csp = content.policy(f"http://{content_host}", frame_parents(), e.remote)
+        csp = (content.policy_selection(f"http://{content_host}", frame_parents(), e.remote) if e.regard
+               else content.policy(f"http://{content_host}", frame_parents(), e.remote))
         if not rest:
             return Response(e.page, media_type="text/html; charset=utf-8", headers={"Content-Security-Policy": csp})
         p = e.resolve(rest) if e.resolve else None

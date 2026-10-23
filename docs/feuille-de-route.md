@@ -33,7 +33,7 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | Validations depuis le téléphone | À faire |
 | `lancer_discussion`, outils-scripts | À faire |
 | Vue « Consommation » | À faire |
-| Hub d'équipe | À faire |
+| Hub d'équipe | Partiel (Debian en service ; partage, reprise, fil et synchro dans JARVIS — détail au 23 octobre dans [equipe.md](equipe.md)) |
 
 ## Ce qui fait encore sortir de Jarvis (ou faire à la main)
 
@@ -52,7 +52,8 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | Montrer à Claude un passage d'un PDF, d'une page, d'un panneau | Le texte sélectionné dans un PDF, une page web ou un mail HTML (cadres), dans les panneaux, Ctrl+K, les widgets et les fenêtres de dialogue n'est pas lu | `static/js/regard.js` | Partiel |
 | S'y retrouver dans des centaines de discussions | Archivage à la main ou après N jours d'inactivité ; les archivées restent dans l'historique et Ctrl+K | `Engine.archive_tasks`, `Engine.auto_archive` | Fait |
 | Reprendre une discussion après 2 ou 3 heures | Le cache a expiré : tout le contexte est réécrit en cache, sauf « Garder au chaud » activé à la main | `Engine.keep_warm` | Partiel |
-| Être loin du PC | Le serveur n'écoute que `127.0.0.1` ; une validation demandée par une routine attend le retour de l'utilisateur | `console/__main__.py`, `console/presence.py` | À faire |
+| Être loin du PC | La console n'écoute que `127.0.0.1` ; une validation demandée par une routine attend le retour de l'utilisateur. Le hub d'équipe, lui, est joignable en LAN et VPN | `console/__main__.py`, `console/presence.py` | À faire |
+| Travailler sur les mêmes dossiers que les collègues | Hub sur la Debian, Syncthing lancé par JARVIS, partage et reprise d'une discussion, fil du projet. Pas encore le téléphone, ni l'avertissement quand deux personnes touchent le même fichier | [equipe.md](equipe.md) | Partiel |
 | Réagir à un événement (mail reçu, fichier déposé) | Les routines ne partent qu'à heure fixe ou à intervalle | `console/routines.py` | À faire |
 | Retrouver ce qu'une routine a produit | Boîte de réception | [boite-de-reception.md](boite-de-reception.md) | Fait |
 | Lancer une commande générale du compte d'un clic | Actions du compte en boutons | [boite-de-reception.md](boite-de-reception.md) | Fait |
@@ -312,7 +313,14 @@ Un bouton « Compacter et mettre en pause » couvre le cas où l'on sait qu'on r
 10. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
     routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne. *À faire.*
 11. `lancer_discussion`, puis les outils-scripts. *À faire.*
-12. Hub d'équipe ([equipe.md](equipe.md)). *À faire.*
+12. Hub d'équipe ([equipe.md](equipe.md)). *Partiel, 23 octobre 2026.* La Debian est en
+    service : dépôt git (plus GitHub), Syncthing, pare-feu, nginx sur le port 8443,
+    hub et sauvegarde de nuit. Dans JARVIS : Configuration → Équipe, Rejoindre, partage
+    et reprise d'une discussion, fil, copie vers la mémoire d'équipe, Syncthing lancé
+    par la console. Le service en ligne n'a encore que les comptes et les projets :
+    conversations, fil, présence et inscription Syncthing suivent le prochain envoi.
+    Restent la lecture sans reprise, les non-lus, les conflits de fichiers et les
+    validations depuis le téléphone.
 
 ## Ce qui est en place (étape 1)
 

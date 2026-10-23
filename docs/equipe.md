@@ -1,9 +1,69 @@
-# Travail en équipe (conception)
+# Travail en équipe
 
-Note de travail, rien n'est commencé. Objectif : partager des **projets** entre les
-membres de l'équipe (3 personnes pour l'instant) — leurs dossiers, des conversations
-avec Claude, et un fil de discussion par projet — sans passer par les serveurs
-d'Anthropic (ni Projets claude.ai, ni Cowork), avec un serveur Debian de la boîte.
+Objectif : partager des **projets** entre les membres de l'équipe (3 personnes pour
+l'instant) — leurs dossiers, des conversations avec Claude, et un fil de discussion
+par projet — sans passer par les serveurs d'Anthropic (ni Projets claude.ai, ni
+Cowork), avec un serveur Debian de la boîte.
+
+## En place au 23 octobre 2026
+
+La Debian est en service. Le code de la console qui lui parle est dans ce dépôt ; le
+hub qui tourne sur le serveur n'a encore que les comptes, les projets, les membres et
+le journal. Les conversations, le fil, la présence et l'inscription Syncthing arrivent
+sur le service au prochain envoi, puis `sudo systemctl restart jarvis-hub`.
+
+**Sur la Debian**
+
+- Compte système `jarvis` (sans connexion), répertoires du tableau ci-dessous, dépôt
+  nu `/var/repo/jarvis-console.git` (compte `deploy`). Les postes poussent en SSH
+  (`jarvis-server`, port 23). GitHub n'est plus l'origine des mises à jour.
+- Syncthing `syncthing@jarvis` (v2, canal stable), interface seulement sur
+  `127.0.0.1:8384`. Appareil `KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE`,
+  nom SRV-DEBIAN. Dossier d'essai `essai` → `/var/lib/jarvis/projets/essai`, versions
+  échelonnées, 90 jours (`maxAge` 7776000 secondes).
+- Hub `jarvis-hub.service` : `127.0.0.1:8770`, données `/var/lib/jarvis-hub/hub.db`.
+  Santé vérifiée depuis le poste : `https://10.20.10.249:8443/health`.
+- nginx : site à part, port **8443**, nom `jarvis.ades-securite.com`, certificat
+  auto-signé `/etc/nginx/jarvis/hub.crt`. Empreinte SHA-256
+  `53:1A:7C:BB:DD:2E:3F:CB:99:51:02:EE:68:96:D8:CE:0C:2A:9A:43:6B:55:72:9D:CE:CE:60:1D:8E:02:EB:A0`.
+  Réservé à `127.0.0.1`, au LAN `10.20.10.0/24` et au VPN `10.10.0.0/24`.
+- nftables : politique drop en entrée ; 8443, 22000 (TCP et UDP) et 21027 (UDP)
+  seulement depuis le LAN et le VPN. Les ports déjà publics (22, 80, 443, 8080, 5000,
+  5432) restent ouverts. Le SSH écoute sur le 22 ; le 23 des clients est une
+  redirection en amont.
+- Sauvegarde chaque nuit à 03:15 (`jarvis-hub-backup.timer`), 14 jours,
+  `/var/lib/jarvis-hub/sauvegardes`.
+- Premier compte administrateur créé (`roger`). Les suivants :
+  `sudo -u jarvis bash -c 'cd /opt/jarvis-hub && .venv/bin/python -m hub user add prenom'`.
+
+**Dans JARVIS**
+
+- Configuration → Équipe : adresse, activation, empreinte à confirmer, jeton (fichier
+  `data/hub-token`, jamais dans `config.json` ni dans la page), « Démarrer la synchro ».
+- Projet → Équipe : Membres (liste, présence, Rejoindre), Conversations, Fil.
+- Rejoindre écrit `.jarvis-projet` et `.stignore`, pose `team_id` sur le projet, lance
+  Syncthing du poste (binaire dans les données de JARVIS, `127.0.0.1:8384`) et demande
+  au hub d'inscrire ce poste sur le dossier du projet.
+- Partager une discussion du dossier (aperçu de ce qui est sensible, mode complet ou
+  sans résultats d'outils, chemins remplacés par `{{PROJET}}`). Reprendre la ramène
+  dans le dossier et continue avec le compte Claude de la personne.
+- Fil : envoyer et lire les messages du projet. Mémoire : « Copier dans la mémoire
+  d'équipe » écrit `MEMOIRE-EQUIPE.md` et l'ajoute au `CLAUDE.md` du dossier.
+
+**Pas encore**
+
+- Lire une conversation partagée sans la reprendre ; mettre à jour le partage ; la
+  retirer depuis l'écran ; lier une reprise à la précédente (« suite de … »). L'archive
+  ne contient que la transcription, pas le dossier des sous-agents.
+- Le fil ne fait pas encore les mentions, les non-lus, les notifications, les
+  références, ni modifier ou effacer un message depuis l'écran (l'API le permet).
+- La présence dit qu'une session est ouverte. Elle n'envoie pas encore les fichiers
+  que Claude modifie, et JARVIS n'avertit pas avant d'écrire un fichier déjà ouvert
+  chez un collègue. Les conflits `*.sync-conflict-*` ne sont pas signalés.
+- La console interroge le hub ; elle ne suit pas encore le flux `/events`.
+- Pas d'écran d'administration dans JARVIS : comptes, projets et membres se gèrent
+  en ligne de commande sur la Debian.
+- Validations depuis le téléphone, et les scripts de projet : hors de ce chantier.
 
 Contexte retenu :
 
@@ -64,8 +124,12 @@ sont illisibles pour Claude, et le but est justement de rester sur le serveur de
   signale dans le panneau du projet (comparer, garder l'une, garder les deux). La
   présence (ci-dessous) en évite la plupart.
 
-Le partage ne se fait pas à la main dans une autre application. « Rejoindre le projet »
-dans JARVIS crée le dossier et le relie à la Debian.
+Le partage ne se fait pas à la main dans une autre application. « Rejoindre » écrit le
+marqueur et le `.stignore`, puis Syncthing lancé par JARVIS (binaire dans les données
+de la console, interface seulement sur `127.0.0.1:8384`) partage le dossier avec
+l'appareil Debian. Le hub, qui tourne sous `jarvis`, inscrit ce poste sur le dossier
+du projet. « Rejoindre » lance ce moteur ; Configuration → Équipe, « Démarrer la
+synchro », le fait aussi sans rejoindre un projet.
 
 ## 2. Le hub
 
@@ -94,13 +158,15 @@ Les transcriptions partagées restent des fichiers :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. La présence vit en mémoire seulement.
 Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
 
-- **Réseau** : le hub écoute en local (`127.0.0.1:8770`). Le port 443 est déjà nginx
-  pour les sites en ligne (PassLock et les autres) : il reste public. Le hub sera ajouté
-  plus tard comme un site nginx, ou sur un port distinct. nftables laisse aussi ouverts
-  les ports déjà publics (22, 80, 443, 8080, 5000, 5432). Le SSH écoute sur le **22** ;
+- **Réseau** : le hub écoute en local (`127.0.0.1:8770`). nginx le publie en HTTPS
+  sur le port **8443**, nom `jarvis.ades-securite.com`, adresse LAN `10.20.10.249`.
+  Empreinte SHA-256 du certificat : `53:1A:7C:BB:DD:2E:3F:CB:99:51:02:EE:68:96:D8:CE:0C:2A:9A:43:6B:55:72:9D:CE:CE:60:1D:8E:02:EB:A0`.
+  nftables n'ouvre ce port que pour le LAN `10.20.10.0/24` et le VPN `10.10.0.0/24`.
+  Le port 443 reste celui de nginx pour les sites déjà en ligne. Les ports déjà publics
+  (22, 80, 443, 8080, 5000, 5432) restent ouverts. Le SSH écoute sur le **22** ;
   le port 23 des clients est une redirection en amont vers ce 22. Syncthing (TCP/UDP
-  22000 et UDP 21027) n'est joignable que depuis le LAN `10.20.10.0/24` et le VPN
-  `10.10.0.0/24`. Son interface reste sur `127.0.0.1:8384`.
+  22000 et UDP 21027) n'est joignable que depuis le LAN et le VPN. Son interface
+  reste sur `127.0.0.1:8384`.
 - **Certificat épinglé** : à la configuration, Jarvis enregistre l'empreinte du certificat
   du hub et refuse toute autre. Pas d'autorité à installer sur les postes.
 - **Comptes** : un compte par personne, créé par l'administrateur (Roger) en ligne de
@@ -140,6 +206,8 @@ PUT    /api/v1/projects/{p}                 (admin) nom, couleur, réglages, dos
 PUT    /api/v1/projects/{p}/members         (admin)
 GET    /api/v1/events?since=<curseur>       flux SSE : messages, présence, conversations
 POST   /api/v1/presence                     battement toutes les 30 s
+GET    /api/v1/syncthing                    identifiant de l'appareil Debian
+POST   /api/v1/projects/{p}/sync            inscrit le poste sur le dossier du projet
 GET    /api/v1/projects/{p}/conversations
 POST   /api/v1/projects/{p}/conversations   publier (archive + métadonnées)
 GET    /api/v1/conversations/{c}            métadonnées et révisions
@@ -161,9 +229,9 @@ La page de la console ne parle **qu'à son propre serveur** (CSP `connect-src 's
 inchangée). C'est le serveur Python de Jarvis qui appelle le hub : le jeton du hub ne
 quitte jamais Python, et une page compromise ne peut pas joindre le hub.
 
-- `console/hub_client.py` : appels HTTPS (bibliothèque standard, certificat épinglé), un
-  fil qui écoute `/events` avec reconnexion, et relaie les événements dans le flux SSE
-  existant de la console.
+- `console/hub_client.py` : appels HTTPS (bibliothèque standard, certificat épinglé).
+  La console interroge le hub ; le flux `/events` existe côté hub, il n'est pas encore
+  relayé dans la console.
 - Jeton dans `data/hub-token` (comme `data/token`), jamais dans `config.json` ni dans
   l'export de configuration.
 - `Configuration → Équipe` : adresse du hub, jeton, empreinte du certificat (affichée au
@@ -172,6 +240,9 @@ quitte jamais Python, et une page compromise ne peut pas joindre le hub.
   local. Le compte (profil) reste un choix de chacun, jamais partagé.
 
 ## 3. Projets d'équipe et présence
+
+*En place : liste, Rejoindre, ligne de présence. Pas encore : réglages communs repris
+chez soi, fichiers dans la présence, avertissement avant écriture, conflits Syncthing.*
 
 - Dans **Projets**, une section « Équipe » liste les projets dont on est membre. Pour un
   projet pas encore relié : « Rejoindre » → choisir le dossier local (celui de Syncthing).
@@ -188,7 +259,10 @@ quitte jamais Python, et une page compromise ne peut pas joindre le hub.
 
 ## 4. Conversations partagées
 
-Une base existe déjà : la console sait réécrire une transcription pour un autre dossier
+*En place : Partager (chemins, aperçu, deux modes) et Reprendre. Pas encore : Lire sans
+reprendre, mettre à jour, retirer depuis l'écran, sous-agents dans l'archive, « suite de ».*
+
+La console sait réécrire une transcription pour un autre dossier
 (`library._rewrite`, `library.move_session`) et reprendre une session dans une copie
 (`--fork-session`). Le partage s'appuie dessus.
 
@@ -218,9 +292,10 @@ volontaire, conversation par conversation : rien n'est publié automatiquement.
 
 ### Lire
 
-Dans le projet, onglet **Conversations** : la liste des conversations partagées (auteur,
-date, révision, mode). « Lire » télécharge l'archive dans un cache et l'affiche avec le
-lecteur de l'historique déjà présent, sans rien importer dans le profil.
+*Pas encore.* Dans le projet, onglet **Conversations** : la liste des conversations
+partagées est en place (auteur, date, révision, mode). « Lire » doit encore télécharger
+l'archive dans un cache et l'afficher avec le lecteur de l'historique, sans rien
+importer dans le profil. Aujourd'hui le seul geste est **Reprendre**.
 
 ### Reprendre
 
@@ -242,7 +317,7 @@ fois. Deux personnes ne tapent pas dans la même session en direct ; on passe la
 - **Modèle** : si la conversation a utilisé un modèle que le collègue n'a pas choisi, la
   reprise passe à son modèle ; le cache de prompt repart de zéro (premier tour plus lent).
 - **Taille** : les longues conversations avec beaucoup de résultats d'outils pèsent
-  plusieurs Mo ; limite à fixer côté hub (50 Mo par exemple).
+  plusieurs Mo. Le hub refuse une archive au-delà de 50 Mo.
 
 ### Retirer
 
@@ -251,8 +326,11 @@ reprises par d'autres restent sur leurs postes : l'écran de publication le dit.
 
 ## 5. Le fil du projet
 
-Un fil de messages par projet, dans la fenêtre du projet (onglet **Fil**) et accessible
-depuis la barre du haut avec un compteur de non-lus.
+*En place : onglet Fil, envoyer et relire les messages. Pas encore : compteur de non-lus,
+mentions, modifier ou effacer depuis l'écran, références, notifications, cache hors ligne.*
+
+Un fil de messages par projet, dans la fenêtre du projet (onglet **Fil**). Le compteur
+de non-lus dans la barre du haut n'est pas encore là.
 
 - **Messages** : texte (Markdown simple, le rendu `md.js` existant), mentions `@paul`,
   modifier ou effacer les siens.
@@ -277,6 +355,8 @@ depuis la barre du haut avec un compteur de non-lus.
 
 ## 6. Mémoire d'équipe
 
+*En place : le bouton copie la note. Le résumé du fil reste pour plus tard.*
+
 La mémoire automatique de Claude Code est personnelle (dans le profil, par dossier) et le
 reste. Pour partager un savoir du projet :
 
@@ -298,32 +378,35 @@ reste. Pour partager un savoir du projet :
 - Les VM Windows ne servent pas ici. Elles pourraient plus tard accueillir des tâches
   longues ou des routines, avec le compte Claude de la personne concernée.
 
-## Étapes proposées
+## Où on en est
 
-0. **Debian** (demi-journée, guide et script fournis) : Syncthing avec versions,
-   pare-feu, sauvegarde. Le HTTPS public reste nginx. Le dossier d'essai se relie
-   depuis JARVIS, pas depuis un logiciel de synchro séparé.
-1. **Hub minimal et projets d'équipe** — taille comparable à la fonction Projets : comptes
-   et jetons, projets et membres, `Configuration → Équipe`, « Rejoindre », réglages
-   communs, présence, signalement des conflits Syncthing.
-2. **Conversations partagées** — un peu plus gros, la réécriture existe déjà : prototype de
-   reprise depuis un autre compte d'abord, puis publication (chemins, contenu sensible,
-   modes), lecture, reprise, révisions, retrait.
-3. **Fil du projet** — taille moyenne : messages, flux temps réel, non-lus, mentions,
-   notifications, références aux fichiers et aux conversations.
-4. **Bonus** : mémoire d'équipe, résumé du fil.
+0. **Debian.** *En service* : Syncthing avec versions, pare-feu, nginx sur le 8443,
+   sauvegarde de nuit, hub systemd. Le dossier d'essai se relie depuis JARVIS.
+1. **Hub et projets d'équipe.** *En place* pour les comptes, les jetons, les projets,
+   les membres, Configuration → Équipe et Rejoindre. La présence signale une session
+   ouverte. Restent les réglages communs repris chez soi et le signalement des conflits.
+2. **Conversations partagées.** *En place* pour publier et reprendre. Restent la lecture
+   sans import, la mise à jour, le retrait depuis l'écran et la reprise liée (« suite de »).
+3. **Fil du projet.** *En place* pour écrire et lire. Restent le temps réel, les non-lus,
+   les mentions, les notifications et les références.
+4. **Mémoire d'équipe.** *En place* (copie d'une note). Le résumé du fil reste à faire,
+   avec le compte Claude de la personne qui le demande, sans publier le résumé.
 
-Tests : le hub se teste avec le `TestClient` de FastAPI ; deux consoles de démonstration
-(`tests/demo_server.py`, faux Claude de `tests/fake_claude.py`) reliées à un hub de test
-permettent de vérifier publication, reprise et fil sans compte Claude.
+Tests : `tests/test_hub.py`, `tests/test_equipe.py`, `tests/test_share.py` (jeton jamais
+en clair, membres, archives, masquage des chemins, inscription Syncthing). Pas encore
+deux consoles de démonstration bout en bout.
 
 Ce qui ne change pas : chaque Jarvis reste local et autonome, la politique
 d'autorisations, les aperçus, les profils et leurs comptes.
 
 ## Questions encore ouvertes
 
-- Adresse de la Debian sur le réseau et dans le VPN, et un nom interne
-  (`jarvis.ades.lan` par exemple) ?
 - Durée de conservation des conversations partagées et des messages (illimitée, 1 an…) ?
+  Les versions de fichiers, elles, sont à 90 jours.
 - Les deux collègues ont-ils déjà Jarvis et un compte Claude Team chacun ?
-- Postes uniquement Windows, ou aussi des Mac (Syncthing et Jarvis marchent sur les deux) ?
+- Postes uniquement Windows pour l'instant : le moteur embarqué est le binaire Windows
+  amd64 v2.1.7. Un Mac aurait le même principe, avec son propre binaire.
+
+Tranché : l'adresse du hub est `https://10.20.10.249:8443`
+(`jarvis.ades-securite.com`), LAN `10.20.10.0/24`, VPN `10.10.0.0/24`. Les mises à jour
+de JARVIS partent du dépôt Debian, pas de GitHub.

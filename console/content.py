@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from . import addons
+
 HOST = "apercu.localhost"
 TTL = 12 * 3600
 MAX_ITEMS = 300
@@ -69,12 +71,41 @@ def remote_refs(page: str) -> int:
     return len(_REMOTE.findall(page)) + len(_REMOTE_CSS.findall(page))
 
 
+_SCRIPT = re.compile(r"<script\b[^>]*>.*?</script>", re.I | re.S)
+_ON_ATTR = re.compile(r"""\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.I)
+_REGARD = (
+    "<script>(function(){var t;document.addEventListener('selectionchange',function(){"
+    "var s=document.getSelection();var n=(s&&s.toString()||'').replace(/\\s+/g,' ').trim().slice(0,4000);"
+    "if(!n||n===t)return;t=n;try{parent.postMessage({jarvisRegard:1,selection:n,title:document.title||''},'*');}"
+    "catch(e){}});})();</script>"
+)
+
+
+def arm_selection(page: str) -> str:
+    """Drop the page's own scripts, then add the one that reports a selection to the console.
+
+    Preview pages have no script (a mail must not run). The selection bridge is the only one, and the
+    page that carries it is served with a CSP that allows that inline script and nothing else.
+    """
+    page = _ON_ATTR.sub("", _SCRIPT.sub("", page))
+    return page + _REGARD
+
+
 def policy(origin: str, ancestors: str, remote: bool) -> str:
     """No script, no form, no frame; the page's own resources only, the web too once the user asked."""
     web = " https: http:" if remote else ""
     return (f"default-src 'none'; style-src {origin} 'unsafe-inline'{web}; img-src {origin} data:{web}; "
             f"font-src {origin} data:{web}; media-src {origin}{web}; form-action 'none'; base-uri {origin}; "
             f"frame-ancestors {ancestors}; sandbox allow-popups allow-popups-to-escape-sandbox")
+
+
+def policy_selection(origin: str, ancestors: str, remote: bool) -> str:
+    """The same page, plus the selection bridge: its inline script only, still no network and no form."""
+    web = " https: http:" if remote else ""
+    return (f"default-src 'none'; script-src 'unsafe-inline'; style-src {origin} 'unsafe-inline'{web}; "
+            f"img-src {origin} data:{web}; font-src {origin} data:{web}; media-src {origin}{web}; "
+            f"connect-src 'none'; form-action 'none'; base-uri {origin}; frame-ancestors {ancestors}; "
+            "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox")
 
 
 # ---------------------------------------------------------------- applications written by Claude
@@ -93,14 +124,12 @@ Object.defineProperty(window, "jarvis", {value: Object.freeze({
   action(nom, args) { send("action", {nom: String(nom || ""), arguments: args == null ? "" : String(args)}); },
 }), writable: false, configurable: false});
 })();</script>"""
-APP_STYLE = ("<style>html{color-scheme:light dark}body{margin:12px 14px;font:14px/1.45 'Segoe UI',system-ui,"
-             "sans-serif}</style>")
-
-
-def app_page(html: str) -> str:
-    """The application, after the console's bridge (and without redirections nor network hints)."""
+def app_page(html: str, theme: str = "sombre") -> str:
+    """The application, after the console's bridge and look (the module one: its own style wins), in the console's
+    theme (and without redirections nor network hints)."""
     html = _DOCTYPE.sub("", _HINTS.sub("", _REFRESH.sub("", html)))
-    return f'<!doctype html><meta charset="utf-8">{APP_BRIDGE}{APP_STYLE}' + html
+    theme = theme if theme in addons.THEMES else "sombre"
+    return f'<!doctype html><html data-theme="{theme}"><meta charset="utf-8">{APP_BRIDGE}{addons.STYLE}' + html
 
 
 def app_policy(ancestors: str) -> str:
@@ -130,6 +159,7 @@ class Entry:
     expires: float
     kind: str = "page"   # page | app | addon | shell
     target: str = ""     # shell: the address of its application; addon: the module's id
+    regard: bool = False  # page: the selection bridge is in the HTML, so the CSP allows that one script
 
 
 class ContentStore:
@@ -140,7 +170,10 @@ class ContentStore:
         self._lock = threading.Lock()
 
     def put(self, page: str, *, remote: bool = False, resolve: Callable[[str], Path | None] | None = None,
-            style: str = "", kind: str = "page", target: str = "", cid: str | None = None) -> str:
+            style: str = "", kind: str = "page", target: str = "", cid: str | None = None,
+            regard: bool = False) -> str:
+        if kind == "page" and regard:
+            page = arm_selection(page)
         data = (prepare(page, style) if kind == "page" else page).encode("utf-8")
         if len(data) > MAX_PAGE:
             raise ValueError("page trop volumineuse pour un aperçu (plus de 20 Mo)")
@@ -148,15 +181,15 @@ class ContentStore:
         with self._lock:
             now = time.time()
             self._items = {k: e for k, e in self._items.items() if e.expires > now}
-            self._items[cid] = Entry(data, remote, resolve, now + TTL, kind, target)
+            self._items[cid] = Entry(data, remote, resolve, now + TTL, kind, target, bool(regard and kind == "page"))
             while len(self._items) > MAX_ITEMS or sum(len(e.page) for e in self._items.values()) > MAX_TOTAL:
                 self._items.pop(next(iter(self._items)))  # the oldest first
         return cid
 
-    def put_app(self, html: str, title: str, address: Callable[[str], str]) -> str:
+    def put_app(self, html: str, title: str, address: Callable[[str], str], theme: str = "sombre") -> str:
         """An application and its shell: the address of the shell (address(cid) → its URL)."""
         app_cid = secrets.token_urlsafe(24)
-        self.put(app_page(html), kind="app", cid=app_cid)
+        self.put(app_page(html, theme), kind="app", cid=app_cid)
         url = address(app_cid)
         return self.put(shell_page(url, title), kind="shell", target=url)
 

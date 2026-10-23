@@ -68,7 +68,9 @@ function view(st, folder, tint, rerender) {
     h("span", { class: "grow" }),
     done ? h("label", { class: "check" }, toggle, `Terminées (${done})`) : null,
     h("button", { type: "button", class: "btn small", disabled: st.running, title: "Relire les tâches dans Odoo (une courte lecture par Claude, en lecture seule)",
-      on: { click: async () => { await refresh(folder); rerender(); } } }, "Actualiser"));
+      on: { click: async () => { await refresh(folder); rerender(); } } }, "Actualiser"),
+    h("button", { type: "button", class: "btn small", title: "Créer la tâche dans Odoo, sans discussion",
+      on: { click: () => newTask(folder, st, tint, rerender) } }, "Nouvelle tâche"));
   const err = st.error ? h("div", { class: "line err pad" }, st.error) : null;
   return [links, h("section", { class: "pj-card odoo-tasks" }, head, err, tree(st, showDone, folder, tint, rerender))];
 }
@@ -169,14 +171,25 @@ async function editTask(folder, t, tint, rerender) {
       h("label", {}, "Titre", name),
       h("label", {}, "Contenu", text),
       h("label", {}, "Statut", status),
+      h("p", { class: "muted" }, "Sans Claude ne clôture que le statut. Le titre et le contenu passent par Claude."),
       open),
-    buttons: [{ label: "Annuler", value: false }, { label: "Enregistrer", value: true, cls: "primary" }],
+    buttons: [{ label: "Annuler", value: false }, { label: "Sans Claude", value: "direct" },
+      { label: "Via Claude", value: "claude", cls: "primary" }],
     onOpen: () => name.focus(), tint,
   });
   token++;
   if (!ok) return;
   const stage = status.value;
   const done = DONE.test(stage);
+  if (ok === "direct") {
+    if (!done) { toast("Sans Claude ne fait que clôturer une tâche. Choisis un statut terminé, ou passe par Claude.", "warn"); return; }
+    try {
+      await api("/api/projects/odoo/direct", { method: "POST", body: { folder, action: "cloturer", id: t.id } });
+      toast("Tâche clôturée dans Odoo, sans discussion.", "ok");
+      rerender();
+    } catch (e) { toast(e.message, "err"); }
+    return;
+  }
   const sendDescription = description !== null && text.value !== description;
   const sameName = name.value.trim() === t.name;
   const sameStage = stage === (t.done ? (DONE.test(t.stage) ? t.stage : "Terminée") : (t.stage || stage));
@@ -186,6 +199,35 @@ async function editTask(folder, t, tint, rerender) {
       folder, id: t.id, name: name.value.trim(), stage, done, ...(sendDescription ? { description: text.value } : {}),
     }});
     toast("Modification envoyée. Si le compte demande une validation, confirme-la dans la discussion.", "ok");
+    rerender();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/** A task created by the console's own key, without a discussion. */
+async function newTask(folder, st, tint, rerender) {
+  const links = st.links || [];
+  if (!links.length) { toast("Lie d'abord un projet Odoo.", "warn"); return; }
+  const name = h("input", { type: "text", maxlength: "200", placeholder: "Titre de la tâche" });
+  const project = links.length > 1
+    ? h("select", {}, ...links.map((l) => h("option", { value: String(l.id) }, l.name)))
+    : null;
+  const ok = await dialog({
+    title: "Nouvelle tâche Odoo",
+    body: h("div", { class: "odoo-edit" },
+      h("p", { class: "muted" }, "Créée dans Odoo par la console, sans discussion. Rien n'est envoyé par mail."),
+      project ? h("label", {}, "Projet", project) : null,
+      h("label", {}, "Titre", name)),
+    buttons: [{ label: "Annuler", value: false }, { label: "Créer", value: true, cls: "primary" }],
+    onOpen: () => name.focus(), tint,
+  });
+  if (!ok) return;
+  const title = name.value.trim();
+  if (!title) { toast("Titre requis.", "warn"); return; }
+  try {
+    await api("/api/projects/odoo/direct", { method: "POST", body: {
+      folder, action: "creer", project: Number(project ? project.value : links[0].id), name: title,
+    }});
+    toast("Tâche créée dans Odoo.", "ok");
     rerender();
   } catch (e) { toast(e.message, "err"); }
 }

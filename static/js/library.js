@@ -5,13 +5,23 @@ import { $, confirmDialog, fmtDate, h, modalHost, toast, toolIcon, toolLabel } f
 
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
 let ctx = null, rows = [], q = "", profile = "", origin = "", project = "", showArchived = false, loading = false;
+let hostEl = null;
 
-const el = () => $("#sessions");
+const surface = () => (hostEl?.isConnected ? hostEl : $("#sessions"));
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+
+/** The same list, inside the Discussions drawer (filter Hors JARVIS). */
+export function mountSessions(context, container) {
+  ctx = context;
+  hostEl = container;
+  render();
+  load();
+}
 
 export function toggleSessions(context) {
   ctx = context;
-  const d = el();
+  hostEl = null;
+  const d = $("#sessions");
   if (!d.hidden) { d.hidden = true; return; }
   ctx.closeDrawers?.("sessions");
   d.hidden = false;
@@ -46,8 +56,9 @@ async function mergeDups() {
 }
 
 function render() {
-  const d = el();
-  if (d.hidden) return;
+  const d = surface();
+  if (!d || (d.id === "sessions" && d.hidden)) return;
+  const embedded = d.id !== "sessions";
   const profiles = ctx.profiles();
   const search = h("input", { type: "text", placeholder: "Rechercher un titre, une demande, un dossier…", value: q });
   search.addEventListener("input", () => { q = search.value; renderList(); });
@@ -73,10 +84,12 @@ function render() {
   }
   renderList();
   d.replaceChildren(
-    h("div", { class: "drawer-head" }, h("h2", {}, "Sessions Claude Code"), count,
+    embedded ? null : h("div", { class: "drawer-head" }, h("h2", {}, "Sessions Claude Code"), count,
       h("button", { type: "button", class: "icon-btn", title: "Actualiser", svg: "retry", on: { click: load } }),
       h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { d.hidden = true; } } })),
-    h("div", { class: "drawer-note" }, "Sessions de l'onglet Code de Claude Desktop, de la CLI et de la console, pour chaque compte. Les conversations claude.ai, les projets et Cowork restent sur claude.ai."),
+    h("div", { class: "drawer-note" }, embedded
+      ? "Claude Desktop et la CLI, pour chaque compte. Les conversations claude.ai restent sur claude.ai."
+      : "Sessions de l'onglet Code de Claude Desktop, de la CLI et de la console, pour chaque compte. Les conversations claude.ai, les projets et Cowork restent sur claude.ai."),
     dups.length ? h("div", { class: "drawer-note dup-note" }, h("span", {},
       `${dups.length} session${dups.length > 1 ? "s ont" : " a"} été dupliquée${dups.length > 1 ? "s" : ""} par un ancien déplacement vers un projet.`),
     h("div", { class: "row" }, h("button", { type: "button", class: "btn small primary", on: { click: mergeDups } }, "Réunir en une seule session"))) : null,
@@ -84,7 +97,9 @@ function render() {
       sel(profile, [["", "Tous les comptes"], ...profiles.map((p) => [p.id, p.name])], (v) => { profile = v; renderList(); }),
       sel(origin, [["", "Toutes origines"], ...Object.entries(ORIGIN)], (v) => { origin = v; renderList(); }),
       sel(project, [["", "Tous les dossiers"], ...projects.map((p) => [p, baseName(p)])], (v) => { project = v; renderList(); }),
-      arch),
+      arch,
+      embedded ? count : null,
+      embedded ? h("button", { type: "button", class: "icon-btn", title: "Actualiser", svg: "retry", on: { click: load } }) : null),
     list);
 }
 
@@ -152,7 +167,9 @@ async function openViewer(r) {
     const t = await ctx.launch(`/api/sessions/${s.profile}/${s.id}/resume`, { prompt, preset: preset.value, fork: fork.checked });
     if (t) {
       close();
-      el().hidden = true;
+      const box = surface();
+      if (box?.id === "sessions") box.hidden = true;
+      else $("#history").hidden = true;
     }
   };
   msg.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); resume(); } });

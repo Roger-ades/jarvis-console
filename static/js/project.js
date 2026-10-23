@@ -11,15 +11,26 @@ import { officeChanged, renderOffice } from "./office.js";
 import { odooChanged, renderOdoo } from "./odoo.js";
 import { projectTint } from "./tint.js";
 import { $, STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
+import { renderEquipe, renderFil, renderPartage, shareDiscussion } from "./equipe.js";
 import { openPreview } from "./viewer.js";
 import * as wm from "./wm.js";
 
-const TABS = [["instructions", "Consignes"], ["memory", "Mémoire"], ["files", "Fichiers"], ["tasks", "Discussions"], ["suivi", "Suivi"], ["actions", "Actions"], ["notes", "Notes"], ["rules", "Règles"]];
+const GROUPS = [
+  { id: "cours", label: "En cours", screens: [["tasks", "Discussions"], ["files", "Fichiers"], ["suivi", "Suivi"]] },
+  { id: "retenu", label: "Ce que Claude retient" },
+  { id: "equipe", label: "Équipe", screens: [["equipe", "Membres"], ["partage", "Conversations"], ["fil", "Fil"]] },
+  { id: "actions", label: "Actions" },
+  { id: "notes", label: "Notes" },
+];
+const RETENU = new Set(["instructions", "memory", "rules", "retenu"]);
+const EQUIPE = new Set(["equipe", "partage", "fil"]);
+const groupOf = (id) => (id === "tasks" || id === "files" || id === "suivi" ? "cours"
+  : RETENU.has(id) ? "retenu" : EQUIPE.has(id) ? "equipe" : id);
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const join = (a, b) => (a ? `${a}/${b}` : b);
 
-let ctx = null, ws = null, tab = "instructions", sub = "", note = null, loading = false;
+let ctx = null, ws = null, tab = "instructions", sub = "", note = null, loading = false, focusSection = null;
 let epoch = 0, paintGen = 0, wsParts = null, fileSig = null, filesGen = 0, sessionSig = null;
 let liveTimer = 0, liveRunning = false, liveAgain = false;
 const el = () => $("#project");
@@ -41,6 +52,7 @@ export function showProject(context, { folder = null, tab: on = "tasks" } = {}) 
   if (d.hidden) { ctx.closeDrawers?.("project"); d.hidden = false; }
   tab = on;
   note = null;
+  if (RETENU.has(on) && on !== "retenu") focusSection = on;
   if (folder && ws && fkey(ws.folder) === fkey(folder)) { render(); projectDiskChanged(); return; }
   load(folder, false);
 }
@@ -150,6 +162,10 @@ function tabCount(id) {
   const toReview = (proj?.actions || []).filter((a) => a.status !== "ok").length;
   if (id === "memory") return ws.memory.files.length ? { n: ws.memory.files.length } : null;
   if (id === "rules") return ws.rules?.length ? { n: ws.rules.length } : null;
+  if (id === "retenu") {
+    const n = (ws.memory.files.length || 0) + (ws.rules?.length || 0);
+    return n ? { n, title: "Mémoire et règles" } : null;
+  }
   if (id === "actions") return toReview ? { n: toReview, warn: true, title: "Actions à valider" } : null;
   if (id === "notes") { const n = notesHere(ws.folder); return n ? { n } : null; }
   if (id === "suivi") return proj?.odoo?.length ? { n: proj.odoo.length } : null;
@@ -161,11 +177,10 @@ function countNode(c) {
 }
 
 function syncBadges() {
-  const root = el()?.querySelector(".pj-tabs");
+  const root = el();
   if (!root || !ws) return;
-  for (const [id] of TABS) {
-    const btn = root.querySelector(`button[data-tab="${id}"]`);
-    if (!btn) continue;
+  for (const btn of root.querySelectorAll("button[data-tab]")) {
+    const id = btn.dataset.tab;
     const c = tabCount(id);
     const span = btn.querySelector(".cnt");
     if (!c) { span?.remove(); continue; }
@@ -215,12 +230,13 @@ async function refreshWorkspace(mine) {
   ws = fresh;
   wsParts = next;
   if (editing()) { ws = old; wsParts = prev; return; }
-  if (tab === "memory" && prev.memory !== next.memory) {
-    if (note) await followOpenNote(old, fresh, mine);
-    else redraw();
-  } else if (tab === "rules" && prev.rules !== next.rules) redraw();
-  else if (tab === "instructions" && (prev.instructions !== next.instructions || prev.jarvis !== next.jarvis)
-    && !instructionsOnScreen(fresh, prev.jarvis === next.jarvis)) redraw();
+  if (!RETENU.has(tab)) return;
+  const memCh = prev.memory !== next.memory;
+  const rulesCh = prev.rules !== next.rules;
+  const instCh = prev.instructions !== next.instructions || prev.jarvis !== next.jarvis;
+  if (note && memCh) { await followOpenNote(old, fresh, mine); return; }
+  if (instCh && !memCh && !rulesCh && instructionsOnScreen(fresh, prev.jarvis === next.jarvis)) return;
+  if (memCh || rulesCh || instCh) redraw();
 }
 
 /** The consignes on screen already are the ones just read (the user saved them): don't rebuild the editors. */
@@ -401,12 +417,27 @@ function render() {
     h("option", { value: "__other__" }, "Autre dossier…"));
   sel.value = ws.folder;
   sel.addEventListener("change", () => (sel.value === "__other__" ? browse() : load(sel.value)));
-  const tabs = h("div", { class: "pj-tabs", role: "tablist" }, ...TABS.map(([id, label]) => {
+  const group = groupOf(tab);
+  const groups = h("div", { class: "pj-tabs pj-groups", role: "tablist" }, ...GROUPS.map((g) => {
+    const on = group === g.id;
+    const c = g.id === "cours" ? null : tabCount(g.id);
+    return h("button", {
+      type: "button", role: "tab", class: on ? "on" : "", "aria-selected": String(on),
+      ...(g.id === "cours" ? {} : { "data-tab": g.id }),
+      on: { click: () => {
+        if (g.id === "cours") { if (group !== "cours") tab = "tasks"; }
+        else if (g.id === "retenu") { if (group !== "retenu") { tab = "instructions"; focusSection = "instructions"; } }
+        else tab = g.id;
+        note = null; render(); projectDiskChanged();
+      } } }, g.label, c ? countNode(c) : null);
+  }));
+  const screens = GROUPS.find((g) => g.id === group)?.screens;
+  const subTabs = screens ? h("div", { class: "pj-tabs pj-sub", role: "tablist" }, ...screens.map(([id, label]) => {
     const c = tabCount(id);
     return h("button", {
       type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id), "data-tab": id,
       on: { click: () => { tab = id; note = null; render(); projectDiskChanged(); } } }, label, c ? countNode(c) : null);
-  }));
+  })) : null;
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
   const forget = fkey(ws.folder) === fkey(home) ? null : h("button", { type: "button", class: "btn small",
@@ -414,10 +445,26 @@ function render() {
   const move = proj ? h("button", { type: "button", class: "btn small",
     title: "Déplacer le projet et tout ce qui s'y rattache vers un autre dossier du disque (l'ancien dossier n'est pas modifié)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
   d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
-    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), tabs, body);
-  ({ instructions: renderInstructions, memory: renderMemory, files: renderFiles, tasks: renderTasks, rules: renderRules,
+    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), groups, subTabs, body);
+  const screen = group === "retenu" ? "retenu" : tab;
+  ({ retenu: renderRetenu, files: renderFiles, tasks: renderTasks,
     actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,
-    suivi: renderSuivi })[tab](body);
+    suivi: renderSuivi, equipe: (b) => renderEquipe(b, ws, ctx),
+    partage: (b) => renderPartage(b, ws, ctx), fil: (b) => renderFil(b, ws, ctx) })[screen]?.(body);
+  if (focusSection) {
+    const id = focusSection;
+    focusSection = null;
+    queueMicrotask(() => body.querySelector(`#pj-${id}`)?.scrollIntoView({ block: "start" }));
+  }
+}
+
+/** Consignes, mémoire and rules on one page; a requested section is scrolled into view. */
+function renderRetenu(body) {
+  for (const [id, fn] of [["instructions", renderInstructions], ["memory", renderMemory], ["rules", renderRules]]) {
+    const box = h("div", { class: "pj-section", id: `pj-${id}` });
+    body.append(box);
+    fn(box);
+  }
 }
 
 /** Odoo and Office 365 of this project: tasks, drafts, follow-ups. */
@@ -483,7 +530,13 @@ async function renderMemory(body) {
       catch (e) { toast(e.message, "err"); } } } }, "Supprimer");
     body.append(h("section", { class: "pj-card" }, h("div", { class: "row" },
       h("button", { type: "button", class: "btn small ghost", on: { click: () => { note = null; render(); } } }, "← Notes"), h("b", {}, note.name)),
-      area, h("div", { class: "row" }, save, del)));
+      area, h("div", { class: "row" }, save, del,
+        h("button", { type: "button", class: "btn small", on: { click: async () => {
+          try {
+            await api("/api/hub/memory", { method: "POST", body: { folder: ws.folder, name: note.name, text: area.value } });
+            toast("Copié dans la mémoire d'équipe.", "ok");
+          } catch (e) { toast(e.message, "err"); }
+        } } }, "Copier dans la mémoire d'équipe"))));
     return;
   }
   const files = ws.memory.files;
@@ -533,6 +586,7 @@ const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
 
 /** Any session of the account (console, Claude Desktop, CLI) moves into this project and continues here. */
 const sameFolder = (a, b) => String(a || "").replace(/[\\/]+$/, "").toLowerCase() === String(b || "").replace(/[\\/]+$/, "").toLowerCase();
+const teamIdHere = () => ctx.project(ws.folder)?.team_id || "";
 
 /** Any session of the account (console, Claude Desktop, CLI) moves into this project: the same session. */
 async function bringSession() {
@@ -610,6 +664,9 @@ function renderTasks(body) {
       t.archived ? `archivée ${fmtDate(t.archived)}` : ""].filter(Boolean).join(" · "))),
     btn("Contexte", "Joindre cette discussion à ta prochaine demande", () => ctx.addContext(t), !t.resumable),
     btn("Copie", "Nouvelle discussion à partir de celle-ci", () => ctx.fork(t), !t.resumable),
+    teamIdHere() ? btn("Partager", "Publier cette discussion pour l'équipe", () => {
+      shareDiscussion(t.profile, t.session_id, ws.folder, t.title).catch((e) => toast(e.message, "err"));
+    }, !t.session_id) : null,
     t.archived ? btn("Désarchiver", "Remettre cette discussion dans les listes courantes", () => ctx.archive([t.id], false))
       : btn("Archiver", idle(t) ? "Ranger cette discussion : elle reste dans « Archivées » et dans Ctrl+K" : "Une discussion en cours ne s'archive pas",
         () => ctx.archive([t.id], true), !idle(t))))
@@ -628,6 +685,9 @@ function renderTasks(body) {
       h("div", { class: "hm" }, h("div", { class: "ht" }, r.title), h("div", { class: "hs" }, [ORIGIN[r.origin] || r.origin, fmtDate(r.updated),
         `${r.prompts} demande${r.prompts > 1 ? "s" : ""}`].join(" · "))),
       btn("Contexte", "Joindre cette session à ta prochaine demande", () => ctx.addContext({ profile: r.profile, session_id: r.id, title: r.title, session_started: true })),
+      teamIdHere() ? btn("Partager", "Publier cette discussion pour l'équipe", () => {
+        shareDiscussion(r.profile, r.id, ws.folder, r.title).catch((e) => toast(e.message, "err"));
+      }) : null,
       btn("Reprendre", "Continuer cette session dans la console", () => resumeHere(r)))));
   }).catch(() => {});
 }

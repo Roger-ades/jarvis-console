@@ -24,9 +24,11 @@ _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 def load_env():
     path = Path(os.environ.get("JARVIS_HUB_ENV", "/etc/jarvis-hub/hub.env"))
-    if not path.is_file():
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)

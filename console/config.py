@@ -82,7 +82,7 @@ class General(BaseModel):
     port: int = Field(8788, ge=1024, le=65535)
     default_profile: str = "work"
     max_concurrent: int = Field(3, ge=1, le=16)
-    task_timeout_min: int = Field(30, ge=1, le=1440)
+    task_timeout_min: int = Field(50, ge=1, le=1440)
     approval_timeout_min: int = Field(30, ge=1, le=1440)
     max_turns: int = Field(60, ge=1, le=1000)
     max_output_kb: int = Field(1024, ge=16, le=65536)
@@ -95,6 +95,7 @@ class General(BaseModel):
     setup_done: bool = True       # False on a fresh install: the first-run assistant opens
     ask_user_questions: bool = True
     auto_title: bool = True       # after the first answer, Claude titles the discussion (one tiny Haiku request)
+    auto_model: bool = False      # a short question with no chosen model goes to Haiku (console/engine.py)
     # Context size (thousands of tokens) at which Claude Code compacts a session by itself. Opus runs with
     # a 1M window: left alone it compacts almost never, and every action re-reads the whole context.
     compact_at_k: int = Field(200, ge=0, le=1000)  # 0: Claude Code's own threshold
@@ -391,6 +392,7 @@ class Project(BaseModel):
     mails: ProjectMails = Field(default_factory=ProjectMails)   # "Mails à suivre" (the morning briefs)
     brief: ProjectBrief = Field(default_factory=ProjectBrief)  # this project's own brief (docs/ihm.md)
     odoo: list[OdooLink] = Field(default_factory=list, max_length=10)  # linked Odoo projects (odoo_link.py)
+    team_id: str = ""   # hub project this folder joined; empty = local only
 
     @field_validator("odoo")
     @classmethod
@@ -505,11 +507,20 @@ class UISettings(BaseModel):
     brief_show: bool = False
     # desktop app (shell/): native windows on the OS desktop, or the whole console in one window
     bureau: Literal["integre", "fenetre"] = "integre"
+    # desktop app, "intégré", Windows 11 and macOS: the windows of frosted glass (acrylic, vibrancy), read at start
+    verre: bool = True
 
 
 class History(BaseModel):
     retention_days: int = Field(90, ge=1, le=3650)
     auto_archive_days: int = Field(0, ge=0, le=3650)  # archive the discussions inactive that long (0: never)
+
+
+class Resume(BaseModel):
+    """What to do with a large idle discussion before its prompt cache expires (about one hour)."""
+    mode: Literal["rien", "chaud", "compacter"] = "rien"
+    warm_hours: float = Field(3, ge=1, le=12)
+    min_tokens: int = Field(60_000, ge=1_000, le=2_000_000)
 
 
 class DocFolder(BaseModel):
@@ -568,6 +579,32 @@ class TeamSettings(BaseModel):
         return v
 
 
+class HubLink(BaseModel):
+    """Connection to the team hub. The personal token stays in data/hub-token, never here."""
+    enabled: bool = False
+    url: str = ""
+    fingerprint: str = ""
+    share_files: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        v = (v or "").strip().rstrip("/")
+        if not v:
+            return ""
+        if not v.startswith("https://") or " " in v:
+            raise ValueError("adresse du hub : https://serveur:8443")
+        return v
+
+    @field_validator("fingerprint")
+    @classmethod
+    def _fingerprint(cls, v: str) -> str:
+        found = "".join(ch for ch in (v or "").lower() if ch in "0123456789abcdef")
+        if found and len(found) != 64:
+            raise ValueError("empreinte SHA-256 attendue")
+        return found
+
+
 class Config(BaseModel):
     schema_version: int = 1
     general: General = Field(default_factory=General)
@@ -580,8 +617,10 @@ class Config(BaseModel):
     security: Security = Field(default_factory=Security)
     ui: UISettings = Field(default_factory=UISettings)
     history: History = Field(default_factory=History)
+    resume: Resume = Field(default_factory=Resume)
     team: TeamSettings = Field(default_factory=TeamSettings)
     documents: Documents = Field(default_factory=Documents)
+    hub: HubLink = Field(default_factory=HubLink)
 
     @model_validator(mode="after")
     def _consistency(self):

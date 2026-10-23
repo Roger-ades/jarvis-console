@@ -15,7 +15,25 @@ let settings = { enabled: () => true, displayTitle: () => "", taskTitle: () => "
 export function configure(s) { settings = { ...settings, ...s }; changed(); }
 export function onChange(fn) { listeners.add(fn); }
 let picked = null; // the element pointed at, outlined while it would go
+let echoing = false;
+
+function publish() {
+  if (echoing || !window.jarvis?.regard) return;
+  try { window.jarvis.regard(current ? payload(current) : null); } catch { /* the page is not the desktop app */ }
+}
+
+/** A selection made in another window of the desktop app (the JARVIS bar shows the same chip). */
+export function applyRemote(raw) {
+  echoing = true;
+  current = raw && (raw.selection || raw.path || raw.url || raw.element) ? { ...raw } : null;
+  changed();
+  echoing = false;
+}
+
+if (window.jarvis?.onRegard) window.jarvis.onRegard((raw) => applyRemote(raw));
+
 function changed() {
+  publish();
   const el = current?.pickEl || null;
   if (el !== picked) { picked?.classList.remove("regard-pick"); picked = el; picked?.classList.add("regard-pick"); }
   paintButtons();
@@ -24,6 +42,16 @@ function changed() {
 
 /** What would go with the next message, or null. */
 export function get() { return settings.enabled() ? current : null; }
+/** Text the user copied out of a frame the page cannot read (a PDF viewer, a page). */
+export function joinText(text, desc = null) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  mute = Date.now() + 400;
+  current = { ...(desc || { type: "texte", title: "texte copié" }), selection: t.length > MAX ? `${t.slice(0, MAX)} […]` : t };
+  changed();
+  return true;
+}
+
 export function clear() {
   clearTimeout(pending);
   mute = Date.now() + 500; // the click keeps the selection: do not put the chip back from it
@@ -148,6 +176,13 @@ function sourceOf(el) {
   const win = el.closest(".win[data-wid]");
   const wid = win?.dataset.wid || null;
   if (dsp) return { desc: { type: "affichage", task: dsp.dataset.task, key: dsp.dataset.key }, wid };
+  const zone = el.closest("[data-regard]");
+  if (zone) {
+    const path = el.closest("[data-regard-path]")?.dataset.regardPath || zone.dataset.regardPath || "";
+    const title = zone.dataset.regard || "texte sélectionné";
+    if (path) return { desc: { type: "fichier", path, title }, wid: zone.closest(".win[data-wid]")?.dataset.wid || null };
+    return { desc: { type: "texte", title }, wid: zone.closest(".win[data-wid]")?.dataset.wid || null };
+  }
   if (!win) return el.closest(".dsp-modal") ? { desc: { type: "texte" }, wid: null } : null;
   const meta = wm.meta(wid);
   if (meta?.regard) return { desc: meta.regard, wid };
@@ -232,18 +267,36 @@ function menu(ev, items) {
   doc.addEventListener("keydown", esc, true);
 }
 
+wm.onDocument((doc) => doc.defaultView?.addEventListener("message", (ev) => {
+  const data = ev.data;
+  if (!data || data.jarvisRegard !== 1) return;
+  if (!String(ev.origin || "").startsWith("http://apercu.localhost")) return;
+  const text = String(data.selection || "").trim();
+  if (!text) return;
+  const frame = [...doc.querySelectorAll("iframe")].find((f) => f.contentWindow === ev.source);
+  const win = frame?.closest(".win[data-wid]");
+  const meta = win ? wm.meta(win.dataset.wid)?.regard : null;
+  const page = frame?.closest("[data-page]")?.dataset.page;
+  current = { ...(meta || { type: "texte", title: data.title || "page" }),
+    selection: (page ? `page ${page}\n` : "") + (text.length > MAX ? `${text.slice(0, MAX)} […]` : text),
+    wid: win?.dataset.wid || null };
+  changed();
+}));
+
 wm.onDocument((doc) => doc.addEventListener("contextmenu", (ev) => {
   if (!settings.enabled() || ev.shiftKey) return; // Maj + clic droit: the browser's own menu
   const el = ev.target.nodeType === 1 ? ev.target : ev.target.parentElement;
   if (!el || el.closest("input, textarea, select, [contenteditable], a[href]:not([href='#'])")) return;
   const p = pickOf(el);
-  const src = p && (sourceOf(el) || { desc: { type: "texte" }, wid: null });
-  if (!p) return;
+  const src = (p && (sourceOf(el) || { desc: { type: "texte" }, wid: null })) || sourceOf(el);
+  const selected = doc.getSelection()?.toString().trim();
+  if (!p && !(selected && src)) return;
   ev.preventDefault();
-  menu(ev, [
-    { label: "Demander à Claude à propos de ceci", run: () => pick(el, p, src) },
-    { label: "Copier", run: () => navigator.clipboard?.writeText(p.detail) },
-  ]);
+  const items = p
+    ? [{ label: "Demander à Claude à propos de ceci", run: () => pick(el, p, src) },
+       { label: "Copier", run: () => navigator.clipboard?.writeText(p.detail) }]
+    : [{ label: "Demander à Claude à propos de ceci", run: () => inputFor(el)?.focus() }];
+  menu(ev, items);
 }));
 
 /** A chip that follows what would be sent. visible(): whether this bar shows it now; here: the
@@ -272,7 +325,7 @@ export function chip(list, { visible = () => true, here = "" } = {}) {
       "La croix le retire de ce message.",
     ].filter(Boolean).join("\n");
     list.append(h("div", { class: "att ok regard", title: tip },
-      h("span", { class: "att-ic", svg: "eye" }), h("span", { class: "att-name" }, h("b", {}, "Regard : "), what),
+      h("span", { class: "att-ic", svg: "eye" }), h("span", { class: "att-name" }, h("b", {}, "Joint : "), what),
       h("button", { type: "button", class: "att-x", title: "Ne pas joindre", "aria-label": "Ne pas joindre ce que je regarde", svg: "x",
         on: {
           pointerdown: (e) => {

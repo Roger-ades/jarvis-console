@@ -171,6 +171,55 @@ class Client:
             raise OdooError("Odoo refuse l'identifiant ou la clé API.")
         self.uid, self.mode = int(uid), "jsonrpc"
 
+    def mutate(self, model: str, method: str, ids: list | None = None, **kwargs):
+        """Create or write one project.task. The only write the console does itself, and only from a click."""
+        model, method = str(model or ""), str(method or "")
+        if model != "project.task" or method not in ("create", "write"):
+            raise OdooError("Depuis la console, seule une tâche de projet Odoo peut être créée ou modifiée.")
+        if not MODEL_RX.match(model):
+            raise OdooError(f"Modèle invalide : {model}")
+        if ids is not None:
+            ids = [int(i) for i in (ids if isinstance(ids, (list, tuple)) else [ids])]
+        with self._lock:
+            self._connect()
+        if self.mode == "json2":
+            return self._json2(model, method, {**({"ids": ids} if ids is not None else {}), **kwargs})
+        return self._rpc("object", "execute_kw", [self.s["base"], self.uid, self.s["cle"], model, method,
+                                                  [ids] if ids is not None else [], kwargs])
+
+    def close_task(self, task_id: int) -> dict:
+        """Move a task to a folded stage (the done column). Nothing is sent by mail."""
+        rows = self.call("project.task", "read", ids=[int(task_id)], fields=["name", "project_id", "stage_id"]) or []
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not isinstance(row, dict):
+            raise OdooError("Tâche Odoo introuvable.")
+        project = row.get("project_id")
+        pid = project[0] if isinstance(project, (list, tuple)) and project else None
+        domain = [["fold", "=", True]]
+        if pid:
+            domain.append(["project_ids", "in", [int(pid)]])
+        stages = self.call("project.task.type", "search_read", domain=domain, fields=["id", "name"], limit=8) or []
+        if not stages:
+            stages = self.call("project.task.type", "search_read", domain=[["fold", "=", True]],
+                               fields=["id", "name"], limit=8) or []
+        if not stages or not isinstance(stages, list):
+            raise OdooError("Odoo n'a pas d'étape « terminée » (colonne repliée) pour cette tâche.")
+        stage = stages[-1]
+        self.mutate("project.task", "write", ids=[int(task_id)], vals={"stage_id": int(stage["id"])})
+        return {"id": int(task_id), "stage": str(stage.get("name") or "Terminée")}
+
+    def create_task(self, project_id: int, name: str) -> dict:
+        title = " ".join(str(name or "").split())[:200]
+        if not title:
+            raise OdooError("Titre requis.")
+        raw = self.mutate("project.task", "create", vals={"name": title, "project_id": int(project_id)})
+        new_id = raw.get("id") if isinstance(raw, dict) else (raw[0] if isinstance(raw, list) and raw else raw)
+        try:
+            new_id = int(new_id)
+        except (TypeError, ValueError):
+            raise OdooError("Odoo n'a pas renvoyé l'identifiant de la tâche créée.") from None
+        return {"id": new_id, "name": title, "project": int(project_id)}
+
     def call(self, model: str, method: str, ids: list | None = None, **kwargs):
         """One reading method of a model. Every other method is refused here, whatever asks."""
         model, method = str(model or ""), str(method or "")

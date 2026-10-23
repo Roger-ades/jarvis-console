@@ -1,25 +1,52 @@
-// History drawer: every task, including closed windows; click to reopen. Archived discussions are behind
-// the « Archivées » filter; several can be archived (or brought back) at once.
+// Discussions drawer: JARVIS tasks, including closed windows, and (filter) Claude Desktop / CLI sessions.
+// Archived discussions are behind the « Archivées » filter; several can be archived (or brought back) at once.
 import { download } from "./api.js";
+import { mountSessions } from "./library.js";
 import { $, STATUS, fmtCost, fmtDate, h, statusLabel } from "./util.js";
 
-let ctx = null, q = "", profile = "", status = "", shelf = "";
+let ctx = null, q = "", profile = "", status = "", shelf = "", source = "jarvis", scope = "";
 const picked = new Set();
 const ACTIVE = new Set(["queued", "running", "awaiting"]);
+const norm = (p) => String(p || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 
-export function toggleHistory(context) {
+/** Open the discussions drawer. src "jarvis" lists JARVIS tasks; "hors" mounts the Claude Desktop / CLI list.
+ *  The same source clicked again closes the drawer. */
+export function openDiscussions(context, src = "jarvis") {
   ctx = context;
   const el = $("#history");
-  if (!el.hidden) { el.hidden = true; return; }
+  if (!el.hidden && source === src) { el.hidden = true; return; }
+  source = src;
+  ctx.closeDrawers?.("history");
   el.hidden = false;
   picked.clear();
   renderHistory();
-  el.querySelector("input")?.focus();
+  if (src === "jarvis") el.querySelector("input")?.focus();
 }
+
+export function toggleHistory(context) { openDiscussions(context, "jarvis"); }
 
 export function renderHistory() {
   const el = $("#history");
   if (!ctx || el.hidden) return;
+  if (source === "hors" && el.querySelector(".sess-host")) return;
+  const src = h("select", { title: "Où se sont tenues les discussions" },
+    h("option", { value: "jarvis" }, "Dans JARVIS"), h("option", { value: "hors" }, "Hors JARVIS"));
+  src.value = source;
+  src.addEventListener("change", () => { source = src.value; picked.clear(); renderHistory(); });
+  const where = h("select", { title: "Limiter aux discussions du dossier choisi dans la barre" },
+    h("option", { value: "" }, "Tous les dossiers"), h("option", { value: "folder" }, "Ce dossier"));
+  where.value = scope;
+  where.hidden = source !== "jarvis";
+  where.addEventListener("change", () => { scope = where.value; picked.clear(); renderList(); });
+  const head = h("div", { class: "drawer-head" }, h("h2", {}, "Discussions"),
+    source === "jarvis" ? h("button", { type: "button", class: "btn small", on: { click: () => download("/api/history/export", "historique.json") } }, "Exporter") : null,
+    h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { el.hidden = true; } } }));
+  if (source === "hors") {
+    const host = h("div", { class: "sess-host" });
+    el.replaceChildren(head, h("div", { class: "drawer-filters" }, src), host);
+    mountSessions(ctx, host);
+    return;
+  }
   const search = h("input", { type: "text", placeholder: "Rechercher dans les demandes…", value: q });
   search.addEventListener("input", () => { q = search.value; renderList(); });
   const prof = h("select", {}, h("option", { value: "" }, "Tous les profils"), ...ctx.profiles().map((p) => h("option", { value: p.id }, p.name)));
@@ -47,10 +74,13 @@ export function renderHistory() {
   }
   function renderList() {
     const needle = q.trim().toLowerCase();
+    const here = norm((ctx.folder || ctx.workdir)?.() || "");
     const rows = ctx.tasks().filter((t) => (!profile || t.profile === profile) && (!status || t.status === status)
       && (shelf === "all" || (shelf === "archived" ? t.archived : !t.archived))
       && t.origin !== "reglage" && !t.ephemeral
-      && (!needle || `${t.title} ${t.prompt}`.toLowerCase().includes(needle)));
+      && (scope !== "folder" || !here || norm(t.workdir) === here)
+      && (!needle || `${t.title} ${t.prompt}`.toLowerCase().includes(needle)))
+      .sort((a, b) => (b.created || 0) - (a.created || 0));
     for (const id of [...picked]) if (!rows.some((t) => t.id === id)) picked.delete(id);
     list.replaceChildren(...(rows.length ? rows.map((t) => {
       const box = h("input", { type: "checkbox", title: "Sélectionner (archiver plusieurs discussions à la fois)",
@@ -63,13 +93,9 @@ export function renderHistory() {
           h("div", { class: "hs" }, [t.profile_name, t.preset_name, fmtDate(t.created), fmtCost(t.cost_usd),
             t.archived ? `archivée ${fmtDate(t.archived)}` : ""].filter(Boolean).join(" · "))),
         h("span", { class: `chip s-${t.status}` }, statusLabel(t)));
-    }) : [h("div", { class: "hrow" }, h("span", { class: "muted" }, shelf === "archived" ? "Aucune discussion archivée." : "Aucune tâche."))]));
+    }) : [h("div", { class: "hrow" }, h("span", { class: "muted" }, shelf === "archived" ? "Aucune discussion archivée." : "Aucune discussion."))]));
     renderBulk(rows);
   }
   renderList();
-  el.replaceChildren(
-    h("div", { class: "drawer-head" }, h("h2", {}, "Historique"),
-      h("button", { type: "button", class: "btn small", on: { click: () => download("/api/history/export", "historique.json") } }, "Exporter"),
-      h("button", { type: "button", class: "icon-btn", title: "Fermer", svg: "close", on: { click: () => { el.hidden = true; } } })),
-    h("div", { class: "drawer-filters" }, search, prof, st, sh), bulk, list);
+  el.replaceChildren(head, h("div", { class: "drawer-filters" }, src, where, search, prof, st, sh), bulk, list);
 }

@@ -60,7 +60,13 @@ Un module est une page web **isolée** : origine opaque, sans réseau, sans acc�
 - **Rien depuis le web** : pas de CDN, pas d'API externe, pas de police Google. Une bibliothèque se copie dans le
   module (un fichier .js à côté). Pas de `localStorage` ni de cookies (origine opaque) : utilise `jarvis.donnees`.
 - Pas de frames ni de workers ; `alert`, `confirm`, `prompt` et les formulaires fonctionnent.
-- Le thème suit celui du système (`color-scheme: light dark`) ; la police de base est celle de la console.
+- Le module reçoit le style JARVIS de base (fond, texte, boutons, champs, tableaux, barres de défilement) et suit
+  le thème choisi dans la console (sombre, clair, système), en direct. Ce style est dans `@layer jarvis` : toute
+  règle du module l'emporte. Pour rester assorti, utilise les variables de la console plutôt que des couleurs fixes :
+  `--bg`, `--bg-2`, `--surface`, `--surface-2`, `--border`, `--border-2`, `--text`, `--text-2`, `--text-3`,
+  `--accent`, `--accent-2`, `--accent-ink` (texte sur accent), `--err`, `--warn`, `--ok`, `--info`, `--pc` (couleur du module), le relief `--elev-1` à
+  `--elev-3` (ombres portées) et `--sink` (creux d'un champ), les polices `--font` et `--mono`. Un bouton
+  `class="primary"` (ou `primaire`, ou `type="submit"`) prend la couleur d'accent.
 
 ### window.jarvis
 

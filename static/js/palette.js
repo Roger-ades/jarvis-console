@@ -30,7 +30,7 @@ export function openPalette(ctx) {
   const input = h("input", { type: "text", class: "pal-input", placeholder: "Rechercher une discussion, un document, un projet ou une action…",
     spellcheck: "false", "aria-label": "Rechercher" });
   const list = h("div", { class: "pal-list", role: "listbox" });
-  const box = h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Recherche" },
+  const box = h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Recherche", "data-regard": "Recherche" },
     h("div", { class: "pal-top" }, h("span", { class: "i", svg: "search" }), input, h("kbd", {}, "Échap")), list,
     h("div", { class: "pal-foot" }, h("span", {}, h("kbd", {}, "↑"), h("kbd", {}, "↓"), " choisir"), h("span", {}, h("kbd", {}, "Entrée"), " ouvrir"),
       h("span", { class: "grow" }), h("span", { class: "muted" }, "Recherche aussi dans le contenu des discussions")));
@@ -66,13 +66,14 @@ export function openPalette(ctx) {
     if (projs.length) groups.push(["Projets", projs.slice(0, 6).map((p) => ({
       icon: "book", color: p.color, title: p.name, sub: baseName(p.folder), run: () => ctx.useProject(p) }))]);
     if (tasks.length) groups.push(["Discussions", tasks.slice(0, 12).map(taskItem)]);
-    if (server.sessions.length) groups.push(["Sessions Claude Code", server.sessions.slice(0, 10).map((s) => ({
+    if (server.sessions.length) groups.push(["Hors JARVIS", server.sessions.slice(0, 10).map((s) => ({
       icon: "retry", color: s.color, title: s.title, snippet: s.snippet,
       sub: [s.profile_name, ORIGIN[s.origin] || s.origin, baseName(s.cwd), fmtDate(s.updated)].filter(Boolean).join(" · "),
       run: () => ctx.openSession(s.profile, s.id) }))]);
     if (server.documents?.length) groups.push(["Documents", server.documents.slice(0, 10).map((d) => ({
       icon: "file", title: baseName(d.path), snippet: d.snippet, serverMarks: true,
       sub: [KIND[d.kind] || d.kind, d.title && d.title !== baseName(d.path).replace(/\.[^.]+$/, "") ? d.title : "", parentName(d.path), fmtDate(d.mtime)].filter(Boolean).join(" · "),
+      path: d.path,
       run: () => openPreview({ doc: true, path: d.path, focus: { text: d.snippet, words: (d.snippet.match(/\x02[^\x03]*\x03/g) || []).map((w) => w.slice(1, -1)), page: d.page || 0 } }) }))]);
     if (acts.length) groups.push(["Actions", acts.slice(0, q ? 8 : 10).map((a) => ({ icon: a.icon || "sparkle", title: a.label, sub: a.hint || "", run: a.run }))]);
     if (shelved.length) groups.push(["Archivées", shelved.slice(0, 10).map(taskItem)]);
@@ -83,6 +84,7 @@ export function openPalette(ctx) {
       ...xs.map((it) => {
         const i = k++;
         const el = h("button", { type: "button", role: "option", class: `pal-item${i === index ? " on" : ""}`, "aria-selected": String(i === index),
+          ...(it.path ? { "data-regard-path": it.path } : {}),
           style: it.color ? { "--pc": it.color } : undefined, on: { click: () => { close(); it.run(); }, mousemove: () => { if (index !== i) { index = i; highlight(); } } } },
           h("span", { class: "i", svg: it.icon }),
           h("span", { class: "pal-t" }, h("b", {}, marked(it.title, q)),

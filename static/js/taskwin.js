@@ -139,6 +139,8 @@ export class TaskWindow {
     this.agents = new Map();
     this.toolCounts = new Map();
     this.apprEls = new Map();
+    this.apprIndex = 0;
+    this.apprShown = null;
     this.changes = new Map(); // file changes of the discussion (console/changes.py), by id
     this.lastText = "";
     this.build();
@@ -160,7 +162,8 @@ export class TaskWindow {
       this.titleEl, this.statusEl, this.metaEl,
       h("div", { class: "win-actions" }, this.stopBtn, this.inspBtn,
         iconBtn("more", "Actions", (e) => this.menu(e.currentTarget)), this.pinBtn,
-        iconBtn("min", "Réduire", () => wm.minimize(this.id)), iconBtn("close", "Fermer la fenêtre", () => this.close())));
+        iconBtn("min", "Réduire", () => wm.minimize(this.id)), iconBtn("close", "Fermer la fenêtre", () => this.close())),
+      h("i", { class: "win-light", "aria-hidden": "true" }));  // the status light along the head's edge
     this.sub = h("div", { class: "win-sub" });
     this.plan = h("div", { class: "win-plan", hidden: true });
     this.body = h("div", { class: "win-body" });
@@ -377,6 +380,7 @@ export class TaskWindow {
     this.titleEl.textContent = t.title;
     this.titleEl.title = t.prompt;
     this.statusEl.className = `status s-${t.status}`;
+    this.light(before, t.status);
     this.statusEl.textContent = statusLabel(t);
     this.stopBtn.hidden = !ACTIVE.has(t.status);
     this.pinBtn.classList.toggle("on", !!t.pinned);
@@ -384,7 +388,21 @@ export class TaskWindow {
     this.renderSub();
     this.renderPlan();
     this.renderApprovals(t.pending || []);
+    this.renderLesson(t.lesson);
+    this.layoutApprovals();
     if (this.inspOpen) this.renderInspector();
+  }
+
+  /** The status light: it runs while the discussion works, glows amber while it waits for the user, and flashes
+   *  green (or red) once when it ends. */
+  light(before, status) {
+    this.el.dataset.st = status;
+    if (!before || !ACTIVE.has(before) || ACTIVE.has(status)) return;
+    this.el.classList.remove("lit-ok", "lit-ko");
+    void this.el.offsetWidth;  // restart the flash
+    this.el.classList.add(status === "done" ? "lit-ok" : "lit-ko");
+    clearTimeout(this.litTimer);
+    this.litTimer = setTimeout(() => this.el.classList.remove("lit-ok", "lit-ko"), 2400);
   }
 
   /** The native window's title (taskbar, Alt+Tab): the status first when it calls for the user. */
@@ -411,7 +429,7 @@ export class TaskWindow {
         : t.origin === "déplacée" ? "Déplacée dans ce projet" : "Reprise",
       `Suite de la session ${t.resumed_from}${t.fork_next === false ? " (copie)" : ""}`));
     bits.push(
-      chip("shieldq", t.preset_name, `Autorisations : ${t.preset_name}${t.preset_mode ? ` (${t.preset_mode})` : ""}`),
+      chip("shieldq", t.preset_name, `Ce que Claude peut faire : ${t.preset_name}${t.preset_mode ? ` (${t.preset_mode})` : ""}`),
       chip("model", this.modelLabel() || "modèle", `Modèle : ${t.model_resolved || t.model}`),
     );
     if (t.effort) bits.push(chip("gauge", t.effort, `Effort : ${t.effort}`, true));
@@ -646,7 +664,7 @@ export class TaskWindow {
       const r = d.regard;
       const what = r.path ? h("a", { href: "#", class: "fileref", "data-path": r.path, title: `Aperçu : ${r.path}` }, r.label) : h("span", {}, r.label);
       box.append(h("div", { class: "msg-regard", title: r.selection ? `Texte sélectionné :\n${r.selection}` : "" },
-        svg("eye"), h("span", {}, "Regard : ", what), r.selection ? h("q", {}, r.selection) : null));
+        svg("eye"), h("span", {}, "Joint : ", what), r.selection ? h("q", {}, r.selection) : null));
     }
     return box;
   }
@@ -985,6 +1003,50 @@ export class TaskWindow {
     if (this.isLive) this.ctx.onAttention?.(this.id, d.is_error ? "error" : "done");
   }
 
+  // ------------------------------------------------------------ a lesson offered after a correction
+  renderLesson(lesson) {
+    const same = lesson && this._lessonText === lesson.texte;
+    if (!lesson) { this.lessonEl?.remove(); this.lessonEl = null; this._lessonText = ""; return; }
+    if (same && this.lessonEl?.isConnected) return;
+    this.lessonEl?.remove();
+    this._lessonText = lesson.texte;
+    const area = h("textarea", { class: "prose", rows: "4" });
+    area.value = lesson.texte;
+    const send = async (ou) => {
+      try {
+        await api(`/api/tasks/${this.id}/lesson`, { method: "POST", body: { ou, texte: area.value } });
+        this.lessonEl?.remove(); this.lessonEl = null; this._lessonText = "";
+      } catch (e) { toast(e.message, "err"); }
+    };
+    const again = lesson.n > 1 ? ` C'est la ${lesson.n}e correction de cette discussion.` : "";
+    this.lessonEl = h("div", { class: "appr proposal" },
+      this.apprHead("book", "Retenir cette correction ?", lesson.projet ? `Projet « ${lesson.projet} »` : "Hors projet"),
+      h("p", { class: "appr-reason" }, "Rien n'est écrit avant ton clic." + again),
+      area,
+      h("div", { class: "appr-actions" },
+        lesson.projet ? h("button", { type: "button", class: "btn", on: { click: () => send("projet") } }, "Ce projet") : null,
+        h("button", { type: "button", class: "btn ok", on: { click: () => send("compte") } }, "Tous les projets"),
+        h("button", { type: "button", class: "btn ghost", on: { click: () => send("non") } }, "Pas maintenant")));
+    this.approvals.append(this.lessonEl);
+  }
+
+  launchCard(p) {
+    const x = p.input || {};
+    const el = h("div", { class: "appr proposal" });
+    el.append(
+      this.apprHead("sparkle", "Ouvrir une discussion", x.compte || ""),
+      h("p", { class: "appr-reason" }, p.reason),
+      h("div", { class: "prop-fields" },
+        h("div", { class: "prop-field" }, h("span", { class: "muted" }, "Dossier"), h("span", {}, x.dossier || "")),
+        h("div", { class: "prop-field" }, h("span", { class: "muted" }, "Autorisations"), h("span", {}, x.preset || "")),
+        h("div", { class: "prop-field" }, h("span", { class: "muted" }, "Résultat"), h("span", {}, x.attendre ? "revient dans cette discussion" : "la discussion travaille seule"))),
+      h("div", { class: "appr-actions" },
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", "", null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", "", null, el) } }, "Ouvrir")),
+      h("details", { open: true }, h("summary", { class: "muted" }, "Demande"), h("pre", { class: "prop-code" }, x.demande || "")));
+    return el;
+  }
+
   // ------------------------------------------------------------ approvals
   renderApprovals(pending) {
     const ids = new Set(pending.map((p) => p.id));
@@ -996,6 +1058,35 @@ export class TaskWindow {
       this.apprEls.set(p.id, el);
       this.approvals.append(el);
     }
+  }
+
+  /** Several cards wait: one at a time, with Précédente / n / Suivante. The click still decides. */
+  layoutApprovals() {
+    const box = this.approvals;
+    box.querySelector(":scope > .appr-nav")?.remove();
+    const cards = [...box.querySelectorAll(":scope > .appr")];
+    if (this.apprShown?.isConnected) {
+      const at = cards.indexOf(this.apprShown);
+      if (at >= 0) this.apprIndex = at;
+    }
+    if (!cards.length) { this.apprShown = null; this.apprIndex = 0; return; }
+    if (cards.length === 1) {
+      cards[0].hidden = false;
+      this.apprShown = cards[0];
+      this.apprIndex = 0;
+      return;
+    }
+    if (this.apprIndex >= cards.length) this.apprIndex = cards.length - 1;
+    if (this.apprIndex < 0) this.apprIndex = 0;
+    cards.forEach((c, i) => { c.hidden = i !== this.apprIndex; });
+    this.apprShown = cards[this.apprIndex];
+    const n = cards.length;
+    box.prepend(h("div", { class: "appr-nav" },
+      h("button", { type: "button", class: "btn small ghost", disabled: this.apprIndex === 0 ? true : undefined,
+        on: { click: () => { this.apprIndex -= 1; this.apprShown = null; this.layoutApprovals(); } } }, "Précédente"),
+      h("span", {}, `${this.apprIndex + 1} / ${n}`),
+      h("button", { type: "button", class: "btn small ghost", disabled: this.apprIndex === n - 1 ? true : undefined,
+        on: { click: () => { this.apprIndex += 1; this.apprShown = null; this.layoutApprovals(); } } }, "Suivante")));
   }
 
   async decide(p, decision, message = "", answers = null, el = null, remember = []) {
@@ -1056,6 +1147,7 @@ export class TaskWindow {
     if (x.quoi === "rattacher") return this.attachCard(p);
     if (x.quoi === "module") return this.moduleCard(p);
     if (x.quoi === "savoir") return this.knowledgeCard(p);
+    if (x.quoi === "discussion") return this.launchCard(p);
     const action = x.quoi === "action";
     const consigne = x.quoi === "consigne";
     const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
@@ -1173,7 +1265,7 @@ export class TaskWindow {
         field("Dossier", x.id, x.dossier),
       ].filter(Boolean)),
       h("div", { class: "prop-note muted" }, (x.existe ? "Claude modifiera ce module" : "Claude écrira ce module")
-        + " maintenant, puis l'ouvrira dans une fenêtre (bouton Modules). Il reste isolé, sans réseau ; s'il veut interroger Claude, "
+        + " maintenant, puis l'ouvrira dans une fenêtre (bouton Outils). Il reste isolé, sans réseau ; s'il veut interroger Claude, "
         + "il te demandera l'autorisation. Rien n'est écrit avant ton accord."),
       h("div", { class: "appr-actions" }, msg,
         h("button", { type: "button", class: "btn", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Non merci"),

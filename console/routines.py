@@ -18,11 +18,15 @@ DAYS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
 
 
 class Schedule(BaseModel):
-    kind: Literal["daily", "interval", "once"] = "daily"
+    kind: Literal["daily", "interval", "once", "dossier", "suite"] = "daily"
     time: str = "08:00"                                    # daily: HH:MM local time
     days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])  # daily: 0 = Monday
     every_min: int = Field(60, ge=5, le=60 * 24 * 7)       # interval
     at: float | None = None                                # once: epoch seconds
+    watch: str = ""                                        # dossier: the folder that is watched
+    pattern: str = "*"                                     # dossier: file name, * and ? allowed
+    after: str = ""                                        # suite: the routine whose end starts this one
+    mails: bool = False                                    # only mail arrived since the previous run
 
     @field_validator("time")
     @classmethod
@@ -44,18 +48,32 @@ class Schedule(BaseModel):
             raise ValueError("choisis au moins un jour")
         if self.kind == "once" and not self.at:
             raise ValueError("date et heure requises")
+        if self.kind == "dossier" and not self.watch.strip():
+            raise ValueError("dossier surveillé requis")
+        if self.kind == "suite" and not self.after.strip():
+            raise ValueError("routine précédente requise")
+        if self.pattern and not re.fullmatch(r"[\w.*? \-]{1,80}", self.pattern):
+            raise ValueError("filtre de fichier invalide")
         return self
 
     def label(self) -> str:
+        if self.kind == "dossier":
+            return f"quand un fichier arrive dans {self.watch}"
+        if self.kind == "suite":
+            return "à la fin d'une autre routine"
+        mail = " · mails nouveaux" if self.mails else ""
         if self.kind == "daily":
             days = "tous les jours" if len(self.days) == 7 else ("en semaine" if self.days == [0, 1, 2, 3, 4] else ", ".join(DAYS[d] for d in self.days))
-            return f"{days} à {self.time}"
+            return f"{days} à {self.time}" + mail
         if self.kind == "interval":
             m = self.every_min
-            return f"toutes les {m // 60} h" if m % 60 == 0 else f"toutes les {m} min"
-        return "le " + datetime.fromtimestamp(self.at or 0).strftime("%d/%m/%Y à %H:%M")
+            when = f"toutes les {m // 60} h" if m % 60 == 0 else f"toutes les {m} min"
+            return when + mail
+        return "le " + datetime.fromtimestamp(self.at or 0).strftime("%d/%m/%Y à %H:%M") + mail
 
     def next_after(self, after: float, last_run: float | None = None) -> float | None:
+        if self.kind in ("dossier", "suite"):
+            return None
         if self.kind == "once":
             return self.at if self.at and self.at > after and not last_run else None
         if self.kind == "interval":

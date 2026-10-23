@@ -218,7 +218,12 @@ function editor(r = null, defaults = {}, after = null) {
   const effort = h("select", {}, ...[["", "défaut du profil"], ["low", "faible"], ["medium", "moyen"], ["high", "élevé"], ["xhigh", "très élevé"], ["max", "max"]].map(([v, l]) => h("option", { value: v }, l)));
   effort.value = cur.effort || "";
   const workdir = h("input", { type: "text", value: cur.workdir, placeholder: "vide = dossier du profil" });
-  const kind = h("select", {}, h("option", { value: "daily" }, "Chaque jour à heure fixe"), h("option", { value: "interval" }, "À intervalle régulier"), h("option", { value: "once" }, "Une seule fois"));
+  const kind = h("select", {},
+    h("option", { value: "daily" }, "Chaque jour à heure fixe"),
+    h("option", { value: "interval" }, "À intervalle régulier"),
+    h("option", { value: "once" }, "Une seule fois"),
+    h("option", { value: "dossier" }, "Quand un fichier arrive"),
+    h("option", { value: "suite" }, "À la fin d'une autre routine"));
   kind.value = sch.kind;
   const time = h("input", { type: "time", value: sch.time });
   const days = new Set(sch.days);
@@ -235,8 +240,26 @@ function editor(r = null, defaults = {}, after = null) {
   const daily = h("div", { class: "row" }, time, dayBtns);
   const interval = h("div", { class: "row" }, h("span", {}, "toutes les"), every, unit);
   const once = h("div", { class: "row" }, at);
-  const showKind = () => { daily.hidden = kind.value !== "daily"; interval.hidden = kind.value !== "interval"; once.hidden = kind.value !== "once"; };
+  const watch = h("input", { type: "text", value: sch.watch || "", placeholder: "Dossier surveillé" });
+  const pattern = h("input", { type: "text", value: sch.pattern || "*", placeholder: "*.pdf" });
+  const watched = h("div", { class: "row" }, watch, pattern);
+  const afterSel = h("select", {}, ...(ctx.routines?.() || []).filter((x) => x.id !== cur.id).map((x) => h("option", { value: x.id }, x.name)));
+  if (sch.after) afterSel.value = sch.after;
+  const chained = h("div", { class: "row" }, afterSel);
+  const mails = h("input", { type: "checkbox" });
+  mails.checked = !!sch.mails;
+  const mailRow = h("label", { class: "check" }, mails, h("span", {}, "Seulement les mails arrivés depuis la dernière fois"));
+  const showKind = () => {
+    daily.hidden = kind.value !== "daily";
+    interval.hidden = kind.value !== "interval";
+    once.hidden = kind.value !== "once";
+    watched.hidden = kind.value !== "dossier";
+    chained.hidden = kind.value !== "suite";
+    const triggered = kind.value === "dossier" || kind.value === "suite" || mails.checked;
+    if (triggered && !["lecture", "brouillons"].includes(pre.value)) pre.value = "lecture";
+  };
   kind.addEventListener("change", showKind);
+  mails.addEventListener("change", showKind);
   showKind();
   const cb = (label, value, help) => {
     const i = h("input", { type: "checkbox" });
@@ -258,6 +281,7 @@ function editor(r = null, defaults = {}, after = null) {
   const onKey = (e) => { if (e.key === "Escape" && !doc.querySelector(".dialog:not(.routine-ed)")) close(); };
   const submit = async () => {
     const schedule = { kind: kind.value, time: time.value || "08:00", days: [...days].sort(), every_min: Math.round(Number(every.value || 60) * Number(unit.value)),
+      watch: watch.value.trim(), pattern: pattern.value.trim() || "*", after: afterSel.value || "", mails: mails.checked,
       at: at.value ? new Date(at.value).getTime() / 1000 : null };
     const body = { ...(r ? { id: r.id } : {}), name: name.value.trim(), prompt: prompt.value.trim(), profile: prof.value, preset: pre.value,
       model: model.value, effort: effort.value, workdir: workdir.value.trim(), schedule, enabled: enabled.checked,
@@ -281,7 +305,7 @@ function editor(r = null, defaults = {}, after = null) {
         h("label", { class: "field wide" }, h("span", {}, "Demande"), prompt, h("small", {}, "Astuce : une skill fonctionne aussi, par exemple /deep-research …")),
         field("Autorisations", pre, "Les presets à confirmation (Complet) sont exclus."), field("Modèle", model),
         field("Effort", effort), field("Dossier de travail", workdir),
-        h("label", { class: "field wide" }, h("span", {}, "Planification"), kind, daily, interval, once),
+        h("label", { class: "field wide" }, h("span", {}, "Planification"), kind, daily, interval, once, watched, chained, mailRow),
         field("Dans la boîte de réception", inboxSel, "« Seulement les erreurs » : une réussite n'y reste pas. Validations et erreurs y arrivent toujours."),
         h("span", {}),
         enabledEl, openWinEl, catchUpEl, teamEl, headEl),

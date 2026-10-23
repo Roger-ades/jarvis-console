@@ -239,7 +239,7 @@ function markFocus(id) {
   const w = wins.get(id);
   if (!w) return;
   focusedId = id;
-  for (const [oid, o] of wins) o.el.classList.toggle("focused", oid === id);
+  for (const [oid, o] of wins) { o.el.classList.toggle("focused", oid === id); o.el.classList.toggle("behind", oid !== id); }
   w.onFocus?.();
   focusListeners.forEach((fn) => fn(id));
 }
@@ -441,7 +441,9 @@ function nativeDocument(win, classes, onCss = null) {
   doc.write('<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>JARVIS</title></head><body></body></html>');
   doc.close();
   doc.documentElement.setAttribute("data-theme", document.documentElement.getAttribute("data-theme") || "sombre");
-  doc.documentElement.classList.add("native-doc", `os-${bridge.platform}`, ...classes);
+  // (the command bar's window stays transparent, without the glass: see barOptions in shell/main.js)
+  const glass = bridge.glass && !classes.includes("bar-doc");
+  doc.documentElement.classList.add("native-doc", `os-${bridge.platform}`, ...(glass ? ["glass"] : []), ...classes);
   const css = doc.createElement("link");
   css.rel = "stylesheet";
   css.href = new URL("/static/css/app.css", location.href).href;
@@ -558,6 +560,7 @@ function fitFrame(f) {
   if (!frames.has(f.id)) return;
   const box = f.doc.querySelector("#modal-root > .overlay > *");
   if (!box) return;
+  f.doc.documentElement.classList.add("measuring");   // as it will show: without its title (in the title strip)
   let extra = 0;
   const counted = [];
   for (const x of box.querySelectorAll("*")) {
@@ -568,7 +571,7 @@ function fitFrame(f) {
     }
   }
   const r = box.getBoundingClientRect();
-  f.doc.documentElement.classList.add("fitted");
+  f.doc.documentElement.classList.replace("measuring", "fitted");
   bridge.win("frame-show", FRAME + f.id, { width: Math.ceil(r.width), height: Math.ceil(r.height + extra) + FRAME_HEAD });
 }
 

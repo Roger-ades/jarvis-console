@@ -12,13 +12,14 @@ import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
-import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, initAddons } from "./addons.js";
+import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, addonsRetheme, initAddons } from "./addons.js";
 import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
-import { openConfig, updateProbe } from "./config.js";
-import { renderHistory, toggleHistory } from "./history.js";
+import { openConfig, openConsumption, updateProbe } from "./config.js";
+import { officeAccountChanged, openAccount } from "./office.js";
+import { openDiscussions, renderHistory } from "./history.js";
 import { away, back, inboxChanged, inboxCounts, initInbox, isUnread, markTasksRead, onInbox, refresh as refreshInbox, toggleInbox } from "./inbox.js";
-import { showSession, toggleSessions } from "./library.js";
+import { showSession } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
 import { mountLogo, setLogoActivity } from "./logo.js";
@@ -99,6 +100,7 @@ async function boot() {
     addons: addonsChanged, addon_open: addonOpened, addon_answer: addonAnswered, addon_run: addonRunChanged,
     odoo_tasks: projectSuiviChanged,
     office_suivi: projectSuiviChanged,
+    office_compte: ({ profile }) => officeAccountChanged(profile),
     // Claude opened a project (tool projet), or a discussion just moved into one
     project_open: ({ folder, asked }) => {
       if (folder && (asked || S.config?.ui?.open_project !== false)) showProject(panelCtx, { folder, tab: "tasks" });
@@ -167,6 +169,7 @@ function applyConfig(config, meta) {
   store.set("jarvis.theme", config.general.theme);
   wm.configure({ default_width: config.ui.default_width, default_height: config.ui.default_height });
   wm.retheme();         // (native windows of the desktop app follow the theme)
+  addonsRetheme();      // (and the pages of the open modules)
   regard.configure({}); // (the chips follow the "Joindre ce que je regarde" setting)
   setBarPlace(config.ui.bar_place);
   wm.relayout();
@@ -186,6 +189,19 @@ async function switchDisplay() {
   else toast("L'affichage changera au prochain lancement de l'application.");
 }
 
+/** Desktop app: "Effet verre" changed in the configuration, the windows take (or lose) their material on a reload. */
+async function switchGlass() {
+  const st = window.jarvis?.glassState?.();
+  const want = S.config?.ui?.verre !== false;
+  if (!st?.possible || want === st.on || (want && st.reduced) || S.switching) return;
+  S.switching = true;
+  const ok = await confirmDialog(want ? "Activer l'effet verre ?" : "Désactiver l'effet verre ?",
+    "L'interface se recharge pour l'appliquer ; les tâches continuent.", "Recharger maintenant");
+  S.switching = false;
+  if (ok) window.jarvis.relaunch();
+  else toast("L'effet verre changera au prochain lancement de l'application.");
+}
+
 async function reloadConfig() {
   try {
     const { config, meta } = await api("/api/config");
@@ -196,6 +212,7 @@ async function reloadConfig() {
     renderPills();
     recolorTasks();
     switchDisplay();
+    switchGlass();
     loadAccountActions(profiles());
   } catch { /* keep the old one */ }
 }
@@ -225,7 +242,7 @@ function renderState() {
     counter("run", st.running, "en cours"), counter("await", st.awaiting, "à valider"), counter("queue", st.queued, "en file"));
   setLogoActivity(st.running, st.awaiting);
   const btn = $("#btn-emergency");
-  btn.textContent = st.emergency_stop ? "Réactiver" : "Arrêt d'urgence";
+  btn.replaceChildren(...(st.emergency_stop ? ["Réactiver"] : ["Arrêt", h("span", { class: "em-long" }, " d'urgence")]));
   btn.className = `btn ${st.emergency_stop ? "ok" : "danger"}`;
   renderBanner();
   renderPills();
@@ -258,10 +275,10 @@ function renderPills() {
     const cls = !known ? "" : pr.logged_in ? "ok" : "ko";
     const label = !known ? "connexion non testée" : pr.logged_in ? "connecté" : "non connecté";
     const who = pr?.identity?.label || "";
-    const pill = h("button", { type: "button", class: "ppill", style: { "--pc": p.color },
-      title: `${limitsTitle(p.id, p.name)} · ${label}${who ? ` · ${who}` : ""}`,
+    const pill = h("button", { type: "button", class: "ppill quota", style: { "--pc": p.color },
+      title: `Quota de ${p.name}. ${limitsTitle(p.id, p.name)} · ${label}${who ? ` · ${who}` : ""}. Le compte de la demande se choisit dans la barre du bas.`,
       on: { click: () => openLimits(pill, p, { onConfig: () => showConfig("profiles") }) } },
-      h("span", { class: "sw" }), h("span", { class: "pn" }, p.name), gauges(p.id), h("span", { class: `st ${cls}` }));
+      h("span", { class: "sw" }), h("span", { class: "pq" }, "Quota"), h("span", { class: "pn" }, p.name), gauges(p.id), h("span", { class: `st ${cls}` }));
     return pill;
   }));
   renderProfileBars();
@@ -318,28 +335,66 @@ function folderLabel(dir) {
 const folderOption = (dir) => option(dir, projectFor(dir)?.name || folderLabel(dir), dir);
 const dirKey = (d) => String(d || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 
-/** One chip sums up model, permissions, effort and team mode; the panel holds the controls. */
+/** One chip sums up what differs from the account's defaults; the panel holds the controls. */
 const EFFORT = { low: "effort faible", medium: "effort moyen", high: "effort élevé", xhigh: "effort très élevé", max: "effort max" };
 function updateSummary() {
   const p = profile(S.profile);
   if (!p) return;
-  const m = $("#opt-model").value || p.default_model || "default";
-  const model = m === "default" ? "Modèle par défaut" : m.charAt(0).toUpperCase() + m.slice(1);
-  const preset = $("#opt-preset").selectedOptions[0]?.textContent || "";
+  const modelVal = $("#opt-model").value;
+  const presetVal = $("#opt-preset").value;
   const team = $("#opt-team").getAttribute("aria-pressed") === "true";
   const effort = EFFORT[$("#opt-effort").value];
-  const text = [team ? "Équipe" : "", model, preset, effort].filter(Boolean).join(" · ");
-  $("#opt-summary-text").textContent = text;
+  const parts = [];
+  if (team) parts.push("Équipe");
+  if (modelVal) {
+    const label = $("#opt-model").selectedOptions[0]?.textContent || modelVal;
+    parts.push(label.split(" — ")[0]);
+  }
+  if (presetVal && presetVal !== p.default_preset) parts.push($("#opt-preset").selectedOptions[0]?.textContent || presetVal);
+  if (effort) parts.push(effort);
+  const text = parts.join(" · ");
+  $("#opt-summary-text").textContent = text || "Réglages";
   $("#opt-summary").classList.toggle("team", team);
-  $("#opt-summary").title = `Réglages de la demande : ${text}`;
+  $("#opt-summary").title = text ? `Réglages de la demande : ${text}` : "Réglages de la demande, ceux du compte";
   const wd = $("#opt-workdir");
   wd.parentElement.title = `Dossier de travail : ${wd.value && wd.value !== "__other__" ? wd.value : (S.meta?.profiles?.[p.id]?.workdir || p.workdir)}`;
 }
 
+/** The bar lives in its own window (class bar-doc on that document, not on this page). The panel hangs
+ *  from the Réglages button. At the top of the screen it opens underneath; at the bottom, just above. */
+function placeOptions() {
+  const btn = $("#opt-summary");
+  const doc = btn.ownerDocument;
+  const root = doc.documentElement;
+  if (!root.classList.contains("bar-doc")) return;
+  const view = doc.defaultView;
+  const panel = $("#opt-panel");
+  const r = btn.getBoundingClientRect();
+  const width = Math.min(340, view.innerWidth - 16);
+  const left = Math.max(8, Math.min(r.left, view.innerWidth - 8 - width));
+  panel.style.position = "fixed";
+  panel.style.zIndex = "80";
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.right = "auto";
+  panel.style.width = `${width}px`;
+  if (root.dataset.bar === "haut") {
+    panel.style.top = `${Math.round(r.bottom + 6)}px`;
+    panel.style.bottom = "auto";
+  } else {
+    panel.style.top = "auto";
+    panel.style.bottom = `${Math.round(view.innerHeight - r.top + 6)}px`;
+  }
+}
+function clearOptionsPlace() {
+  const panel = $("#opt-panel");
+  for (const k of ["position", "zIndex", "left", "right", "top", "bottom", "width"]) panel.style[k] = "";
+}
 function toggleOptions(open = $("#opt-panel").hidden) {
-  $("#opt-panel").hidden = !open;
+  const panel = $("#opt-panel");
+  panel.hidden = !open;
   $("#opt-summary").setAttribute("aria-expanded", String(open));
-  if (open) $("#opt-model").focus();
+  if (open) { placeOptions(); $("#opt-model").focus(); }
+  else clearOptionsPlace();
 }
 $("#opt-summary").addEventListener("click", () => toggleOptions());
 for (const id of ["#opt-model", "#opt-preset", "#opt-effort"]) $(id).addEventListener("change", updateSummary);
@@ -394,6 +449,60 @@ function selectProfile(id, remember = true) {
 }
 const $$pbtn = () => Array.from($("#cmd-profiles").querySelectorAll(".pbtn"));
 
+/** The folder list is a menu of the page: the system list of a select stays unstyled. */
+let folderMenu = null;
+function folderPop(open, height = 0) {
+  const pop = $("#folder-pop");
+  if (!pop?.ownerDocument.documentElement.classList.contains("bar-doc")) return;
+  pop.style.height = open ? `${height}px` : "";
+  pop.hidden = !open;
+}
+function closeFolderMenu() { folderMenu?.remove(); folderMenu = null; folderPop(false); }
+function openFolderMenu() {
+  closeFolderMenu();
+  const sel = $("#opt-workdir");
+  const doc = sel.ownerDocument;
+  const view = doc.defaultView;
+  const chip = sel.closest(".chip-select");
+  const r = chip.getBoundingClientRect();
+  const root = doc.documentElement;
+  const rows = [];
+  for (const o of sel.options) {
+    if (o.value === "__other__") rows.push(h("hr"));
+    const b = h("button", { type: "button", class: o.selected ? "on" : "", title: o.title || "" }, o.textContent);
+    b.addEventListener("click", () => {
+      closeFolderMenu();
+      if (sel.value === o.value) return;
+      sel.value = o.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    rows.push(b);
+  }
+  const menu = h("div", { class: "menu folder-menu", role: "listbox", "aria-label": "Dossier de travail" }, ...rows);
+  const width = Math.max(Math.round(r.width), 240);
+  const left = Math.max(8, Math.min(r.left, view.innerWidth - 8 - width));
+  const up = root.classList.contains("bar-doc") ? root.dataset.bar !== "haut" : view.innerHeight - r.bottom < 220;
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.width = `${width}px`;
+  menu.style.right = "auto";
+  if (up) { menu.style.top = "auto"; menu.style.bottom = `${Math.round(view.innerHeight - r.top + 6)}px`; }
+  else { menu.style.bottom = "auto"; menu.style.top = `${Math.round(r.bottom + 6)}px`; }
+  doc.body.append(menu);
+  folderMenu = menu;
+  folderPop(true, menu.offsetHeight + 8);
+}
+$("#opt-workdir").addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  if (folderMenu) closeFolderMenu();
+  else openFolderMenu();
+});
+$("#opt-workdir").addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") { e.preventDefault(); if (!folderMenu) openFolderMenu(); }
+  else if (e.key === "Escape") closeFolderMenu();
+});
+wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
+  if (folderMenu && !e.target.closest(".folder-menu, .chip-select.folder")) closeFolderMenu();
+}));
 $("#opt-workdir").addEventListener("change", async (e) => {
   dropMention();
   if (e.target.value !== "__other__") {
@@ -659,7 +768,7 @@ regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, 
 regard.chip($("#cmd-regard"));
 // desktop app, "Intégré au bureau": no JARVIS window; the command bar floats in a window of its own, with
 // the top bar and the home screen in its menu, and the notices above it (bar.js)
-setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel")],
+setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel"), $("#folder-pop")],
   menu: { peek: $("#inbox-peek"), status: [$("#counters"), $("#profile-pills")], actions: $("#topbar .top-actions"), home: $("#home") },
   notices: [$("#banner"), $("#reminders")] });
 // desktop app: its global shortcut (or its notification area) asks for a new request, or for the menu
@@ -937,7 +1046,7 @@ async function archiveTasks(ids, on = true) {
     for (const t of r.tasks) onTask(t);
     const n = r.changed.length, s = n > 1 ? "s" : "";
     if (r.skipped.length) toast(`${r.skipped.length} discussion${r.skipped.length > 1 ? "s" : ""} en cours non archivée${r.skipped.length > 1 ? "s" : ""}.`, "warn");
-    else if (n) toast(on ? `${n} discussion${s} archivée${s} : Historique → « Archivées », ou Ctrl+K.` : `${n} discussion${s} désarchivée${s}.`, "ok");
+    else if (n) toast(on ? `${n} discussion${s} archivée${s} : Discussions → « Archivées », ou Ctrl+K.` : `${n} discussion${s} désarchivée${s}.`, "ok");
     return r;
   } catch (e) { toast(e.message, "err"); return null; }
 }
@@ -1224,6 +1333,7 @@ function onShortcut(e) {
   } else if (e.key === "Escape" && !elsewhere) {
     $("#menu-arrange").hidden = true;
     $("#menu-claudeai").hidden = true;
+    $("#menu-more").hidden = true;
     if (!document.querySelector(".overlay")) closeDrawers();
   }
 }
@@ -1274,10 +1384,14 @@ function searchAnything() {
       { label: "Boîte de réception", icon: "bell", hint: summaryText(), keywords: "à valider à lire validations résultats routines rappels",
         run: () => openInbox() },
       { label: "Notes", icon: "note", keywords: "rappels mémos pense-bête", run: () => toggleNotes(notesCtx) },
-      { label: "Sessions Claude Code", icon: "list", keywords: "desktop cli reprendre", run: () => toggleSessions(panelCtx) },
+      { label: "Discussions hors JARVIS", icon: "list", keywords: "sessions desktop cli reprendre", run: () => openDiscussions(panelCtx, "hors") },
       { label: "Routines", icon: "clock", keywords: "tâches planifiées programmer", run: () => toggleRoutines(panelCtx) },
-      { label: "Historique", icon: "clock", run: () => $("#btn-history").click() },
+      { label: "Discussions", icon: "clock", keywords: "historique", run: () => openDiscussions(panelCtx, "jarvis") },
       { label: "Configuration", icon: "gauge", keywords: "réglages paramètres", run: () => showConfig() },
+      { label: "Consommation", icon: "gauge", keywords: "tokens coût cache reprise", run: () => openConsumption() },
+      ...profiles().map((p) => ({ label: `Suivi du compte · ${p.name}`, icon: "mail",
+        keywords: "office outlook brouillons relances tâches", hint: "Hors projet, rien n'est envoyé",
+        run: () => openAccount(p.id) })),
       { label: "Joindre des fichiers", icon: "clip", keywords: "pièce jointe pdf image", run: () => attacher.picker.click() },
       { label: "Contexte d'autres discussions", icon: "link", run: () => contextPicker.pick() },
       ...profiles().map((p) => ({ label: `Utiliser le compte ${p.name}`, icon: "user", hint: "Pour la prochaine demande",
@@ -1338,7 +1452,7 @@ const panelCtx = {
   archive: (ids, on) => archiveTasks(ids, on),
   addContext: (t) => addContext(t),
   fork: (t) => forkTask(t),
-  sessions: () => toggleSessions(panelCtx),
+  sessions: () => openDiscussions(panelCtx, "hors"),
   openConfig: (tab) => showConfig(tab),
   mention: (text) => {
     const at = input.selectionStart ?? input.value.length;
@@ -1350,6 +1464,7 @@ const panelCtx = {
     input.setSelectionRange(before.length + piece.length, before.length + piece.length);
   },
   workdir: () => { const v = $("#opt-workdir").value; return v === "__other__" ? "" : v; },
+  folder: () => currentFolder(),
   workdirOptions: () => [...$("#opt-workdir").options].map((o) => o.value).filter((v) => v && v !== "__other__"),
   setWorkdir: (dir, isDefault) => {
     const sel = $("#opt-workdir");
@@ -1440,25 +1555,67 @@ function openDisplayOf(taskId, key, color) {
   };
   go();
 }
-$("#btn-history").addEventListener("click", () => {
-  closeDrawers("history");
-  toggleHistory({ tasks: () => [...S.tasks.values()].sort((a, b) => b.created - a.created), profiles, openTask,
-    archive: (ids, on) => archiveTasks(ids, on) });
-});
-$("#btn-sessions").addEventListener("click", () => toggleSessions(panelCtx));
+$("#btn-history").addEventListener("click", () => openDiscussions(panelCtx, "jarvis"));
+$("#btn-sessions").addEventListener("click", () => openDiscussions(panelCtx, "hors"));
 $("#btn-routines").addEventListener("click", () => toggleRoutines(panelCtx));
-$("#btn-claudeai").addEventListener("click", (e) => { e.stopPropagation(); $("#menu-claudeai").hidden = !$("#menu-claudeai").hidden; });
+$("#btn-claudeai").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#menu-addons").hidden = true;
+  $("#menu-arrange").hidden = true;
+  $("#menu-claudeai").hidden = !$("#menu-claudeai").hidden;
+});
 $("#menu-claudeai").addEventListener("click", (e) => { if (e.target.closest("a")) $("#menu-claudeai").hidden = true; });
 $("#btn-emergency").addEventListener("click", () => setEmergency(!S.state.emergency_stop));
-$("#btn-arrange").addEventListener("click", (e) => { e.stopPropagation(); $("#menu-arrange").hidden = !$("#menu-arrange").hidden; });
+$("#btn-arrange").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#menu-addons").hidden = true;
+  $("#menu-claudeai").hidden = true;
+  $("#menu-arrange").hidden = !$("#menu-arrange").hidden;
+});
 $("#menu-arrange").addEventListener("click", (e) => {
   const mode = e.target.closest("button")?.dataset.arrange;
   if (mode === "close") { closeAll(); $("#menu-arrange").hidden = true; }
   else if (mode) { wm.arrange(mode); $("#menu-arrange").hidden = true; }
 });
 wm.onDocument((doc) => doc.addEventListener("pointerdown", (e) => {
-  if (!e.target.closest(".menu-wrap")) { $("#menu-arrange").hidden = true; $("#menu-claudeai").hidden = true; }
+  if (!e.target.closest(".menu-wrap")) { $("#menu-arrange").hidden = true; $("#menu-claudeai").hidden = true; $("#menu-more").hidden = true; }
 }));
+// Plus stays visible (discussions, routines, tools, claude.ai, arrange). Only if the bar still overflows do
+// Notes, then Rechercher, then Projet fold into it; each keeps a comment to come back. Boîte stays.
+const FOLD = ["#btn-install", "#btn-notes", "#btn-search", "#btn-project"];
+const foldSlots = new Map(FOLD.map((sel) => { const b = $(sel), slot = document.createComment(sel); b.before(slot); return [b, slot]; }));
+function fitTopbar() {
+  const menu = $("#menu-more");
+  for (const [b, slot] of foldSlots) if (b.parentElement === menu) { b.classList.remove("in-more"); slot.after(b); }
+  const bar = $(".top-actions").closest("#topbar");
+  const over = () => bar && bar.scrollWidth > bar.clientWidth + 1;
+  $("#topbar").classList.remove("compact");
+  $(".more-wrap").hidden = false;
+  if (!bar || !over()) return;
+  bar.classList.add("compact");
+  if (!over()) return;
+  const anchor = [...menu.children].find((n) => !n.classList?.contains("in-more")) || null;
+  for (const [b] of foldSlots) {
+    if (!over()) break;
+    if (b.hidden) continue;
+    b.classList.add("in-more");
+    menu.insertBefore(b, anchor);
+  }
+}
+// (a timer, not a frame: with "Intégré au bureau" the page is hidden and gets no frames)
+let fitTimer = 0;
+const topbarWatch = new ResizeObserver(() => { clearTimeout(fitTimer); fitTimer = setTimeout(fitTopbar, 30); });
+["#topbar", "#counters", "#profile-pills", ".top-actions"].forEach((sel) => topbarWatch.observe($(sel)));
+window.addEventListener("resize", () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitTopbar, 30); });
+$("#btn-more").addEventListener("click", (e) => { e.stopPropagation(); $("#menu-more").hidden = !$("#menu-more").hidden; });
+$("#menu-more").addEventListener("click", (e) => {
+  if (e.target.closest("#btn-addons, #btn-claudeai, #btn-arrange")) return;
+  if (!e.target.closest("button, a")) return;
+  $("#menu-more").hidden = true;
+  $("#menu-addons").hidden = true;
+  $("#menu-claudeai").hidden = true;
+  $("#menu-arrange").hidden = true;
+});
 document.addEventListener("visibilitychange", () => { if (!document.hidden && wm.focused()) markTasksRead([wm.focused()]); });
 
 // ------------------------------------------------------------ installable app
@@ -1482,7 +1639,7 @@ const initialPanel = location.hash.replace("#", "");
 boot().then(() => {
   // app shortcuts (manifest) open a panel directly
   if (initialPanel === "routines") toggleRoutines(panelCtx);
-  if (initialPanel === "sessions") toggleSessions(panelCtx);
+  if (initialPanel === "sessions") openDiscussions(panelCtx, "hors");
   if (initialPanel === "boite") openInbox();
   if (["routines", "sessions", "boite"].includes(initialPanel)) history.replaceState(null, "", location.pathname);
 }).catch((e) => {

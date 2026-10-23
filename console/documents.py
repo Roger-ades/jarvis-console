@@ -21,6 +21,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from xml.etree import ElementTree
 
+from . import sense
 from .permissions import norm
 
 KINDS = {
@@ -38,7 +39,7 @@ PASSAGE = 1200             # characters per passage (about 300 tokens)
 MAX_FILES = 50_000         # per folder and per pass
 PDF_PAGES = 400
 PAGE_BREAK = "\n\f\n"      # between the pages of a PDF: each passage knows its page
-VERSION = 1                # PRAGMA user_version: 1 = PDF passages carry their page
+VERSION = 2                # 1 = PDF passages carry their page; 2 = a local sense vector beside each passage
 ZIP_PART = 64 * 1024 * 1024  # an Office part bigger than this, uncompressed, is not read (zip bomb)
 # OneDrive / SharePoint « Files on demand »: reading such a file downloads it. Only its name is indexed.
 _ONLINE_ONLY = 0x00400000 | 0x00040000 | 0x00001000  # RECALL_ON_DATA_ACCESS | RECALL_ON_OPEN | OFFLINE
@@ -52,6 +53,9 @@ CREATE INDEX IF NOT EXISTS docs_key ON docs(key);
 CREATE INDEX IF NOT EXISTS docs_root ON docs(root);
 CREATE VIRTUAL TABLE IF NOT EXISTS passages USING fts5(
     name, body, doc UNINDEXED, part UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS sense (
+    doc INTEGER NOT NULL, n INTEGER NOT NULL, part INTEGER NOT NULL,
+    body TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY (doc, n));
 """
 
 
@@ -340,8 +344,11 @@ class DocIndex:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=NORMAL")
             self.db.executescript(SCHEMA)
-            if self.db.execute("PRAGMA user_version").fetchone()[0] < VERSION:
+            ver = self.db.execute("PRAGMA user_version").fetchone()[0]
+            if ver < 1:
                 self.db.execute("UPDATE docs SET mtime = 0 WHERE kind = 'pdf'")  # read again at the next pass
+            if ver < VERSION:
+                self._backfill_sense()
                 self.db.execute(f"PRAGMA user_version = {VERSION}")
         self.progress: dict = {"running": False, "current": "", "done": 0, "started": None, "ended": None}
 
@@ -385,6 +392,9 @@ class DocIndex:
                                                                          st.st_mtime, time.time(), len(text), note)).lastrowid
                 self.db.executemany("INSERT INTO passages(name, body, doc, part) VALUES(?,?,?,?)",
                                     [(label, body, did, page) for page, body in pieces])
+                self.db.execute("DELETE FROM sense WHERE doc=?", (did,))
+                self.db.executemany("INSERT INTO sense(doc, n, part, body, vec) VALUES(?,?,?,?,?)",
+                                    [(did, n, page, body, sense.embed(body)) for n, (page, body) in enumerate(pieces) if body.strip()])
                 self.db.execute("COMMIT")
             except Exception:
                 self.db.execute("ROLLBACK")
@@ -396,11 +406,13 @@ class DocIndex:
                 chunk = ids[i:i + 500]
                 marks = ",".join("?" * len(chunk))
                 self.db.execute(f"DELETE FROM passages WHERE doc IN ({marks})", chunk)
+                self.db.execute(f"DELETE FROM sense WHERE doc IN ({marks})", chunk)
                 self.db.execute(f"DELETE FROM docs WHERE id IN ({marks})", chunk)
 
     def clear(self):
         with self._lock:
             self.db.execute("DELETE FROM passages")
+            self.db.execute("DELETE FROM sense")
             self.db.execute("DELETE FROM docs")
             self.db.execute("INSERT INTO passages(passages) VALUES('optimize')")
 
@@ -533,5 +545,61 @@ class DocIndex:
             snip = (r["snip"] or "").strip()
             if snip and len(d["passages"]) < per_doc and snip not in d["passages"]:
                 d["passages"].append(snip)
+                d["pages"].append(int(r["part"] or 0))
+        return list(found.values())
+
+    def _backfill_sense(self):
+        """Vectors for passages indexed before the sense table existed. The files are not read again."""
+        rows = self.db.execute("SELECT rowid, doc, part, body FROM passages").fetchall()
+        seen: dict[int, int] = {}
+        batch = []
+        for r in rows:
+            body = r["body"] or ""
+            if not body.strip():
+                continue
+            n = seen.get(r["doc"], 0)
+            seen[r["doc"]] = n + 1
+            batch.append((r["doc"], n, int(r["part"] or 0), body, sense.embed(body)))
+        self.db.execute("DELETE FROM sense")
+        if batch:
+            self.db.executemany("INSERT INTO sense(doc, n, part, body, vec) VALUES(?,?,?,?,?)", batch)
+
+    def by_sense(self, q: str, roots: list[str] | None = None, kinds: list[str] | None = None,
+                 limit: int = 8, per_doc: int = 2, floor: float = 0.34) -> list[dict]:
+        """Passages close in sense to the query, under the same folders as the word search. Empty when
+        the query has nothing to compare."""
+        vec = sense.embed(q)
+        if not sense.useful(vec) or roots == []:
+            return []
+        where, args = ["1=1"], []
+        if roots:
+            prefixes = list(dict.fromkeys(norm(r) for r in roots))
+            where.append("(" + " OR ".join("(d.key = ? OR substr(d.key, 1, ?) = ?)" for _ in prefixes) + ")")
+            for p in prefixes:
+                args += [p, len(p) + 1, p + "/"]
+        if kinds:
+            where.append(f"d.kind IN ({','.join('?' * len(kinds))})")
+            args += kinds
+        sql = (f"SELECT d.id, d.path, d.kind, d.title, d.mtime, d.size, d.note, s.part, s.body, s.vec "
+               f"FROM sense s JOIN docs d ON d.id = s.doc WHERE {' AND '.join(where)} LIMIT 20000")
+        with self._lock:
+            rows = self.db.execute(sql, args).fetchall()
+        ranked = []
+        for r in rows:
+            score = sense.cosine(vec, r["vec"])
+            if score >= floor:
+                ranked.append((score, r))
+        ranked.sort(key=lambda x: -x[0])
+        found: dict[int, dict] = {}
+        for score, r in ranked:
+            d = found.get(r["id"])
+            if d is None:
+                if len(found) >= limit:
+                    continue
+                d = found[r["id"]] = {"path": r["path"], "kind": r["kind"], "title": r["title"], "mtime": r["mtime"],
+                                      "size": r["size"], "note": r["note"], "score": score, "passages": [], "pages": [],
+                                      "sens": True}
+            if len(d["passages"]) < per_doc:
+                d["passages"].append(r["body"])
                 d["pages"].append(int(r["part"] or 0))
         return list(found.values())

@@ -1,14 +1,15 @@
 // Configuration window: a working copy of the config edited through tabs,
 // validated by the server on save (errors are listed in the footer).
 import { api, download, setToken } from "./api.js";
+import { pretty } from "./equipe.js";
 import { accountActionRows } from "./accountactions.js";
 import { pickFolder } from "./folderpicker.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
-import { confirmDialog, createLauncher, fmtDate, h, modalHost, reveal, toast } from "./util.js";
+import { confirmDialog, createLauncher, dialog, fmtDate, h, modalHost, reveal, toast } from "./util.js";
 
 const TABS = [
   ["general", "Général"], ["profiles", "Profils"], ["permissions", "Autorisations"],
-  ["integrations", "Intégrations"], ["documents", "Documents"], ["models", "Modèles et consignes"], ["security", "Sécurité"],
+  ["integrations", "Intégrations"], ["equipe", "Équipe"], ["documents", "Documents"], ["models", "Modèles et consignes"], ["security", "Sécurité"],
   ["interface", "Interface"], ["history", "Historique"],
 ];
 const DOC_KINDS = { pdf: ["PDF", "PDF"], word: ["Word", "Word"], excel: ["Excel", "Excel"], powerpoint: ["PowerPoint", "PowerPoint"],
@@ -212,6 +213,7 @@ function tabGeneral() {
         help: "Chaque tâche y a son sous-dossier (date_identifiant), ajouté à ses dossiers de travail. Rien n'y est effacé automatiquement." }),
       check("Questions interactives (AskUserQuestion)", `${g}.ask_user_questions`, { help: "Claude peut te poser des questions dans la fenêtre." }),
       check("Titre automatique des discussions", `${g}.auto_title`, { help: "Après la première réponse, Claude donne un titre à la discussion (une toute petite requête Haiku). Pas si tu l'as déjà renommée." }),
+      check("Haiku pour une question courte", `${g}.auto_model`, { help: "Quand le modèle n'est pas choisi (défaut du compte) et que la demande est courte, sans pièce jointe : Haiku. Une demande qui écrit, corrige ou cite un fichier garde le modèle du compte." }),
       check("Lire les limites des comptes au démarrage", `${g}.limits_on_start`, { help: "Si la dernière mesure date de plus de 3 h : une toute petite requête (Haiku) par compte. Sinon elles se mettent à jour à chaque tâche." }),
       lines("Variables d'environnement retirées", `${g}.env_strip`, { help: "Motifs retirés de l'environnement des tâches (ANTHROPIC_* évite toute facturation par clé API)." }),
     )),
@@ -642,7 +644,7 @@ function tabInterface() {
       select("Rangement par défaut", "ui.arrange", [["cascade", "Cascade"], ["mosaique", "Mosaïque"]]),
       check("Sons de notification", "ui.sounds"),
       check("Joindre ce que je regarde", "ui.regard",
-        { help: "Le texte sélectionné, ou la fenêtre jointe par son viseur, part avec ton message (une puce « Regard » le montre, sa croix le retire)." }),
+        { help: "Le texte sélectionné, ou la fenêtre jointe par son viseur, part avec ton message (une puce « Joint » le montre, sa croix le retire)." }),
       check("Afficher la barre au bord de l'écran", "ui.bar_edge",
         { help: "Application de bureau, affichage intégré, sur Windows et Mac. La barre apparaît quand le pointeur touche le bord où elle est placée (haut ou bas). Elle se range quand tu cliques ailleurs." }),
       select("Position de la barre", "ui.bar_place", [["bas", "En bas de l'écran"], ["haut", "En haut de l'écran"]],
@@ -662,7 +664,10 @@ function tabInterface() {
     ...(window.jarvis ? [section("Application de bureau", "Réglages de l'application JARVIS (Electron). Raccourci global : Ctrl+Alt+J, nouvelle demande.", grid(
       select("Affichage", "ui.bureau", [["integre", "Intégré au bureau : chaque fenêtre est une fenêtre de l'OS"],
         ["fenetre", "Une fenêtre JARVIS : toute la console dans une fenêtre"]],
-      { help: "Changer d'affichage recharge l'interface ; les tâches continuent côté serveur." })),
+      { help: "Changer d'affichage recharge l'interface ; les tâches continuent côté serveur." }),
+      ...(window.jarvis.glassState?.()?.possible ? [check("Effet verre", "ui.verre", { help: window.jarvis.glassState().reduced
+        ? "Affichage intégré. La transparence est réduite par le système : les fenêtres restent opaques tant que ce réglage du système est actif."
+        : "Affichage intégré. Les fenêtres, la barre et les widgets sont en verre dépoli (acrylique sous Windows 11, vibrancy sur Mac). Le changer recharge l'interface." })] : [])),
       h("p", { class: "muted" }, "Les sites (Odoo, SharePoint, Outlook web…) s'ouvrent dans des fenêtres JARVIS, chacun avec sa propre session : "
         + "tu y restes connecté, sans rien partager avec la console ni avec les autres sites."),
       h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: async () => {
@@ -762,6 +767,7 @@ function tabDocuments() {
 }
 
 function tabHistory() {
+  if (!draft.resume) draft.resume = { mode: "rien", warm_hours: 3, min_tokens: 60000 };
   return [
     section("Historique des tâches", "Tâches, flux et journal d'audit sont conservés sur ce poste (data/console.db).", grid(
       num("Archiver les discussions inactives depuis (jours)", "history.auto_archive_days", { min: 0, max: 3650,
@@ -772,7 +778,33 @@ function tabHistory() {
         h("button", { type: "button", class: "btn", on: { click: () => download("/api/history/export", "historique.json") } }, "Exporter l'historique (JSON)"),
         h("button", { type: "button", class: "btn", on: { click: () => purge(draft.history.retention_days) } }, "Purger au-delà de la durée"),
         h("button", { type: "button", class: "btn danger", on: { click: () => purge(null) } }, "Tout purger"))),
+    section("Reprise et consommation", "Une grosse discussion inactive réécrit tout son contexte quand le cache d'une heure expire. Le compactage ne se fait que si la reprise est prévue, et seulement au-dessus du seuil.",
+      select("Discussions inactives", "resume.mode", [["rien", "Ne rien faire"], ["chaud", "Garder au chaud"], ["compacter", "Garder au chaud, puis compacter"]]),
+      grid(
+        num("Garder au chaud (heures)", "resume.warm_hours", { min: 1, max: 12 }),
+        num("Seuil (tokens de contexte)", "resume.min_tokens", { min: 1000, max: 2000000 })),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn", on: { click: () => openConsumption() } }, "Voir la consommation"))),
   ];
+}
+
+/** Tokens already counted on each discussion. No new model call. */
+export async function openConsumption() {
+  let data;
+  try { data = await api("/api/consumption"); }
+  catch (e) { toast(e.message, "err"); return; }
+  const rows = data.rows || [];
+  const fmt = (n) => Number(n || 0).toLocaleString("fr-FR");
+  const body = h("div", { class: "cons-view" },
+    h("p", { class: "muted" }, rows.length
+      ? "Tokens déjà comptés sur ce poste. Aucune nouvelle requête."
+      : "Aucune discussion n'a encore de tokens comptés."),
+    rows.length ? h("table", { class: "cons-table" },
+      h("thead", {}, h("tr", {}, ...["Discussion", "Compte", "Lu", "Écrit", "Sortie"].map((c) => h("th", {}, c)))),
+      h("tbody", {}, ...rows.slice(0, 40).map((r) => h("tr", {},
+        h("td", {}, r.title || r.id),
+        h("td", {}, [r.profile, r.project].filter(Boolean).join(" · ")),
+        h("td", {}, fmt(r.read)), h("td", {}, fmt(r.written)), h("td", {}, fmt(r.output)))))) : null);
+  await dialog({ title: "Consommation", body, buttons: [{ label: "Fermer", value: true, cls: "primary" }] });
 }
 
 function launcherSection() {
@@ -981,11 +1013,50 @@ function onKey(e) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save(); }
 }
 
+function tabEquipe() {
+  const box = h("div", { class: "muted" }, "Lecture du certificat…");
+  const token = h("input", { type: "password", autocomplete: "off", placeholder: "Coller le jeton, une seule fois" });
+  const paint = (s) => {
+    const lines = [];
+    if (s.error) lines.push(h("div", { class: "line err" }, s.error));
+    if (s.seen) lines.push(h("p", {}, "Empreinte vue : ", h("code", {}, pretty(s.seen))));
+    if (s.fingerprint) lines.push(h("p", {}, s.confirmed ? "Empreinte confirmée." : "L'empreinte confirmée ne correspond pas."));
+    if (s.user) lines.push(h("p", {}, `Compte : ${s.user.name}`));
+    else if (s.has_token) lines.push(h("p", {}, "Jeton enregistré."));
+    const confirm = h("button", { type: "button", class: "btn small", disabled: !s.seen, on: { click: () => {
+      setPath("hub.fingerprint", s.seen);
+      toast("Empreinte prête. Enregistre la configuration.", "ok");
+    } } }, "Confirmer cette empreinte");
+    box.replaceChildren(...lines, confirm);
+  };
+  api("/api/hub/probe", { method: "POST", body: { url: getPath("hub.url") || "" } })
+    .then((r) => api("/api/hub/status").then((s) => paint({ ...s, seen: r.fingerprint || s.seen })))
+    .catch((e) => box.replaceChildren(h("div", { class: "line err" }, e.message)));
+  return [
+    section("Hub", "JARVIS parle au serveur d'équipe. Le jeton reste sur ce poste, la page ne le voit pas.",
+      text("Adresse", "hub.url", { placeholder: "https://10.20.10.249:8443", help: "HTTPS du hub, port 8443." }),
+      check("Activer", "hub.enabled"),
+      check("Signaler les fichiers que Claude modifie", "hub.share_files", { help: "Désactivé : les autres voient seulement que tu es dans le projet." }),
+      field("Synchro", h("button", { type: "button", class: "btn small", on: { click: async () => {
+        try {
+          const r = await api("/api/hub/syncthing", { method: "POST", body: {} });
+          toast(r.device_id ? `Synchro lancée · ${r.device_id}` : "Synchro lancée.", "ok");
+        } catch (e) { toast(e.message, "err"); }
+      } } }, "Démarrer la synchro")),
+      box,
+      field("Jeton", h("div", { class: "row" }, token, h("button", { type: "button", class: "btn small", on: { click: async () => {
+        try { await api("/api/hub/token", { method: "POST", body: { token: token.value } }); token.value = ""; toast("Jeton enregistré.", "ok"); }
+        catch (e) { toast(e.message, "err"); }
+      } } }, "Enregistrer le jeton"))),
+    ),
+  ];
+}
+
 function render() {
   navEl.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   const scroll = bodyEl.scrollTop;
   const content = { general: tabGeneral, profiles: tabProfiles, permissions: tabPermissions, integrations: tabIntegrations,
-    documents: tabDocuments, models: tabModels, security: () => tabSecurity(ctx.state), interface: tabInterface, history: tabHistory }[tab]();
+    equipe: tabEquipe, documents: tabDocuments, models: tabModels, security: () => tabSecurity(ctx.state), interface: tabInterface, history: tabHistory }[tab]();
   bodyEl.replaceChildren(...content);
   bodyEl.scrollTop = scroll;
 }

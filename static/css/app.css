@@ -10,6 +10,13 @@
   --shadow-win: 0 24px 60px -18px rgba(0, 0, 0, .75), 0 8px 20px -10px rgba(0, 0, 0, .5);
   --shadow-pop: 0 18px 50px -12px rgba(0, 0, 0, .7), 0 0 0 1px var(--border-2);
   --code-bg: #171d26;
+  /* depth: light from above (--hi), shadow tint (--sh) and strength (--k) */
+  --hi: rgba(255, 255, 255, .06); --sh: 0, 0, 0; --k: 1;
+  --elev-1: inset 0 1px 0 var(--hi), 0 1px 2px rgba(var(--sh), calc(.22 * var(--k))), 0 3px 8px -4px rgba(var(--sh), calc(.35 * var(--k)));
+  --elev-2: inset 0 1px 0 var(--hi), 0 2px 4px rgba(var(--sh), calc(.2 * var(--k))), 0 12px 26px -12px rgba(var(--sh), calc(.55 * var(--k)));
+  --elev-3: 0 10px 30px -14px rgba(var(--sh), calc(.6 * var(--k))), 0 3px 8px -4px rgba(var(--sh), calc(.35 * var(--k)));
+  --elev-4: 0 34px 80px -24px rgba(var(--sh), calc(.85 * var(--k))), 0 12px 28px -12px rgba(var(--sh), calc(.55 * var(--k)));
+  --sink: inset 0 2px 4px -1px rgba(var(--sh), calc(.35 * var(--k)));
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
@@ -28,6 +35,7 @@
   --shadow-win: 0 20px 50px -20px rgba(15, 27, 39, .35), 0 6px 16px -8px rgba(15, 27, 39, .18);
   --shadow-pop: 0 16px 40px -12px rgba(15, 27, 39, .3), 0 0 0 1px var(--border-2);
   --code-bg: #f3f6f9;
+  --hi: rgba(255, 255, 255, .85); --sh: 15, 27, 39; --k: .4;
   color-scheme: light;
 }
 @media (prefers-color-scheme: light) {
@@ -42,6 +50,7 @@
     --shadow-win: 0 20px 50px -20px rgba(15, 27, 39, .35), 0 6px 16px -8px rgba(15, 27, 39, .18);
     --shadow-pop: 0 16px 40px -12px rgba(15, 27, 39, .3), 0 0 0 1px var(--border-2);
     --code-bg: #f3f6f9;
+    --hi: rgba(255, 255, 255, .85); --sh: 15, 27, 39; --k: .4;
     color-scheme: light;
   }
 }
@@ -208,6 +217,7 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 }
 .ppill:hover { border-color: var(--border-2); background: var(--surface-2); color: var(--text); }
 .ppill .sw { width: 8px; height: 8px; border-radius: 3px; background: var(--pc); }
+.ppill .pq { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-4); }
 .ppill .st { width: 6px; height: 6px; border-radius: 50%; background: var(--text-4); }
 .ppill .st.ok { background: var(--ok); box-shadow: 0 0 6px color-mix(in srgb, var(--ok) 70%, transparent); }
 .ppill .st.ko { background: var(--err); }
@@ -242,8 +252,20 @@ input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px;
 .lp-note.err { color: var(--err); background: var(--err-soft); }
 .lp-foot { display: flex; align-items: center; gap: 6px; border-top: 1px solid var(--border); padding-top: 8px; }
 .lp-help { margin: 0; font-size: 10.5px; color: var(--text-4); }
-@media (max-width: 1500px) { .top-actions .btn.ghost .lbl { display: none; } }
-@media (max-width: 860px) { .ppill .pn { display: none; } }
+/* the actions lose their names first when the bar runs short (app.js, fitTopbar), then go into the "Plus" menu */
+#topbar.compact .top-actions .btn.ghost .lbl { display: none; }
+/* the window's top bar keeps the gear alone; the integrated menu shows the name, like the other doors */
+#topbar .top-actions #btn-config .lbl { display: none; }
+@media (max-width: 1500px) { .brand-sub, .brand-sep { display: none; } }
+/* the actions that do not fit, in the "Plus" menu: with their names, one per line */
+.top-actions .more-menu { display: flex; flex-direction: column; min-width: 190px; }
+.top-actions .more-menu[hidden] { display: none; }
+.top-actions .more-menu .btn.ghost { width: 100%; height: 32px; justify-content: flex-start; gap: 9px; padding: 0 10px; }
+.top-actions .more-menu .btn.ghost .lbl { display: inline; }
+.top-actions .more-menu .menu-wrap { width: 100%; }
+.top-actions .more-menu > .menu-wrap > .menu { top: 0; right: calc(100% + 6px); left: auto; }
+@media (max-width: 1100px) { #topbar .em-long { display: none; } }
+@media (max-width: 860px) { .ppill .pn, #topbar .ppill .lg-txt { display: none; } }
 .top-actions { display: flex; gap: 2px; align-items: center; }
 .top-actions .btn.ghost { height: 30px; padding: 0 10px; }
 .top-actions .btn.danger { margin-left: 6px; }
@@ -393,6 +415,28 @@ html.native-doc.widget-doc, html.native-doc.widget-doc body { background: transp
 .s-done { color: var(--ok); background: var(--ok-soft); }
 .s-error { color: var(--err); background: var(--err-soft); }
 .s-cancelled, .s-interrupted { color: var(--text-3); }
+/* the status light along the head's lower edge: a spark runs while the discussion works, an amber glow breathes
+   while it waits for the user, a flash of green (red) when it ends; it can be read from across the desktop */
+.win-light { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none; opacity: 0;
+  transition: opacity .4s var(--ease); --lc: var(--pc, var(--accent)); }
+.win:is([data-st="running"], [data-st="queued"]) .win-light { opacity: 1;
+  background: linear-gradient(90deg, transparent, var(--lc), color-mix(in srgb, var(--lc) 40%, #fff), var(--lc), transparent) no-repeat;
+  background-size: 34% 100%; animation: jv-run 1.8s cubic-bezier(.45, .05, .55, .95) infinite; }
+.win[data-st="queued"] .win-light { opacity: .5; animation-duration: 3.2s; }
+.win[data-st="awaiting"] .win-light { --lc: var(--warn); opacity: 1; background: var(--lc);
+  box-shadow: 0 0 10px 1px color-mix(in srgb, var(--lc) 70%, transparent); animation: jv-wait 1.6s ease-in-out infinite; }
+.win[data-st="awaiting"] .win-head { background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 14%, transparent), color-mix(in srgb, var(--warn) 4%, transparent)), var(--surface); }
+.glass .win.native[data-st="awaiting"] .win-head { background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 22%, transparent), color-mix(in srgb, var(--warn) 6%, transparent)); }
+.win:is(.lit-ok, .lit-ko) .win-light { --lc: var(--ok); background: var(--lc); animation: jv-flash 2.4s var(--ease) both;
+  box-shadow: 0 0 14px 2px color-mix(in srgb, var(--lc) 75%, transparent); }
+.win.lit-ko .win-light { --lc: var(--err); }
+@keyframes jv-run { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+@keyframes jv-wait { 50% { opacity: .45; } }
+@keyframes jv-flash { 0% { opacity: 0; transform: scaleX(.2); } 12% { opacity: 1; transform: none; } 55% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .win .win-light { animation: none !important; background-size: 100% 100%; }
+  .win:is(.lit-ok, .lit-ko) .win-light { opacity: 1; }
+}
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
 .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
@@ -435,6 +479,9 @@ button.meta-chip:hover { border-color: var(--border-3); color: var(--text); }
 .win-body > *, .agentcard .ab > * { flex-shrink: 0; } /* overflow-hidden items would otherwise shrink to nothing */
 .win-approvals { flex: none; max-height: 55%; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); background: linear-gradient(180deg, var(--warn-soft), transparent 80%); }
 .win-approvals:empty { display: none; }
+.win-approvals .appr[hidden] { display: none; }
+.appr-nav { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; }
+.appr-nav span { margin-right: auto; font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; }
 .win-foot { flex: none; display: flex; gap: 6px; align-items: flex-end; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--surface); }
 .win-foot textarea { flex: 1; resize: none; height: 32px; max-height: 120px; background: var(--surface-2); border-color: var(--border); border-radius: 9px; padding: 6px 10px; }
 .win-foot textarea:focus { border-color: color-mix(in srgb, var(--pc) 55%, var(--border-2)); outline: none; }
@@ -742,6 +789,9 @@ pre, .codeblock pre {
 }
 .chip-select::after { content: ""; position: absolute; right: 9px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid var(--text-3); border-bottom: 1.5px solid var(--text-3); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
 .chip-select select option { background: var(--surface); color: var(--text); }
+.folder-menu { position: fixed; z-index: 80; top: auto; right: auto; max-height: min(320px, 70vh); overflow: auto; min-width: 220px; }
+.folder-menu button.on { background: var(--surface-3); font-weight: 600; }
+#folder-pop { position: absolute; left: 0; bottom: calc(100% + 8px); width: 1px; visibility: hidden; pointer-events: none; }
 .chip-select.grow { flex: 1 1 160px; }
 .chip-toggle {
   display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 9px; font-size: 12px;
@@ -889,6 +939,14 @@ pre, .codeblock pre {
   background: repeating-conic-gradient(var(--surface-2) 0 25%, var(--surface-3) 0 50%) 0 0 / 18px 18px; }
 .pv-img.full { max-width: none; max-height: none; margin: 0; cursor: zoom-out; }
 .pv-frame { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--surface); }
+.pv-pdf { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pv-pdf-text { flex: 1; min-height: 0; overflow: auto; }
+.pv-pdf-text[hidden] { display: none; }
+.pv-pdf-text h4 { margin: 16px 20px 0; font-size: 12px; color: var(--text-3); }
+.cons-view { max-height: 60vh; overflow: auto; }
+.cons-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.cons-table th, .cons-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.cons-table td:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
 .pv-frame.white { background: #fff; }
 .pv-note { flex: none; font-size: 11.5px; color: var(--text-3); padding: 6px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .pv-text { padding: 18px 24px; }
@@ -921,6 +979,10 @@ html.col-resizing, html.col-resizing * { cursor: col-resize !important; user-sel
   display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; box-shadow: inset 0 -2px 0 transparent; }
 .pj-tabs button:hover { color: var(--text); background: var(--surface-2); }
 .pj-tabs button.on { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.pj-groups { border-bottom: 0; padding-bottom: 0; }
+.pj-sub { padding-top: 0; }
+.pj-section { scroll-margin-top: 8px; }
+.pj-section + .pj-section { border-top: 1px solid var(--border); padding-top: 12px; }
 .pj-tabs .cnt { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
 .pj-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 18px; display: flex; flex-direction: column; gap: 12px; }
 .pj-body > * { flex-shrink: 0; }
@@ -1727,12 +1789,34 @@ html.bar-doc, html.bar-doc body { background: transparent; }
 html.bar-doc body { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
 html.bar-doc #dock { position: static; padding: 0 14px 14px; pointer-events: auto; }
 html.bar-doc #cmd-input { height: 72px; min-height: 72px; max-height: 72px; overflow-y: auto; }
-/* no backdrop to blur behind a window of the OS: an almost solid surface, a shorter shadow (the window ends there) */
-html.bar-doc .composer { max-width: none; background: color-mix(in srgb, var(--surface) 97%, transparent);
-  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px var(--border-2); }
-html.bar-doc .composer:focus-within { box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 45%, var(--border-2)); }
-html.bar-doc .taskbar { max-width: none; }
-html.bar-doc .tpill { background: color-mix(in srgb, var(--surface) 97%, transparent); }
+/* no backdrop to blur behind a window of the OS: the bar's own layers give it depth, in the room its window
+   leaves (14px under the prompt): the prompt is a raised slab lit from above, its tool row a tray sunk into it,
+   the emblem, the send button and the discussions' pills stand on it; shadows stay short (the window ends there) */
+html.bar-doc { --bar-lift: inset 0 1px 0 var(--hi), 0 1px 2px rgba(var(--sh), calc(.3 * var(--k))),
+  0 8px 14px -7px rgba(var(--sh), calc(.7 * var(--k))); }
+html.bar-doc .composer { max-width: none; backdrop-filter: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 70%, var(--surface)), var(--surface) 46px);
+  box-shadow: var(--bar-lift), 0 0 0 1px var(--border-2); }
+/* the settings panel is placed on the Réglages button (app.js); it must paint over the pills and the menu */
+html.bar-doc .opt-panel { z-index: 80; }
+html.bar-doc .composer:focus-within { box-shadow: var(--bar-lift), 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 45%, var(--border-2)),
+  0 0 0 3px color-mix(in srgb, var(--pc, var(--accent)) 14%, transparent); }
+html.bar-doc .composer-bar { margin: 0 6px 6px; padding: 4px 4px 4px 6px; border-radius: 11px;
+  background: color-mix(in srgb, var(--bg-2) 55%, var(--surface)); box-shadow: var(--sink), 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
+html.bar-doc .composer-bar :is(.chip-select, .chip-toggle, .bar-tool):hover { background: var(--surface-2); box-shadow: var(--elev-1); }
+html.bar-doc .composer-bar :is(.chip-select, .chip-toggle, .bar-tool):active,
+html.bar-doc .composer-bar .chip-toggle[aria-pressed="true"] { box-shadow: var(--sink); }
+html.bar-doc .bar-jarvis { background: var(--surface-2); border-color: var(--border); box-shadow: var(--elev-1); }
+html.bar-doc .bar-jarvis:hover, html.bar-doc .bar-jarvis.on { background: var(--surface-3); border-color: var(--border-2); }
+html.bar-doc .bar-jarvis:active { box-shadow: var(--sink); }
+html.bar-doc .send-btn { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, #fff), var(--accent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3), 0 1px 2px rgba(var(--sh), calc(.3 * var(--k))),
+  0 4px 10px -4px color-mix(in srgb, var(--accent) 70%, transparent); }
+html.bar-doc .send-btn:active { box-shadow: inset 0 2px 3px rgba(0, 0, 0, .25); }
+html.bar-doc .taskbar { max-width: none; padding: 2px 2px 10px; }
+html.bar-doc .tpill { backdrop-filter: none; box-shadow: var(--elev-1), 0 0 0 1px transparent;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 70%, var(--surface)), var(--surface)); }
+html.bar-doc .tpill:hover { background: var(--surface-2); box-shadow: var(--elev-2); }
 html.bar-doc .toasts { position: static; align-items: center; padding: 0 14px 8px; }
 html.bar-doc .composer-tools .bar-tool { width: 30px; height: 30px; }
 html.bar-doc .composer-tools .bar-pin.on { color: var(--accent); }
@@ -1743,8 +1827,8 @@ html.bar-doc .composer-tools .bar-pin.on { color: var(--accent); }
 .bar-jarvis .bar-logo { width: 26px; height: 26px; }
 /* the JARVIS menu: the top bar and the home screen of the JARVIS window */
 html.bar-doc .bar-menu { margin: 0 0 8px; padding: 12px 12px 10px; border-radius: 16px; display: flex; flex-direction: column; gap: 12px;
-  max-height: 480px; overflow: auto; background: color-mix(in srgb, var(--surface) 97%, transparent);
-  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, .65), 0 0 0 1px var(--border-2); animation: drop .14s var(--ease); }
+  max-height: 480px; overflow: auto; background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 60%, var(--surface)), var(--surface) 60px);
+  box-shadow: var(--bar-lift), 0 0 0 1px var(--border-2); animation: drop .14s var(--ease); }
 html.bar-doc .bar-menu[hidden] { display: none; }
 
 /* command bar at the top of the screen: the whole bar (prompt and its controls) sits on that edge,
@@ -1779,9 +1863,13 @@ html.bar-doc[data-bar="haut"] .toasts { order: 2; }
 .bm-actions .top-actions .btn.danger { justify-content: center; }
 .bm-actions #btn-install { display: none; }
 .bm-actions .menu { left: 0; right: auto; }
+.bm-actions .more-menu > .menu-wrap > .menu { top: 0; left: calc(100% + 6px); right: auto; }
+.sess-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .bm-home .home-grid { width: 100%; gap: 12px; }
 .bm-home .home-cards { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .bm-home .home-card { padding: 9px 12px 9px 14px; }
+html.bar-doc .bm-home .home-card { box-shadow: var(--elev-1); }
+html.bar-doc .bm-home .home-card:hover { box-shadow: var(--elev-2); }
 .bm-home .home-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 /* above the bar: the notices of the console and the reminders */
 .bar-notices { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 14px; }
@@ -1808,10 +1896,11 @@ html.dialog-doc.fitted #modal-root > .overlay:first-child { background: none; ba
   align-items: stretch; justify-content: stretch; }
 html.dialog-doc.fitted #modal-root > .overlay:first-child > * { width: 100%; max-width: none; height: auto; max-height: none; flex: 1;
   border: 0; border-radius: 0; box-shadow: none; animation: none; margin: 0; }
-/* (its title is in the title strip) */
-html.dialog-doc.fitted #modal-root > .overlay:first-child > .dialog > h3:first-child,
-html.dialog-doc.fitted #modal-root > .overlay:first-child > .cfg > .cfg-head { display: none; }
-html.dialog-doc.fitted #modal-root > .overlay:first-child > .dialog > h3:first-child + .dialog-body { padding-top: 14px; }
+/* (its title is in the title strip; .measuring: already so while the page measures the dialog, see wm.fitFrame) */
+html.dialog-doc:is(.fitted, .measuring) #modal-root > .overlay:first-child > .dialog > h3:first-child,
+html.dialog-doc:is(.fitted, .measuring) #modal-root > .overlay:first-child > .cfg > .cfg-head { display: none; }
+html.dialog-doc:is(.fitted, .measuring) #modal-root > .overlay:first-child > .dialog > h3:first-child + .dialog-body { padding-top: 14px; }
+html.dialog-doc.measuring #modal-root > .overlay:first-child > * { border: 0; }
 /* a panel's window: the drawer fills it, its head is the title strip */
 html.panel-doc .drawer { position: static; width: 100%; height: 100%; padding-bottom: 0; border: 0; box-shadow: none; animation: none;
   backdrop-filter: none; background: var(--surface); }
@@ -1941,3 +2030,154 @@ html.panel-doc .drawer-head > .icon-btn[title="Fermer"] { display: none; }
   background: var(--surface-2); border-bottom: 1px solid var(--border); }
 .ad-grant[hidden] { display: none; }
 .ad-grant span { flex: 1; }
+
+/* ------------------------------------------------ depth */
+/* each layer sits on the one below: raised (--elev-n, lit from above) or sunk into it (--sink) */
+.win:not(.native) { box-shadow: var(--elev-3), 0 0 0 1px var(--border-2); transition: box-shadow .25s var(--ease); }
+.win:not(.native).focused { box-shadow: var(--elev-4), 0 0 0 1px color-mix(in srgb, var(--pc, var(--accent)) 45%, var(--border-2)), 0 0 0 4px color-mix(in srgb, var(--pc, var(--accent)) 8%, transparent); }
+/* windows without the focus step back: dimmed, closer to the desk */
+.win::after { content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none; border-radius: inherit;
+  background: rgba(var(--sh), calc(.26 * var(--k))); opacity: 0; transition: opacity .25s var(--ease); }
+#desktop:has(.win.focused) .win:not(.focused, .native)::after { opacity: 1; }
+#desktop:has(.win.focused) .win:not(.focused, .native) { box-shadow: var(--elev-2), 0 0 0 1px var(--border); }
+/* inside a window: the head is a lit lid, the timeline scrolls under it, the footer is a shelf above it */
+.win-head { box-shadow: inset 0 1px 0 var(--hi); }
+.win-body {
+  background:
+    linear-gradient(var(--surface) 40%, transparent) top / 100% 30px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(var(--sh), calc(.45 * var(--k))), transparent) top / 100% 12px no-repeat scroll;
+}
+.win-foot { position: relative; box-shadow: 0 -10px 20px -14px rgba(var(--sh), calc(.6 * var(--k))), inset 0 1px 0 var(--hi); }
+.win-foot textarea { box-shadow: var(--sink); }
+@container (min-width: 621px) { .insp { box-shadow: inset 12px 0 16px -14px rgba(var(--sh), calc(.6 * var(--k))); } }
+.stat, .card, .msg.user, .agentcard, .tgroup > summary .chev { box-shadow: var(--elev-1); }
+.agentcard[open] { box-shadow: var(--elev-2); }
+pre, .codeblock pre { box-shadow: var(--sink); }
+.meta-chip { box-shadow: inset 0 1px 0 var(--hi); }
+.btn:not(.ghost) { box-shadow: inset 0 1px 0 var(--hi), 0 1px 2px rgba(var(--sh), calc(.25 * var(--k))); }
+.btn.primary { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), 0 2px 6px -2px color-mix(in srgb, var(--accent) 50%, transparent); }
+.btn:not(.ghost):active { box-shadow: var(--sink); }
+/* modals, menus, panels: the same layers as the windows. A modal is the highest sheet (a lit rim, a lid for a
+   head, a shelf for its actions); its side lists sink into it; its fields are hollowed in it */
+.dialog { box-shadow: var(--elev-4), 0 0 0 1px var(--border-2), inset 0 1px 0 var(--hi); }
+.overlay { background: color-mix(in srgb, var(--bg) 58%, rgba(var(--sh), calc(.35 * var(--k)))); }
+:is(.cfg-head, .viewer-head, .dsp-mhead, .fp-head, .drawer-head) { position: relative;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--pc, var(--accent)) 7%, var(--surface-2)), var(--surface));
+  box-shadow: inset 0 1px 0 var(--hi); }
+.dialog.tinted .viewer-head, .dialog.tinted .dsp-mhead { background: linear-gradient(90deg, color-mix(in srgb, var(--pc-a) 9%, var(--surface-2)), color-mix(in srgb, var(--pc-p) 9%, var(--surface-2)) 70%, var(--surface)); }
+:is(.dialog .dialog-actions, .cfg-foot, .viewer-foot, .fp-foot) { position: relative; box-shadow: 0 -10px 20px -14px rgba(var(--sh), calc(.6 * var(--k))), inset 0 1px 0 var(--hi); }
+:is(.cfg-nav, .fp-places) { box-shadow: inset -12px 0 16px -14px rgba(var(--sh), calc(.6 * var(--k))); }
+.cfg-nav button.active, .fp-places button.on { box-shadow: var(--elev-1), inset 2px 0 0 var(--pc, var(--accent)); background: var(--surface-2); }
+.split .list button.active { box-shadow: var(--elev-1); }
+:is(.dialog, .drawer, .popover, .menu, .opt-panel) :is(input[type="text"], input[type="number"], input[type="password"], input[type="search"], input:not([type]), select, textarea) { box-shadow: var(--sink); }
+.probe, .cloud-block, .prop-code, .fp-list { box-shadow: var(--sink); }
+.menu, .popover, .toast { box-shadow: var(--elev-3), 0 0 0 1px var(--border-2), inset 0 1px 0 var(--hi); }
+.drawer { box-shadow: -30px 0 60px -30px rgba(var(--sh), calc(.6 * var(--k))), -1px 0 0 var(--border-2), inset 1px 0 0 var(--hi); }
+.hrow:hover, .home-card:hover { box-shadow: var(--elev-1); }
+/* a module's window: its page joins the window under a lit grant shelf */
+.ad-grant { box-shadow: inset 0 1px 0 var(--hi), 0 6px 14px -10px rgba(var(--sh), calc(.6 * var(--k))); position: relative; z-index: 1; }
+
+/* ------------------------------------------------ glass (desktop app on Windows 11 and macOS, "Intégré au bureau": html.glass)
+   the window itself is frosted glass (acrylic or vibrancy; mica for the widgets): the page leaves it clear, its strips are
+   tinted veils over it, and what it holds (messages, cards, code) stands on the glass as solid panes */
+html.glass.native-doc, html.glass.native-doc body { background: transparent; }
+/* the system reduces transparency (Windows: "Effets de transparence" off; macOS: "Réduire la transparence"),
+   switched while the app runs: the material turns flat, the page lays a solid ground under its veils (at the next
+   start, the windows open without glass) */
+@media (prefers-reduced-transparency: reduce) {
+  html.glass.native-doc body { background: var(--surface); }
+  html.glass.native-doc * { backdrop-filter: none !important; }
+}
+@keyframes glass-in { from { opacity: 0; transform: translateY(6px) scale(.995); } }
+/* the glass takes the account's color: a glow from the top corner, stronger on the window in front */
+.glass .win.native { --glow: 9%;
+  background: radial-gradient(90% 70% at 0 0, color-mix(in srgb, var(--pc) var(--glow), transparent), transparent 70%),
+    color-mix(in srgb, var(--surface) 42%, transparent);
+  animation: glass-in .32s var(--ease); }
+.glass .win.native.focused { --glow: 16%; }
+.glass .win.native .win-head { background: linear-gradient(180deg, color-mix(in srgb, var(--pc) 18%, transparent), color-mix(in srgb, var(--pc) 5%, transparent));
+  border-bottom-color: var(--border-2); box-shadow: inset 0 1px 0 var(--hi), 0 6px 14px -10px rgba(var(--sh), calc(.6 * var(--k))); z-index: 3; }
+/* the window in front: a line of light in the account's color along its top */
+.glass .win.native .win-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--pc, var(--accent)) 30%, var(--pc, var(--accent)) 70%, transparent);
+  box-shadow: 0 0 12px var(--pc, var(--accent)); opacity: 0; transition: opacity .3s var(--ease); }
+.glass .win.native.focused .win-head::before { opacity: .85; }
+.glass .win.native :is(.win-sub, .win-plan) { background: color-mix(in srgb, var(--surface) 22%, transparent); }
+/* the timeline fades as it slides under the head (no solid color to paint a scroll shadow with) */
+/* what the window holds floats above the glass, in three heights: the inspector (1), the cards (2), the
+   composer hovering over the bottom (3); shadows fall on the glass, a little stronger than on solid ground */
+html.glass { --kg: calc(var(--k) + .25);
+  --float-1: inset 0 1px 0 var(--hi), 0 1px 2px rgba(var(--sh), calc(.22 * var(--kg))), 0 8px 18px -8px rgba(var(--sh), calc(.5 * var(--kg)));
+  --float-2: inset 0 1px 0 var(--hi), 0 2px 5px rgba(var(--sh), calc(.22 * var(--kg))), 0 16px 32px -12px rgba(var(--sh), calc(.62 * var(--kg)));
+  --float-3: inset 0 1px 0 var(--hi), 0 4px 10px -2px rgba(var(--sh), calc(.3 * var(--kg))), 0 24px 48px -16px rgba(var(--sh), calc(.75 * var(--kg))); }
+/* the timeline fades as it slides under the head and the composer (no solid color for a scroll shadow) */
+.glass .win.native .win-body { background: none; padding-bottom: 22px;
+  mask-image: linear-gradient(transparent, #000 14px, #000 calc(100% - 16px), transparent); }
+/* the composer: one pill hovering over the bottom (field, attachment and send inside), ringed in the
+   account's color while one writes */
+.glass .win.native .win-foot { margin: 2px 12px 12px; padding: 4px; gap: 4px; align-items: flex-end; border: 1px solid var(--border-2);
+  border-radius: 16px; background: color-mix(in srgb, var(--surface) 86%, transparent); box-shadow: var(--float-3);
+  transition: box-shadow .25s var(--ease), border-color .2s; }
+.glass .win.native .win-foot:focus-within { border-color: color-mix(in srgb, var(--pc) 50%, var(--border-2));
+  box-shadow: var(--float-3), 0 0 0 4px color-mix(in srgb, var(--pc) 16%, transparent); }
+.glass .win.native .win-foot textarea { min-height: 34px; padding: 7px 10px; border: 0; background: none; box-shadow: none; }
+.glass .win.native .win-foot :is(.att-btn, .send-mini) { width: 34px; height: 34px; border-radius: 12px; }
+.glass .win.native .send-mini { background: color-mix(in srgb, var(--pc) 24%, var(--surface-3)); color: var(--text); box-shadow: inset 0 1px 0 var(--hi); }
+.glass .win.native .send-mini:hover { background: var(--accent); color: var(--accent-ink); }
+/* a desktop window behind another JARVIS window steps back: its content fades and loses color, the inspector
+   recedes, the composer sinks (the glass, for its part, frosts over on its own) */
+.win.native :is(.win-sub, .win-plan, .win-body, .insp, .win-foot) { transition: opacity .35s var(--ease), filter .35s var(--ease), box-shadow .35s var(--ease); }
+.win.native.behind :is(.win-sub, .win-plan, .win-body) { opacity: .74; filter: saturate(.6); }
+.win.native.behind .insp { opacity: .55; filter: saturate(.5); }
+.win.native.behind .win-foot { opacity: .8; }
+.glass .win.native.behind .win-foot { box-shadow: var(--float-1); }
+.win.native.behind .win-head { color: var(--text-3); }
+@container (min-width: 621px) {
+  .glass .win.native .insp { margin: 10px 10px 10px 0; border: 1px solid var(--border-2); border-radius: 14px;
+    background: color-mix(in srgb, var(--surface) 58%, transparent); box-shadow: var(--float-1); }
+}
+.glass .win.native :is(.msg.user, .agentcard, .stat, .card, .tgroup > summary .chev) { box-shadow: var(--float-1); }
+.glass .win.native .msg.user { background: color-mix(in srgb, var(--pc) 14%, var(--surface-3)); box-shadow: var(--float-2); }
+.glass .win.native .agentcard { background: color-mix(in srgb, var(--surface) 82%, transparent); }
+.glass .win.native .result { box-shadow: var(--float-2);
+  background: linear-gradient(180deg, var(--ok-soft), transparent), color-mix(in srgb, var(--surface) 80%, transparent); }
+.glass .win.native .result.is-error { background: linear-gradient(180deg, var(--err-soft), transparent), color-mix(in srgb, var(--surface) 80%, transparent); }
+.glass .win.native .meta-chip { box-shadow: var(--float-1); }
+/* a card under the pointer rises a little more */
+.glass .win.native :is(.agentcard, .stat, .result) { transition: transform .2s var(--ease), box-shadow .2s var(--ease); }
+.glass .win.native :is(.agentcard, .stat, .result):hover { transform: translateY(-1px); box-shadow: var(--float-3); }
+/* framed windows: panels and modals */
+html.glass.frame-doc body { background: transparent; }
+html.glass .frame-head { background: color-mix(in srgb, var(--surface) 30%, transparent); box-shadow: inset 0 1px 0 var(--hi); }
+html.glass.panel-doc .drawer { background: color-mix(in srgb, var(--surface) 42%, transparent); animation: glass-in .32s var(--ease); }
+html.glass.panel-doc .drawer-head { box-shadow: inset 0 1px 0 var(--hi), 0 6px 14px -10px rgba(var(--sh), calc(.6 * var(--k))); }
+html.glass.dialog-doc.fitted #modal-root > .overlay:first-child > * { background: color-mix(in srgb, var(--surface) 50%, transparent); }
+/* the title strip of a panel or a modal: tinted like a discussion's head, the same line of light along its top */
+html.glass .frame-head { background: linear-gradient(180deg, color-mix(in srgb, var(--pc, var(--accent)) 16%, transparent), color-mix(in srgb, var(--pc, var(--accent)) 4%, transparent));
+  border-bottom-color: var(--border-2); }
+html.glass .frame-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; opacity: .7;
+  background: linear-gradient(90deg, transparent, var(--pc, var(--accent)) 30%, var(--pc, var(--accent)) 70%, transparent); box-shadow: 0 0 12px var(--pc, var(--accent)); }
+/* inside a framed modal or panel: its strips are veils over the glass, what it holds stands on it as solid panes */
+html.glass.frame-doc :is(.cfg-nav, .fp-places) { background: color-mix(in srgb, var(--surface) 22%, transparent); }
+html.glass.frame-doc :is(.cfg-foot, .viewer-foot, .fp-foot, .dialog-actions) { background: color-mix(in srgb, var(--surface) 30%, transparent); }
+html.glass.frame-doc :is(.viewer-head, .dsp-mhead, .fp-head) { background: color-mix(in srgb, var(--surface) 22%, transparent); }
+html.glass.panel-doc .drawer-head { background: linear-gradient(180deg, color-mix(in srgb, var(--pc, var(--accent)) 14%, transparent), color-mix(in srgb, var(--pc, var(--accent)) 3%, transparent)); }
+html.glass.frame-doc :is(.card, .cloud-block, .home-card, .split .list button) { box-shadow: var(--float-1); }
+html.glass.frame-doc .card { background: color-mix(in srgb, var(--surface-2) 86%, transparent); }
+html.glass.frame-doc .hrow:hover { background: color-mix(in srgb, var(--surface-2) 70%, transparent); box-shadow: var(--float-1); }
+html.glass.frame-doc :is(.menu, .popover) { box-shadow: var(--float-3), 0 0 0 1px var(--border-2); }
+/* a question asked on top of a framed modal stays a sheet of its own, floating above the glass */
+html.glass.dialog-doc #modal-root > .overlay:not(:first-child) > .dialog { box-shadow: var(--float-3), 0 0 0 1px var(--border-2); }
+/* previews and modules on the glass: the page is a solid pane set into the window, a margin of glass around it */
+.glass .win.native .pv-body { background: color-mix(in srgb, var(--bg-2) 62%, transparent); }
+.glass .win.native.ad-win .ad-body { background: none; padding: 0 8px 8px; }
+.glass .win.native.ad-win .ad-frame { border-radius: 12px; border: 1px solid var(--border-2); box-shadow: var(--float-2); }
+.glass .win.native.ad-win .ad-grant { margin: 0 0 8px; border: 1px solid var(--border-2); border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent); box-shadow: var(--float-1); }
+/* widgets: Windows draws the corners and the shadow, the card fills the window */
+.glass.widget-doc .wg { inset: 0; border: 0; border-radius: 0;
+  background: radial-gradient(100% 60% at 0 0, color-mix(in srgb, var(--pc, var(--accent)) 12%, transparent), transparent 70%), color-mix(in srgb, var(--surface) 30%, transparent);
+  box-shadow: inset 0 1px 0 var(--hi); animation: glass-in .32s var(--ease); }
+.glass.widget-doc .dsp-kpi { background: color-mix(in srgb, var(--surface-2) 82%, transparent); box-shadow: var(--float-1); }
+.glass.widget-doc .wg-head { background: linear-gradient(180deg, color-mix(in srgb, var(--pc, var(--accent)) 14%, transparent), transparent);
+  border-bottom-color: var(--border-2); }

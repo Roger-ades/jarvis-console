@@ -41,7 +41,7 @@ export function setupBar({ dock, popups, menu, notices }) {
     h("div", { class: "bm-home" }, menu.home));
   dock.prepend(menuEl);
   menuBtn = h("button", { type: "button", class: "bar-jarvis", "aria-expanded": "false", "aria-label": "Menu JARVIS",
-    title: "Menu JARVIS : projets, reprendre, historique, notes, routines, configuration…", on: { click: () => toggleMenu() } },
+    title: "Menu JARVIS : projets, reprendre, discussions, notes, routines, configuration…", on: { click: () => toggleMenu() } },
   logo("bar-logo"), menuCount = h("span", { class: "bj-count", hidden: true }));
   dock.querySelector(".composer-bar")?.prepend(menuBtn);
   const field = dock.querySelector("#cmd-input");
@@ -114,5 +114,5 @@ export function setMenuBadge(n) {
   if (!menuCount) return;
   menuCount.hidden = !n;
   menuCount.textContent = String(n || "");
-  menuBtn.title = `Menu JARVIS${n ? ` · ${n} à faire dans la boîte de réception` : ""} : projets, reprendre, historique, notes, routines, configuration…`;
+  menuBtn.title = `Menu JARVIS${n ? ` · ${n} à faire dans la boîte de réception` : ""} : projets, reprendre, discussions, notes, routines, configuration…`;
 }

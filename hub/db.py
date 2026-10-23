@@ -44,6 +44,32 @@ CREATE TABLE IF NOT EXISTS audit (
     detail TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    rev INTEGER NOT NULL,
+    parent_id TEXT,
+    created REAL NOT NULL,
+    updated REAL NOT NULL,
+    size INTEGER NOT NULL,
+    stats TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    removed REAL
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    ts REAL NOT NULL,
+    text TEXT NOT NULL,
+    refs TEXT NOT NULL,
+    edited REAL,
+    deleted REAL
+);
+CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, ts);
 """
 
 COLORS = ("#40dcff", "#7dffb3", "#ffb020", "#ff7ad9", "#c9a6ff", "#ff8f6b")
@@ -54,8 +80,9 @@ def hash_token(token: str) -> str:
 
 
 class HubDB:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, files: Path | None = None):
         self.path = Path(path)
+        self.files = Path(files) if files else self.path.parent
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self.db = sqlite3.connect(str(self.path), check_same_thread=False, isolation_level=None)
@@ -324,6 +351,144 @@ class HubDB:
             for r in rows
         ]
 
+    def is_member(self, user_id: str, project_id: str) -> bool:
+        with self._lock:
+            row = self.db.execute(
+                "SELECT 1 FROM members WHERE project_id=? AND user_id=?",
+                (project_id, user_id),
+            ).fetchone()
+        return row is not None
+
+    def save_conversation(self, author: str, project_id: str, *, title: str, session_id: str,
+                          mode: str, stats: dict, blob: bytes, parent: str | None) -> dict:
+        conv_id = parent or secrets.token_hex(8)
+        dest_dir = self.files / "conversations" / conv_id
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        def go():
+            if self.db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise KeyError(project_id)
+            now = time.time()
+            if parent:
+                row = self.db.execute(
+                    "SELECT author_id, rev, removed FROM conversations WHERE id=?", (parent,)
+                ).fetchone()
+                if row is None or row["removed"] is not None:
+                    raise KeyError(parent)
+                if row["author_id"] != author:
+                    raise PermissionError("auteur")
+                rev = row["rev"] + 1
+                self.db.execute(
+                    "UPDATE conversations SET rev=?, updated=?, size=?, stats=?, mode=?, title=? WHERE id=?",
+                    (rev, now, len(blob), json.dumps(stats, ensure_ascii=False), mode, title, parent),
+                )
+            else:
+                rev = 1
+                self.db.execute(
+                    "INSERT INTO conversations(id, project_id, author_id, title, session_id, rev, parent_id, "
+                    "created, updated, size, stats, mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (conv_id, project_id, author, title, session_id, rev, None, now, now, len(blob),
+                     json.dumps(stats, ensure_ascii=False), mode),
+                )
+            path = dest_dir / f"{rev}.zip"
+            path.write_bytes(blob)
+            self._audit(author, "conversation.publish", {"project": project_id, "id": conv_id, "rev": rev, "mode": mode})
+            return self._conversation(conv_id)
+
+        return self._write(go)
+
+    def conversations_of(self, project_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT * FROM conversations WHERE project_id=? AND removed IS NULL ORDER BY updated DESC",
+                (project_id,),
+            ).fetchall()
+        return [_conversation_row(r) for r in rows]
+
+    def conversation(self, conv_id: str) -> dict | None:
+        with self._lock:
+            return self._conversation(conv_id)
+
+    def conversation_zip(self, conv_id: str, rev: int | None) -> Path | None:
+        with self._lock:
+            row = self.db.execute(
+                "SELECT rev, removed FROM conversations WHERE id=?", (conv_id,)
+            ).fetchone()
+        if row is None or row["removed"] is not None:
+            return None
+        wanted = row["rev"] if rev is None else rev
+        path = self.files / "conversations" / conv_id / f"{wanted}.zip"
+        return path if path.is_file() else None
+
+    def remove_conversation(self, actor: str, conv_id: str, *, admin: bool) -> None:
+        def go():
+            row = self.db.execute(
+                "SELECT author_id, project_id, removed FROM conversations WHERE id=?", (conv_id,)
+            ).fetchone()
+            if row is None or row["removed"] is not None:
+                raise KeyError(conv_id)
+            if row["author_id"] != actor and not admin:
+                raise PermissionError("auteur")
+            self.db.execute("UPDATE conversations SET removed=? WHERE id=?", (time.time(), conv_id))
+            self._audit(actor, "conversation.remove", {"id": conv_id, "project": row["project_id"]})
+
+        self._write(go)
+
+    def add_message(self, author: str, project_id: str, text: str, refs: list) -> dict:
+        msg_id = secrets.token_hex(8)
+
+        def go():
+            if self.db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise KeyError(project_id)
+            now = time.time()
+            self.db.execute(
+                "INSERT INTO messages(id, project_id, author_id, ts, text, refs) VALUES(?,?,?,?,?,?)",
+                (msg_id, project_id, author, now, text, json.dumps(refs, ensure_ascii=False)),
+            )
+            self._audit(author, "message.add", {"project": project_id, "id": msg_id})
+            return self._message(msg_id)
+
+        return self._write(go)
+
+    def messages_of(self, project_id: str, before: float | None, limit: int = 50) -> list[dict]:
+        with self._lock:
+            if before is None:
+                rows = self.db.execute(
+                    "SELECT * FROM messages WHERE project_id=? ORDER BY ts DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            else:
+                rows = self.db.execute(
+                    "SELECT * FROM messages WHERE project_id=? AND ts<? ORDER BY ts DESC LIMIT ?",
+                    (project_id, before, limit),
+                ).fetchall()
+        return [_message_row(r) for r in reversed(rows)]
+
+    def edit_message(self, actor: str, msg_id: str, *, text: str | None, delete: bool) -> dict:
+        def go():
+            row = self.db.execute("SELECT author_id, deleted FROM messages WHERE id=?", (msg_id,)).fetchone()
+            if row is None or row["deleted"] is not None:
+                raise KeyError(msg_id)
+            if row["author_id"] != actor:
+                raise PermissionError("auteur")
+            now = time.time()
+            if delete:
+                self.db.execute("UPDATE messages SET deleted=?, text='' WHERE id=?", (now, msg_id))
+            else:
+                self.db.execute("UPDATE messages SET text=?, edited=? WHERE id=?", (text or "", now, msg_id))
+            self._audit(actor, "message.edit", {"id": msg_id, "deleted": delete})
+            return self._message(msg_id)
+
+        return self._write(go)
+
+    def _conversation(self, conv_id: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM conversations WHERE id=? AND removed IS NULL", (conv_id,)).fetchone()
+        return _conversation_row(row) if row else None
+
+    def _message(self, msg_id: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM messages WHERE id=?", (msg_id,)).fetchone()
+        return _message_row(row) if row else None
+
     def plaintext_token(self, token: str) -> bool:
         with self._lock:
             rows = self.db.execute("SELECT id, name, token_hash, color FROM users").fetchall()
@@ -350,6 +515,23 @@ def _user(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"], "name": row["name"], "color": row["color"],
         "admin": bool(row["admin"]), "created": row["created"],
+    }
+
+
+def _conversation_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "project": row["project_id"], "author": row["author_id"],
+        "title": row["title"], "session_id": row["session_id"], "rev": row["rev"],
+        "parent": row["parent_id"], "created": row["created"], "updated": row["updated"],
+        "size": row["size"], "stats": json.loads(row["stats"] or "{}"), "mode": row["mode"],
+    }
+
+
+def _message_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "project": row["project_id"], "author": row["author_id"],
+        "ts": row["ts"], "text": "" if row["deleted"] else row["text"],
+        "refs": json.loads(row["refs"] or "[]"), "edited": row["edited"], "deleted": row["deleted"],
     }
 
 
