@@ -106,7 +106,10 @@ def main(argv: list[str] | None = None) -> None:
 def serve():
     import uvicorn
 
+    from . import refresh
+
     load_env()
+    refresh.start()
     host = os.environ.get("JARVIS_HUB_HOST", "127.0.0.1")
     port = int(os.environ.get("JARVIS_HUB_PORT", "8770"))
     db = database()

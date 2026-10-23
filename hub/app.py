@@ -42,7 +42,12 @@ def create_app(db: HubDB) -> FastAPI:
 
     @app.get("/health")
     def health():
-        return {"api": API, "ok": True}
+        from . import refresh
+        body = {"api": API, "ok": True}
+        if refresh.armed():
+            body["refresh"] = True
+            body["rev"] = refresh.current_rev()
+        return body
 
     @app.get("/api/v1/me")
     def me(user: dict = Depends(current_user)):

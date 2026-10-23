@@ -1,0 +1,44 @@
+#!/bin/bash
+# Un push de main demande au hub de se mettre à jour. Le hub tourne sous jarvis
+# et fait le git pull lui-même : ce crochet ne fait qu'effacer les restes du
+# push et déposer la demande.
+set -u
+
+update=0
+newrev=""
+while read -r _oldrev new refname; do
+  if [[ "${refname}" == "refs/heads/main" ]]; then
+    update=1
+    newrev="${new}"
+  fi
+done
+
+if [[ "${update}" != 1 ]]; then
+  echo "==> Push ignoré (pas la branche main)."
+  exit 0
+fi
+
+find /var/repo/jarvis-console.git/objects -mindepth 1 -maxdepth 1 -type d -name 'tmp_objdir-incoming-*' -exec rm -rf {} +
+touch /var/repo/jarvis-console.git/update-request
+chmod 644 /var/repo/jarvis-console.git/update-request
+
+health="$(curl -fsS --max-time 3 http://127.0.0.1:8770/health 2>/dev/null || true)"
+if [[ "${health}" != *'"refresh":true'* && "${health}" != *'"refresh": true'* ]]; then
+  echo "==> Demande déposée. Le hub en service ne sait pas encore se relancer seul."
+  echo "==> Dès qu'il tourne avec cette version, un push suffit."
+  exit 0
+fi
+
+echo "==> Le hub prend la mise à jour."
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  health="$(curl -fsS --max-time 2 http://127.0.0.1:8770/health 2>/dev/null || true)"
+  if [[ -n "${newrev}" && "${health}" == *"${newrev}"* ]]; then
+    echo "==> Hub à jour."
+    exit 0
+  fi
+  sleep 0.5
+done
+
+echo "==> Le hub n'a pas confirmé la mise à jour. Le service répond encore :"
+echo "${health}"
+exit 0

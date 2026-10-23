@@ -9,8 +9,9 @@ Cowork), avec un serveur Debian de la boîte.
 
 La Debian est en service. Le code de la console qui lui parle est dans ce dépôt ; le
 hub qui tourne sur le serveur n'a encore que les comptes, les projets, les membres et
-le journal. Les conversations, le fil, la présence et l'inscription Syncthing arrivent
-sur le service au prochain envoi, puis `sudo systemctl restart jarvis-hub`.
+le journal. Un `git push` de `main` dépose une demande : le hub tire la copie et se
+relance tout seul. Rien à taper sur la Debian, le résultat s'affiche à la fin du push.
+Ça vaut une fois que le service tourne avec le code qui sait le faire.
 
 **Sur la Debian**
 

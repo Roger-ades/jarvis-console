@@ -319,6 +319,7 @@ Un bouton « Compacter et mettre en pause » couvre le cas où l'on sait qu'on r
     et reprise d'une discussion, fil, copie vers la mémoire d'équipe, Syncthing lancé
     par la console. Le service en ligne n'a encore que les comptes et les projets :
     conversations, fil, présence et inscription Syncthing suivent le prochain envoi.
+    Ensuite un push de main met le hub à jour sans commande sur la Debian.
     Restent la lecture sans reprise, les non-lus, les conflits de fichiers et les
     validations depuis le téléphone.
 
