@@ -47,8 +47,11 @@ sont illisibles pour Claude, et le but est justement de rester sur le serveur de
 - **Debian** : Syncthing en service (`syncthing@jarvis`), nœud toujours allumé, avec
   versions échelonnées (*staggered versioning*, 90 jours par exemple). C'est aussi la
   sauvegarde : un fichier écrasé par erreur, par un membre ou par Claude, se récupère.
-- **Postes** : Syncthing en service Windows (ou SyncTrayzor). Chaque poste ne partage
-  qu'avec la Debian, qui sert d'*introducer* : pas de réglage croisé entre postes.
+- **Postes** : pas de logiciel de synchro à part. JARVIS embarque le moteur Syncthing,
+  le lance en arrière-plan et parle à son API locale (`127.0.0.1:8384`). La personne
+  ne voit que JARVIS : « Rejoindre » crée le partage, la console affiche l'état
+  (à jour, en cours, en erreur). Chaque poste ne partage qu'avec la Debian, qui sert
+  d'*introducer* : pas de réglage croisé entre postes.
 - **Un projet d'équipe = un dossier Syncthing.** Chacun le place où il veut sur son disque.
 - **Ignorés** (`.stignore`) : `~$*`, `.~lock.*`, `*.tmp`, `Thumbs.db`,
   `.claude/settings.local.json`, `CLAUDE.local.md` (réglages personnels de Claude Code).
@@ -61,10 +64,8 @@ sont illisibles pour Claude, et le but est justement de rester sur le serveur de
   signale dans le panneau du projet (comparer, garder l'une, garder les deux). La
   présence (ci-dessous) en évite la plupart.
 
-Plus tard, Jarvis pourra piloter le Syncthing du poste par son API REST locale
-(`127.0.0.1:8384`, clé d'API lue dans sa configuration) : « Rejoindre le projet » crée
-alors le partage du dossier tout seul et la console affiche l'état de la synchro (à jour,
-en cours, en erreur). Au début, le dossier se partage à la main dans Syncthing.
+Le partage ne se fait pas à la main dans une autre application. « Rejoindre le projet »
+dans JARVIS crée le dossier et le relie à la Debian.
 
 ## 2. Le hub
 
@@ -72,9 +73,34 @@ Même technique que la console, pour réutiliser le code et les habitudes : **Fa
 SQLite**, un paquet `hub/` dans ce dépôt, déployé sur la Debian avec un venv et un service
 systemd (`jarvis-hub`).
 
-- **Réseau** : le hub écoute en local (`127.0.0.1:8770`) derrière **Caddy** en HTTPS
-  (`tls internal`, certificat auto-signé de Caddy). Le pare-feu (nftables/ufw) n'ouvre
-  le 443 qu'au réseau local et au sous-réseau du VPN.
+### Répertoires sur la Debian
+
+Un seul compte système, `jarvis` (sans connexion), pour le hub et pour Syncthing
+(`syncthing@jarvis`). Le code, les données et les fichiers des projets ne sont pas au
+même endroit.
+
+| Rôle | Chemin | Contenu |
+| --- | --- | --- |
+| Dépôt git | `/var/repo/jarvis-console.git` | Dépôt nu, compte `deploy`, comme PassLock. Les postes poussent et tirent en SSH. Plus de GitHub |
+| Service | `/opt/jarvis-hub` | Copie de travail tirée de ce dépôt, `.venv`, `WorkingDirectory` de `jarvis-hub` |
+| Configuration | `/etc/jarvis-hub/hub.env` | Adresse d'écoute et réglages du service, pas les jetons des personnes |
+| Données du hub | `/var/lib/jarvis-hub` | `hub.db`, sauvegardes, conversations partagées |
+| Compte `jarvis` | `/var/lib/jarvis` | Home du compte : configuration Syncthing |
+| Projets | `/var/lib/jarvis/projets/<id>` | Dossiers Syncthing, un par projet d'équipe |
+
+Le dépôt nu appartient au compte `deploy`, comme `/var/repo/passlock.git`. Les postes s'y connectent en SSH (port 23, clé dédiée). GitHub n'est plus une origine.
+
+Les transcriptions partagées restent des fichiers :
+`/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. La présence vit en mémoire seulement.
+Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
+
+- **Réseau** : le hub écoute en local (`127.0.0.1:8770`). Le port 443 est déjà nginx
+  pour les sites en ligne (PassLock et les autres) : il reste public. Le hub sera ajouté
+  plus tard comme un site nginx, ou sur un port distinct. nftables laisse aussi ouverts
+  les ports déjà publics (22, 80, 443, 8080, 5000, 5432). Le SSH écoute sur le **22** ;
+  le port 23 des clients est une redirection en amont vers ce 22. Syncthing (TCP/UDP
+  22000 et UDP 21027) n'est joignable que depuis le LAN `10.20.10.0/24` et le VPN
+  `10.10.0.0/24`. Son interface reste sur `127.0.0.1:8384`.
 - **Certificat épinglé** : à la configuration, Jarvis enregistre l'empreinte du certificat
   du hub et refuse toute autre. Pas d'autorité à installer sur les postes.
 - **Comptes** : un compte par personne, créé par l'administrateur (Roger) en ligne de
@@ -274,8 +300,9 @@ reste. Pour partager un savoir du projet :
 
 ## Étapes proposées
 
-0. **Debian** (demi-journée, guide et script fournis) : Syncthing avec versions, Caddy,
-   pare-feu, sauvegarde ; un dossier de test partagé avec un poste.
+0. **Debian** (demi-journée, guide et script fournis) : Syncthing avec versions,
+   pare-feu, sauvegarde. Le HTTPS public reste nginx. Le dossier d'essai se relie
+   depuis JARVIS, pas depuis un logiciel de synchro séparé.
 1. **Hub minimal et projets d'équipe** — taille comparable à la fonction Projets : comptes
    et jetons, projets et membres, `Configuration → Équipe`, « Rejoindre », réglages
    communs, présence, signalement des conflits Syncthing.
@@ -284,8 +311,7 @@ reste. Pour partager un savoir du projet :
    modes), lecture, reprise, révisions, retrait.
 3. **Fil du projet** — taille moyenne : messages, flux temps réel, non-lus, mentions,
    notifications, références aux fichiers et aux conversations.
-4. **Bonus** : pilotage de Syncthing par son API (« Rejoindre » configure tout, état de la
-   synchro), mémoire d'équipe, résumé du fil.
+4. **Bonus** : mémoire d'équipe, résumé du fil.
 
 Tests : le hub se teste avec le `TestClient` de FastAPI ; deux consoles de démonstration
 (`tests/demo_server.py`, faux Claude de `tests/fake_claude.py`) reliées à un hub de test

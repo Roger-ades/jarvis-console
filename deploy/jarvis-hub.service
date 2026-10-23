@@ -1,0 +1,15 @@
+[Unit]
+Description=Hub JARVIS
+After=network.target
+
+[Service]
+User=jarvis
+Group=jarvis
+WorkingDirectory=/opt/jarvis-hub
+EnvironmentFile=/etc/jarvis-hub/hub.env
+ExecStart=/opt/jarvis-hub/.venv/bin/python -m hub serve
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
