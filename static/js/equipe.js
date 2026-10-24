@@ -512,7 +512,7 @@ export function renderFil(body, ws, ctx) {
       renderFil(body, ws, ctx);
     } catch (e) { toast(e.message, "err"); }
   } } }, "Envoyer");
-  body.replaceChildren(list, h("div", { class: "team-add" }, input, send));
+  body.replaceChildren(list, h("div", { class: "team-add stack" }, input, send));
   if (!team) { list.append(h("div", { class: "empty-row" }, "Ce dossier n'est pas un projet d'équipe.")); return; }
   const gone = () => body.replaceChildren(...lost(ws, ctx?.project?.(ws.folder)));
   if (teamNews(team).removed) { gone(); return; }

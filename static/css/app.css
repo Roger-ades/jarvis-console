@@ -2195,6 +2195,10 @@ html.glass.dialog-doc #modal-root > .overlay:not(:first-child) > .dialog { box-s
 .team-title { margin: 6px 2px 4px; }
 .team-add { display: flex; gap: 8px; align-items: flex-end; padding: 6px 2px; }
 .team-add select, .team-add textarea { flex: 1; min-width: 0; }
+/* le fil : le message sur toute la largeur, Envoyer dessous à droite */
+.team-add.stack { flex-direction: column; align-items: stretch; }
+.team-add.stack textarea { flex: none; }
+.team-add.stack .btn { align-self: flex-end; }
 .hrow select { flex: none; width: auto; }
 .hrow .ht.wrap { white-space: pre-wrap; overflow-wrap: anywhere; font-weight: 500; }
 /* Équipe : un projet partagé se reconnaît partout (badge, icône), sans fenêtre à part */
