@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS messages (
     deleted REAL
 );
 CREATE INDEX IF NOT EXISTS messages_project ON messages(project_id, ts);
+CREATE TABLE IF NOT EXISTS devices (
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    folder TEXT NOT NULL,
+    created REAL NOT NULL,
+    PRIMARY KEY (project_id, user_id, device_id)
+);
 """
 
 COLORS = ("#40dcff", "#7dffb3", "#ffb020", "#ff7ad9", "#c9a6ff", "#ff8f6b")
@@ -92,6 +100,9 @@ class HubDB:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=NORMAL")
             self.db.executescript(SCHEMA)
+            cols = {r["name"] for r in self.db.execute("PRAGMA table_info(members)")}
+            if "added_by" not in cols:  # (un hub d'avant les invitations)
+                self.db.execute("ALTER TABLE members ADD COLUMN added_by TEXT")
 
     def close(self):
         with self._lock:
@@ -144,6 +155,24 @@ class HubDB:
 
         return self._write(go)
 
+    def register_user(self, user_id: str, name: str, color: str) -> str:
+        """Inscription depuis JARVIS : jamais administrateur, et un pseudo déjà vu (même révoqué) reste pris,
+        pour qu'une personne retirée ne retrouve pas ses projets en se réinscrivant."""
+        token = secrets.token_urlsafe(32)
+
+        def go():
+            if self.db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is not None:
+                raise ValueError("pseudo déjà pris")
+            chosen = color or COLORS[self.db.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] % len(COLORS)]
+            self.db.execute(
+                "INSERT INTO users(id, name, color, token_hash, admin, created) VALUES(?,?,?,?,0,?)",
+                (user_id, name, chosen, hash_token(token), time.time()),
+            )
+            self._audit(user_id, "user.register", {"name": name})
+            return token
+
+        return self._write(go)
+
     def revoke_user(self, user_id: str) -> None:
         def go():
             row = self.db.execute(
@@ -190,7 +219,8 @@ class HubDB:
         return [_user(r) for r in rows]
 
     # ------------------------------------------------------------- projects
-    def create_project(self, actor: str, fields: dict) -> dict:
+    def create_project(self, actor: str, fields: dict, members: list[dict] | None = None) -> dict:
+        """Le créateur en est l'administrateur ; `members` : les collègues choisis, invités par lui."""
         def go():
             if self.db.execute("SELECT 1 FROM projects WHERE id=?", (fields["id"],)).fetchone():
                 raise ValueError("déjà présent")
@@ -202,10 +232,21 @@ class HubDB:
                  fields["preset"], fields["model"], fields["effort"], now),
             )
             self.db.execute(
-                "INSERT INTO members(project_id, user_id, role, joined) VALUES(?,?,?,?)",
-                (fields["id"], actor, "administrateur", now),
+                "INSERT INTO members(project_id, user_id, role, joined, added_by) VALUES(?,?,?,?,?)",
+                (fields["id"], actor, "administrateur", now, actor),
             )
-            self._audit(actor, "project.create", {"project": fields["id"], "name": fields["name"]})
+            invited = {}
+            for member in members or []:
+                if member["id"] == actor or member["id"] in invited:
+                    continue
+                if self.user_active(member["id"]) is None:
+                    raise LookupError(member["id"])
+                invited[member["id"]] = member["role"]
+                self.db.execute(
+                    "INSERT INTO members(project_id, user_id, role, joined, added_by) VALUES(?,?,?,?,?)",
+                    (fields["id"], member["id"], member["role"], now, actor),
+                )
+            self._audit(actor, "project.create", {"project": fields["id"], "name": fields["name"], "members": invited})
             return self._project_for(actor, fields["id"])
 
         return self._write(go)
@@ -230,7 +271,9 @@ class HubDB:
     def projects_of(self, user_id: str) -> list[dict]:
         with self._lock:
             rows = self.db.execute(
-                "SELECT p.*, m.role FROM projects p "
+                "SELECT p.*, m.role, m.joined, m.added_by, "
+                "(SELECT COUNT(*) FROM members x WHERE x.project_id=p.id) AS member_count "
+                "FROM projects p "
                 "JOIN members m ON m.project_id=p.id AND m.user_id=? "
                 "ORDER BY p.name",
                 (user_id,),
@@ -260,21 +303,22 @@ class HubDB:
             return "hidden", None
 
     def set_members(self, actor: str, project_id: str, members: list[dict]) -> list[dict]:
+        """La liste entière. Un membre qui reste garde sa date d'arrivée et qui l'a invité."""
         def go():
             if self.db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 raise KeyError(project_id)
             now = time.time()
-            before = {
-                r["user_id"]: r["role"]
-                for r in self.db.execute(
-                    "SELECT user_id, role FROM members WHERE project_id=?", (project_id,)
-                )
-            }
+            rows = self.db.execute(
+                "SELECT user_id, role, joined, added_by FROM members WHERE project_id=?", (project_id,)
+            ).fetchall()
+            before = {r["user_id"]: r["role"] for r in rows}
+            kept = {r["user_id"]: (r["joined"], r["added_by"]) for r in rows}
             self.db.execute("DELETE FROM members WHERE project_id=?", (project_id,))
             for member in members:
+                joined, added_by = kept.get(member["id"], (now, actor))
                 self.db.execute(
-                    "INSERT INTO members(project_id, user_id, role, joined) VALUES(?,?,?,?)",
-                    (project_id, member["id"], member["role"], now),
+                    "INSERT INTO members(project_id, user_id, role, joined, added_by) VALUES(?,?,?,?,?)",
+                    (project_id, member["id"], member["role"], joined, added_by),
                 )
             self._audit(actor, "member.set", {
                 "project": project_id,
@@ -303,9 +347,9 @@ class HubDB:
                 if others == 0:
                     raise ValueError("dernier administrateur")
             self.db.execute(
-                "INSERT INTO members(project_id, user_id, role, joined) VALUES(?,?,?,?) "
+                "INSERT INTO members(project_id, user_id, role, joined, added_by) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(project_id, user_id) DO UPDATE SET role=excluded.role",
-                (project_id, user_id, role, time.time()),
+                (project_id, user_id, role, time.time(), actor),
             )
             self._audit(actor, "member.set", {"project": project_id, "user": user_id, "role": role})
 
@@ -518,10 +562,41 @@ class HubDB:
 
     def _members(self, project_id: str) -> list[dict]:
         rows = self.db.execute(
-            "SELECT user_id, role, joined FROM members WHERE project_id=? ORDER BY user_id",
+            "SELECT m.user_id, m.role, m.joined, m.added_by, u.name, u.color FROM members m "
+            "LEFT JOIN users u ON u.id=m.user_id WHERE m.project_id=? ORDER BY m.user_id",
             (project_id,),
         ).fetchall()
-        return [{"id": r["user_id"], "role": r["role"], "joined": r["joined"]} for r in rows]
+        return [{"id": r["user_id"], "role": r["role"], "joined": r["joined"], "added_by": r["added_by"],
+                 "name": r["name"] or r["user_id"], "color": r["color"] or ""} for r in rows]
+
+    # -------------------------------------------------------------- devices
+    def add_device(self, user_id: str, project_id: str, device_id: str, folder: str) -> None:
+        """Le poste inscrit sur le dossier du projet : il en sort quand son compte quitte le projet."""
+        def go():
+            self.db.execute(
+                "INSERT OR IGNORE INTO devices(project_id, user_id, device_id, folder, created) VALUES(?,?,?,?,?)",
+                (project_id, user_id, device_id, folder, time.time()),
+            )
+
+        self._write(go)
+
+    def drop_devices(self, user_id: str, project_id: str) -> list[dict]:
+        """Oublie les postes de ce compte sur ce projet et rend ceux qu'aucun autre membre n'utilise."""
+        def go():
+            rows = self.db.execute(
+                "SELECT device_id, folder FROM devices WHERE project_id=? AND user_id=?", (project_id, user_id)
+            ).fetchall()
+            self.db.execute("DELETE FROM devices WHERE project_id=? AND user_id=?", (project_id, user_id))
+            out = []
+            for r in rows:
+                shared = self.db.execute(
+                    "SELECT 1 FROM devices WHERE project_id=? AND device_id=?", (project_id, r["device_id"])
+                ).fetchone()
+                if not shared:
+                    out.append({"device_id": r["device_id"], "folder": r["folder"]})
+            return out
+
+        return self._write(go)
 
 
 def _user(row: sqlite3.Row) -> dict:
@@ -550,9 +625,13 @@ def _message_row(row: sqlite3.Row) -> dict:
 
 def _project(row: sqlite3.Row) -> dict:
     keys = row.keys()
-    return {
+    out = {
         "id": row["id"], "name": row["name"], "color": row["color"],
         "syncthing_folder": row["syncthing_folder"], "preset": row["preset"],
         "model": row["model"], "effort": row["effort"], "created": row["created"],
         "role": row["role"] if "role" in keys else None,
     }
+    for key in ("joined", "added_by", "member_count"):
+        if key in keys:
+            out[key] = row[key]
+    return out

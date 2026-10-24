@@ -34,19 +34,68 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
   redirection en amont.
 - Sauvegarde chaque nuit à 03:15 (`jarvis-hub-backup.timer`), 14 jours,
   `/var/lib/jarvis-hub/sauvegardes`.
-- Premier compte administrateur créé (`roger`). Les suivants :
+- Premier compte administrateur créé (`roger`). Les suivants s'inscrivent depuis JARVIS
+  (ci-dessous) ; la ligne de commande reste possible :
   `sudo -u jarvis bash -c 'cd /opt/jarvis-hub && .venv/bin/python -m hub user add prenom'`.
 
 **Dans JARVIS**
 
+- Inscription au premier lancement : l'adresse et l'empreinte du hub sont écrites dans le
+  code (`console/hub_client.py`, `HUB_URL` et `HUB_FINGERPRINT`). Si ce poste n'a pas de
+  jeton et que le hub répond (4 s au plus), la fenêtre « Rejoindre l'équipe » s'ouvre
+  d'elle-même : nom affiché, pseudo (proposé d'après le nom de session Windows ou macOS,
+  `paul.martin` → `paul-martin`) et couleur. « M'inscrire » crée le compte, garde le jeton
+  dans `data/hub-token` et active l'équipe dans la configuration ; rien d'autre à saisir.
+  « Plus tard », ou hors du bureau et du VPN : la fenêtre revient au lancement suivant.
+- Le compte créé n'a aucun projet : il ne voit rien tant qu'un administrateur ne l'ajoute
+  pas à un projet. Seule une copie de JARVIS peut s'inscrire : elle envoie une clé
+  (`REGISTER_KEY`) dont le hub ne garde que l'empreinte (`REGISTER_KEY_HASH` dans
+  `hub/app.py`, ou la variable `JARVIS_HUB_REGISTER_KEY_HASH`). Dix essais refusés en une
+  minute bloquent les inscriptions une minute (429). Changer de clé : nouvelle clé dans
+  `console/hub_client.py`, son SHA-256 dans `hub/app.py`, puis pousser ; les anciennes
+  copies de JARVIS reçoivent « clé d'inscription refusée : mets JARVIS à jour ».
+- Un pseudo pris, même par un compte révoqué, ne se réinscrit pas : une personne retirée
+  ne retrouve pas ses projets en revenant. Un nouveau poste pour quelqu'un qui a déjà un
+  compte : copier son `data/hub-token`, ou le coller dans Configuration → Équipe.
+- L'administrateur du hub voit chaque inscription dans sa boîte de réception
+  (« Inscription au hub », Révoquer…, Vu). Révoquer coupe le jeton et arrête le partage
+  Syncthing des dossiers de ses projets avec ce poste (`DELETE /api/v1/users/{id}`).
 - Configuration → Équipe : adresse, activation, empreinte à confirmer, jeton (fichier
   `data/hub-token`, jamais dans `config.json` ni dans la page), « Démarrer la synchro ».
-- Projet → Équipe : le projet d'équipe du dossier et ses membres, la liste des projets
-  d'équipe (Rejoindre), la présence ; onglets Conversations et Fil.
-- Un administrateur du hub fait d'un projet JARVIS un projet d'équipe (« Faire de ce
-  projet un projet d'équipe ») : le hub le crée, ce poste le rejoint aussitôt.
-- Membres : l'administrateur du hub ou du projet ajoute un collègue, change son rôle
-  (administrateur, membre) ou le retire. Les jetons ne sortent jamais du hub.
+- Un projet d'équipe se reconnaît partout sans fenêtre à part : badge « Équipe » dans
+  le panneau Projet, section « Projets d'équipe » sur l'accueil, icône et mention
+  « équipe » dans les listes de dossiers et la recherche (Ctrl+K).
+- Projet → Équipe, pour un projet d'équipe : Fil (ouvert par défaut), Conversations,
+  Membres (qui est là en ce moment, membres, « Relancer la synchro »). Les autres projets
+  d'équipe n'y sont pas listés.
+- Projet → Équipe, pour un projet personnel : un seul écran, « Partager avec l'équipe… »
+  et « Rejoindre un projet d'équipe… ». Sans hub configuré, l'onglet n'apparaît pas.
+- Partager (administrateur du hub) : le nom sur le hub et **les collègues choisis**, pas
+  toute l'équipe ; celui qui partage en est l'administrateur. Le hub crée le projet avec
+  ces membres, ce poste le rejoint aussitôt. Si un projet d'équipe du même nom existe déjà
+  et qu'on en est membre (un dossier détaché, par exemple), la fenêtre propose de le
+  rejoindre plutôt que d'en créer un second.
+- Rejoindre se fait depuis l'accueil (« + Rejoindre un projet »), Ctrl+K, la boîte de
+  réception ou l'écran ci-dessus : les projets du hub dont on est membre et pas encore sur
+  ce poste (« ajouté par … · 3 membres »), avec recherche quand ils sont nombreux, puis le
+  choix du dossier local. Le projet rejoint s'ouvre sur son Fil.
+- Membres : chacun voit qui fait partie du projet, son rôle, qui l'a ajouté et quand.
+  L'administrateur du hub ou du projet ajoute des collègues (liste à cocher, avec
+  recherche), change un rôle (administrateur, membre) ou retire quelqu'un ; le dernier
+  administrateur ne peut être ni retiré ni rétrogradé. Le hub cesse aussitôt de partager
+  le dossier Syncthing avec le poste d'une personne retirée. Les jetons ne sortent jamais
+  du hub.
+- Quitter le projet (soi-même, `DELETE /api/v1/projects/{id}/members/me`) : le dernier
+  administrateur nomme d'abord quelqu'un d'autre. Détacher de ce poste : le dossier
+  redevient un projet personnel, ses fichiers restent, la synchro s'arrête ; on reste
+  membre et on peut le rejoindre à nouveau.
+- Invitations : un collègue ajouté à un projet le trouve dans sa boîte de réception
+  (Rejoindre…, Ignorer) et sur l'accueil, où « + Rejoindre un projet » compte les
+  invitations et présélectionne la première. Retiré puis ajouté à nouveau : l'invitation
+  revient.
+- Retiré d'un projet relié à ce poste : la boîte le signale (Détacher le dossier…) et
+  l'onglet Équipe du projet le dit à la place du Fil et des membres, avec le même bouton.
+  Rien n'est effacé sur le poste.
 - Rejoindre écrit `.jarvis-projet` et `.stignore`, pose `team_id` sur le projet (le
   projet JARVIS est créé avec le nom et la couleur du hub s'il n'existe pas), lance
   Syncthing du poste (binaire dans les données de JARVIS, `127.0.0.1:8384`), demande au
@@ -61,8 +110,10 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
 - Partager une discussion du dossier (aperçu de ce qui est sensible, mode complet ou
   sans résultats d'outils, chemins remplacés par `{{PROJET}}`). Reprendre la ramène
   dans le dossier et continue avec le compte Claude de la personne.
-- Fil : envoyer et lire les messages du projet ; il se relit toutes les 15 secondes
-  tant qu'il est affiché. Une modification vide est refusée (422). Mémoire : « Copier dans la mémoire
+- Fil : envoyer (Ctrl+Entrée) et lire les messages du projet, avec le nom et l'initiale
+  de chacun ; il se relit toutes les 15 secondes tant qu'il est affiché. `@nom` mentionne
+  un collègue. Ce qui est affiché est lu (`/api/hub/seen`) : la boîte et le compteur de
+  l'onglet suivent. Une modification vide est refusée (422). Mémoire : « Copier dans la mémoire
   d'équipe » écrit `MEMOIRE-EQUIPE.md` et l'ajoute au `CLAUDE.md` du dossier.
 
 **Pas encore**
@@ -70,14 +121,15 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
 - Lire une conversation partagée sans la reprendre ; mettre à jour le partage ; la
   retirer depuis l'écran ; lier une reprise à la précédente (« suite de … »). L'archive
   ne contient que la transcription, pas le dossier des sous-agents.
-- Le fil ne fait pas encore les mentions, les non-lus, les notifications, les
-  références, ni modifier ou effacer un message depuis l'écran (l'API le permet).
+- Le fil ne fait pas encore les références, ni modifier ou effacer un message depuis
+  l'écran (l'API le permet).
 - La présence dit qu'une session est ouverte. Elle n'envoie pas encore les fichiers
   que Claude modifie, et JARVIS n'avertit pas avant d'écrire un fichier déjà ouvert
   chez un collègue. Les conflits `*.sync-conflict-*` ne sont pas signalés.
-- La console interroge le hub ; elle ne suit pas encore le flux `/events`.
-- Les comptes se créent et se révoquent encore en ligne de commande sur la Debian.
-  Renommer ou supprimer un projet d'équipe : ni écran ni route (`essai-equipe` reste
+- La console interroge le hub toutes les 30 secondes (boîte de réception) ; elle ne suit
+  pas encore le flux `/events`.
+- Renommer un compte, ou rendre administrateur : seulement en ligne de commande sur la
+  Debian. Renommer ou supprimer un projet d'équipe : ni écran ni route (`essai-equipe` reste
   donc sur le hub et sur le serveur).
 - Validations depuis le téléphone, et les scripts de projet : hors de ce chantier.
 
@@ -186,10 +238,11 @@ Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
   reste sur `127.0.0.1:8384`.
 - **Certificat épinglé** : à la configuration, Jarvis enregistre l'empreinte du certificat
   du hub et refuse toute autre. Pas d'autorité à installer sur les postes.
-- **Comptes** : un compte par personne, créé par l'administrateur (Roger) en ligne de
-  commande sur la Debian : `python -m hub user add paul`, qui affiche un **jeton
-  personnel** une seule fois. Le hub n'en garde que l'empreinte (SHA-256). Révoquer un
-  membre : `python -m hub user revoke paul`.
+- **Comptes** : un compte par personne, créé par JARVIS à l'inscription (clé intégrée,
+  compte sans projet) ou par l'administrateur en ligne de commande sur la Debian :
+  `python -m hub user add paul`, qui affiche un **jeton personnel** une seule fois. Le hub
+  n'en garde que l'empreinte (SHA-256). Révoquer : depuis la boîte de réception de
+  l'administrateur, ou `python -m hub user revoke paul`.
 - **Droits** : on ne voit que les projets dont on est membre. L'administrateur crée les
   projets et gère les membres (depuis Jarvis ou en ligne de commande).
 - **Journal** : qui a publié, lu, importé, retiré une conversation ; qui a rejoint ou
@@ -213,11 +266,13 @@ audit          id, ts, user_id, kind, detail
 Les transcriptions partagées sont des fichiers à part :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. La présence vit en mémoire seulement.
 
-### API (v1, toutes avec `Authorization: Bearer <jeton>`)
+### API (v1, toutes avec `Authorization: Bearer <jeton>` sauf l'inscription)
 
 ```
+POST   /api/v1/register                     inscription : clé de JARVIS, pseudo, nom, couleur → jeton
 GET    /api/v1/me
 GET    /api/v1/users                        comptes actifs (id, nom, couleur)
+DELETE /api/v1/users/{u}                    (admin) révoquer un compte
 GET    /api/v1/projects                     projets dont je suis membre
 POST   /api/v1/projects                     (admin) créer
 PUT    /api/v1/projects/{p}                 (admin) nom, couleur, réglages, dossier Syncthing
@@ -264,8 +319,8 @@ quitte jamais Python, et une page compromise ne peut pas joindre le hub.
 présence. Pas encore : réglages communs repris
 chez soi, fichiers dans la présence, avertissement avant écriture, conflits Syncthing.*
 
-- Dans **Projets**, une section « Équipe » liste les projets dont on est membre. Pour un
-  projet pas encore relié : « Rejoindre » → choisir le dossier local (celui de Syncthing).
+- Sur l'**accueil**, la section « Projets d'équipe » montre ceux reliés à ce poste ;
+  « + Rejoindre un projet » liste les autres → choisir le dossier local (celui de Syncthing).
   Jarvis vérifie que le dossier contient le marqueur `.jarvis-projet` (identifiant du
   projet, écrit à la création) pour éviter de relier le mauvais dossier.
 - Les **réglages communs** (nom, couleur, préréglage, modèle, effort) viennent du hub ;
@@ -403,20 +458,22 @@ reste. Pour partager un savoir du projet :
 0. **Debian.** *En service* : Syncthing avec versions, pare-feu, nginx sur le 8443,
    sauvegarde de nuit, hub systemd. Le hub crée le dossier de chaque projet d'équipe.
 1. **Hub et projets d'équipe.** *En place* pour les comptes, les jetons, les projets
-   (créés depuis JARVIS), les membres (gérés depuis JARVIS), Configuration → Équipe et
-   Rejoindre, sur Windows et macOS. La présence signale une session ouverte. Restent
+   (créés depuis JARVIS avec les collègues choisis), les membres (ajout, rôle, retrait,
+   quitter, détacher), les invitations dans la boîte de réception, Configuration → Équipe
+   et Rejoindre, sur Windows et macOS. La présence signale une session ouverte. Restent
    les réglages communs repris chez soi, le signalement des conflits, renommer ou
    supprimer un projet.
 2. **Conversations partagées.** *En place* pour publier et reprendre. Restent la lecture
    sans import, la mise à jour, le retrait depuis l'écran et la reprise liée (« suite de »).
-3. **Fil du projet.** *En place* pour écrire et lire. Restent le temps réel, les non-lus,
-   les mentions, les notifications et les références.
+3. **Fil du projet.** *En place* pour écrire, lire, mentionner ; les non-lus et les
+   mentions arrivent dans la boîte de réception. Restent le temps réel et les références.
 4. **Mémoire d'équipe.** *En place* (copie d'une note). Le résumé du fil reste à faire,
    avec le compte Claude de la personne qui le demande, sans publier le résumé.
 
-Tests : `tests/test_hub.py`, `tests/test_equipe.py`, `tests/test_share.py` (jeton jamais
-en clair, membres, archives, masquage des chemins, inscription Syncthing, création et
-rejointe d'un projet). Essai réel le 23 octobre avec un poste : projet `essai-equipe`
+Tests : `tests/test_hub.py`, `tests/test_equipe.py`, `tests/test_share.py`,
+`tests/test_equipe_boite.py` (jeton jamais en clair, membres et dernier administrateur,
+quitter, archives, masquage des chemins, inscription Syncthing, création avec membres et
+rejointe d'un projet, entrées de la boîte). Essai réel le 23 octobre avec un poste : projet `essai-equipe`
 créé, poste inscrit, fichier reçu par le serveur (100 %), fil et membres relus. Pas
 encore d'essai avec deux postes.
 

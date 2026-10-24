@@ -114,3 +114,28 @@ def register(device_id: str, folder_id: str, label: str = "", name: str = "") ->
     if not any(d.get("deviceID") == device_id for d in devices):
         _rest("PATCH", f"/rest/config/folders/{q(folder_id)}",
               {"devices": [*devices, {"deviceID": device_id}]})
+
+
+def unregister(device_id: str, folder_id: str) -> None:
+    """Le poste ne partage plus le dossier du projet (son compte l'a quitté). Les fichiers restent sur le serveur."""
+    if not DEVICE.match(device_id or "") or not FOLDER.match(folder_id or ""):
+        return
+    q = urllib.parse.quote
+    folder = _rest("GET", f"/rest/config/folders/{q(folder_id)}")
+    if folder is None:
+        return
+    devices = folder.get("devices") or []
+    left = [d for d in devices if d.get("deviceID") != device_id]
+    if len(left) != len(devices):
+        _rest("PATCH", f"/rest/config/folders/{q(folder_id)}", {"devices": left})
+
+
+def revoke(db, user_id: str, project_id: str) -> list[str]:
+    """Les postes de ce compte quittent le dossier du projet. Rend les erreurs (le retrait du membre, lui, est fait)."""
+    errors = []
+    for device in db.drop_devices(user_id, project_id):
+        try:
+            unregister(device["device_id"], device["folder"])
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors

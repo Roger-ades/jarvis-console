@@ -7,7 +7,7 @@ import { ContextPicker } from "./context.js";
 import { pickFolder } from "./folderpicker.js";
 import { baseName as pname, editProject, loadProjects, projectFor, projects, setProjects } from "./projects.js";
 import { accountState, gauges, initLimits, limitsTitle, openLimits, sessionUsed, updateLimits } from "./limits.js";
-import { projectActionsChanged, projectDiskChanged, projectFollow, projectSuiviChanged, projectTasksChanged, showProject, toggleProject } from "./project.js";
+import { projectActionsChanged, projectDiskChanged, projectFollow, projectReload, projectSuiviChanged, projectTasksChanged, showProject, toggleProject } from "./project.js";
 import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
@@ -17,8 +17,9 @@ import { openPalette } from "./palette.js";
 import { openSetup } from "./setup.js";
 import { openConfig, openConsumption, updateProbe } from "./config.js";
 import { officeAccountChanged, openAccount } from "./office.js";
+import { joinTeamProject, offerSignup } from "./equipe.js";
 import { openDiscussions, renderHistory } from "./history.js";
-import { away, back, inboxChanged, inboxCounts, initInbox, isUnread, markTasksRead, onInbox, refresh as refreshInbox, toggleInbox } from "./inbox.js";
+import { away, back, inboxChanged, inboxCounts, initInbox, isUnread, markTasksRead, onInbox, refresh as refreshInbox, teamInvitations, toggleInbox } from "./inbox.js";
 import { showSession } from "./library.js";
 import { routinesChanged, toggleRoutines } from "./routines.js";
 import { IMG_EXT } from "./md.js";
@@ -110,7 +111,8 @@ async function boot() {
   checkVersion();
   setInterval(checkVersion, 60_000);
   if (S.config.general.setup_done === false) startSetup(); // fresh install: the first-run assistant
-  else setTimeout(proposeDesktopApp, 2500);
+  // no hub account yet on this poste: the registration window, then the rest
+  else offerSignup().finally(() => setTimeout(proposeDesktopApp, 2500));
 }
 
 /** In the desktop app, once: should start.bat, the launcher and the session start open it rather than the
@@ -142,7 +144,7 @@ function startSetup() {
   openSetup({
     state: () => S.state, profiles: () => profiles().map((p) => ({ ...p, workdir: S.meta?.profiles?.[p.id]?.workdir || p.workdir })),
     probes: () => S.probes, newProject, recentFolders: (pid) => recentFolders(pid),
-    onDone: () => toast("Bienvenue ! Ctrl+K pour tout retrouver.", "ok"),
+    onDone: async () => { if (!(await offerSignup())) toast("Bienvenue ! Ctrl+K pour tout retrouver.", "ok"); },
   });
 }
 window.addEventListener("jarvis-check-version", () => checkVersion());
@@ -332,7 +334,10 @@ function folderLabel(dir) {
   const parent = parts.pop();
   return parent && !/^[A-Za-z]:$/.test(parent) ? `${name} — ${parent}` : name;
 }
-const folderOption = (dir) => option(dir, projectFor(dir)?.name || folderLabel(dir), dir);
+/** A folder in the lists: its project's name, marked when the project is shared with the team. */
+const folderName = (dir) => { const p = projectFor(dir); return p ? `${p.name}${p.team_id ? " · équipe" : ""}` : folderLabel(dir); };
+const folderOption = (dir) => option(dir, folderName(dir), dir);
+const hubOn = () => !!S.config?.hub?.enabled;
 const dirKey = (d) => String(d || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 
 /** One chip sums up what differs from the account's defaults; the panel holds the controls. */
@@ -412,9 +417,11 @@ function selectProfile(id, remember = true) {
   // another account chosen: the recognized project no longer applies; the configuration reloaded: found again
   if (remember) dropMention();
   else if (mention) { mention = null; renderMention(); queueMicrotask(detectMention); }
+  // the same account again (the configuration reloaded): the panel stays on the folder it shows
+  const moved = S.profile !== p.id;
   S.profile = p.id;
   contextPicker.profileChanged();
-  queueMicrotask(projectFollow);
+  queueMicrotask(moved ? projectFollow : projectReload);
   if (remember) wm.savePrefs({ profile: p.id });
   $$pbtn().forEach((b, i) => b.setAttribute("aria-checked", String(profiles()[i]?.id === p.id)));
   $("#commandbar").style.setProperty("--pc", p.color);
@@ -434,6 +441,8 @@ function selectProfile(id, remember = true) {
 
   const recent = (wm.prefs().workdirs || {})[p.id] || [];
   const wd = $("#opt-workdir");
+  // the configuration reloaded (a team project joined, a setting saved): the bar keeps the folder it was on
+  const kept = !moved && wd.value && wd.value !== "__other__" ? wd.value : "";
   const home = S.meta?.profiles?.[p.id]?.workdir || p.workdir;
   // pinned projects of this account first, then the folders used lately
   const pinnedDirs = projects().filter((x) => x.pinned && (!x.profile || x.profile === p.id)).map((x) => x.folder);
@@ -442,9 +451,10 @@ function selectProfile(id, remember = true) {
     .filter((d) => dirKey(d) !== dirKey(home) && !hidden.has(dirKey(d)));
   wd.replaceChildren(option("", `${projectFor(home)?.name || String(home).replace(/[\\/]+$/, "").split(/[\\/]/).pop()} (défaut)`, home),
     ...dirs.map(folderOption), option("__other__", "Autre dossier…"));
-  wd.value = "";
-  lastWorkdir = "";
-  applyProject(projectFor(home));
+  if (kept && ![...wd.options].some((o) => o.value === kept)) wd.insertBefore(folderOption(kept), wd.lastChild);
+  wd.value = kept;
+  lastWorkdir = kept;
+  applyProject(projectFor(kept || home));
   updateSummary();
 }
 const $$pbtn = () => Array.from($("#cmd-profiles").querySelectorAll(".pbtn"));
@@ -701,7 +711,7 @@ function updateProjectButton() {
 function refreshProjectsUI() {
   for (const o of $("#opt-workdir").options) {
     if (!o.value || o.value === "__other__") continue;
-    o.textContent = projectFor(o.value)?.name || folderLabel(o.value);
+    o.textContent = folderName(o.value);
   }
   updateProjectButton();
   renderHome();
@@ -724,12 +734,15 @@ function renderHome() {
   const home = $("#home");
   if (!home) return;
   const pinned = projects().filter((p) => p.pinned);
+  // team projects get their own row: same screen, told apart at a glance
+  const mine = pinned.filter((p) => !p.team_id), shared = pinned.filter((p) => p.team_id);
   const touched = (t) => Math.max(t.created || 0, t.started || 0, t.ended || 0);
   const recent = [...S.tasks.values()].filter((t) => !t.archived && t.origin !== "reglage" && !t.ephemeral)
     .sort((a, b) => touched(b) - touched(a)).slice(0, 6);
-  const card = (p) => h("button", { type: "button", class: "home-card", style: { "--pc": p.color }, title: p.folder,
+  const card = (p) => h("button", { type: "button", class: `home-card${p.team_id ? " team" : ""}`, style: { "--pc": p.color },
+    title: p.team_id ? `Projet d'équipe · ${p.folder}` : p.folder,
     on: { click: () => { useProject(p); focusInput(); } } },
-    h("b", {}, p.name),
+    h("b", {}, p.team_id ? h("span", { class: "i", svg: "team" }) : null, p.name),
     h("small", {}, [pname(p.folder), p.discussions ? `${p.discussions} discussion${p.discussions > 1 ? "s" : ""}` : "aucune discussion",
       p.last ? fmtDate(p.last) : ""].filter(Boolean).join(" · ")),
     p.profile && profile(p.profile) ? h("span", { class: "home-acc", style: { "--ac": profile(p.profile).color } }, profile(p.profile).name) : null);
@@ -739,15 +752,30 @@ function renderHome() {
       h("button", { type: "button", class: "home-act", style: { "--pc": p.color }, title: `${p.name} · /${a.name}${a.description ? ` — ${a.description}` : ""}`,
         on: { click: () => runAccountAction(panelCtx, p, a, { workdir: currentFolder() }) } },
       h("span", { class: "i", svg: "bolt" }), a.label, profiles().length > 1 ? h("small", {}, p.name) : null)))) : null,
-    h("section", { class: "home-sec" }, h("h3", {}, "Projets"), h("div", { class: "home-cards" }, ...pinned.map(card),
+    h("section", { class: "home-sec" }, h("h3", {}, "Projets"), h("div", { class: "home-cards" }, ...mine.map(card),
       h("button", { type: "button", class: "home-card add", on: { click: newProject } }, h("b", {}, "+ Nouveau projet"),
         h("small", {}, "Un dossier, ses consignes et ses réglages")))),
+    shared.length || hubOn() ? h("section", { class: "home-sec team" }, h("h3", {}, h("span", { class: "i", svg: "team" }), "Projets d'équipe"),
+      h("div", { class: "home-cards" }, ...shared.map(card),
+        hubOn() ? joinCard() : null)) : null,
     recent.length ? h("section", { class: "home-sec" }, h("h3", {}, "Reprendre"), h("div", { class: "home-list" }, ...recent.map((t) =>
       h("button", { type: "button", class: "home-row", style: { "--pc": t.color }, on: { click: () => openTask(t.id) } },
         h("span", { class: "t" }, t.title),
         h("small", {}, [projectFor(t.workdir)?.name || pname(t.workdir), statusLabel(t), fmtDate(touched(t))].filter(Boolean).join(" · ")))))) : null,
     // (the accounts' limits are in the top bar)
   ].filter(Boolean));
+}
+
+/** "+ Rejoindre un projet": with the invitations waiting (the inbox has them), the first one comes preselected. */
+let homeInvites = -1;
+function joinCard() {
+  const invites = teamInvitations();
+  homeInvites = invites.length;
+  const names = invites.slice(0, 2).map((e) => e.title).join(", ") + (invites.length > 2 ? "…" : "");
+  return h("button", { type: "button", class: `home-card add${invites.length ? " invited" : ""}`,
+    on: { click: () => joinTeamProject(panelCtx, { start: currentFolder(), select: invites[0]?.team_id }) } },
+  h("b", {}, "+ Rejoindre un projet", invites.length ? h("span", { class: "cnt warn", title: "Invitations en attente" }, String(invites.length)) : null),
+  h("small", {}, invites.length ? `${invites.length > 1 ? "Invitations" : "Invitation"} : ${names}` : "Partagé sur le hub, pas encore sur ce poste"));
 }
 
 function rememberWorkdir(pid, dir) {
@@ -1377,6 +1405,8 @@ function searchAnything() {
       ...addonItems(),
       { label: "Nouvelle demande", icon: "send", hint: "Barre du bas", keywords: "écrire demander", run: () => focusInput() },
       { label: "Nouveau projet", icon: "book", keywords: "dossier créer", run: newProject },
+      ...(hubOn() ? [{ label: "Rejoindre un projet d'équipe", icon: "team", keywords: "équipe hub partagé collègues synchro",
+        run: () => joinTeamProject(panelCtx, { start: currentFolder() }) }] : []),
       { label: "Ouvrir le projet actif", icon: "book", hint: projectFor(currentFolder())?.name || "", keywords: "consignes mémoire fichiers règles", run: () => toggleProject(panelCtx) },
       { label: "Nouvelle note", icon: "note", hint: "Générale", keywords: "noter rappel mémo pense-bête", run: () => editNote(null, { folder: "" }) },
       ...(projectFor(currentFolder()) ? [{ label: `Nouvelle note du projet ${projectFor(currentFolder()).name}`, icon: "note",
@@ -1480,6 +1510,16 @@ const panelCtx = {
   forgetFolder: (dir, pid = S.profile) => forgetFolder(pid, dir),
   projectMoved: (pid, from, to) => projectMoved(pid, from, to),
   project: (folder) => projectFor(folder),
+  hubOn,
+  /** A team project just joined: it becomes the active project, its panel opens on the fil. */
+  joinedTeam: async (folder) => {
+    await loadProjects();
+    refreshProjectsUI();
+    const p = projectFor(folder);
+    if (!p) return;
+    useProject(p);
+    showProject(panelCtx, { folder: p.folder, tab: "fil" });
+  },
   editProject: async (folder, pid) => {
     const saved = await editProject({ folder, profiles: profiles(), presets: S.config.presets, models: panelCtx.models(), current: { profile: pid } });
     if (saved) { refreshProjectsUI(); if (saved !== "deleted" && dirKey(saved.folder) === dirKey(currentFolder())) applyProject(saved); }
@@ -1527,6 +1567,9 @@ const inboxCtx = {
   editNote: (n) => editNote(n),
   openDisplay: (taskId, key, color) => openDisplayOf(taskId, key, color),
   reveal: () => window.jarvis?.win(wm.isNative() ? "bar-reveal" : "hub-reveal"),
+  // the team's entries: its project panel (on the Fil, the conversations, the members), an invitation to join
+  openProject: (folder, tab) => { if (projectFor(folder)) showProject(panelCtx, { folder, tab }); },
+  joinTeam: (id) => joinTeamProject(panelCtx, { start: currentFolder(), select: id }),
 };
 // the browser: a page hidden more than 15 minutes is an absence (the desktop app says when the session locks)
 let hiddenAt = 0;
@@ -1541,7 +1584,10 @@ const summaryText = () => { const c = inboxCounts(); return [c.todo && `${c.todo
 $("#btn-inbox").addEventListener("click", () => toggleInbox(inboxCtx));
 // the "à valider" counter (top bar, JARVIS menu) opens the inbox
 $("#counters").addEventListener("click", (e) => { if (e.target.closest(".counter.await")) openInbox(); });
-onInbox(() => { renderTaskbar(); const c = inboxCounts(); setMenuBadge((c.todo || 0) + (c.reminder || 0)); });
+onInbox(() => {
+  renderTaskbar(); const c = inboxCounts(); setMenuBadge((c.todo || 0) + (c.reminder || 0));
+  if (teamInvitations().length !== homeInvites && homeInvites >= 0) renderHome();
+});
 
 /** A display that waits for a click: its discussion opens (its events bring the display), then the display
  * in a window of its own. */

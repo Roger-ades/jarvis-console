@@ -1,7 +1,12 @@
 """API v1 du hub. Chaque réponse porte le numéro d'API."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 import re
+import threading
+import time
 from typing import Literal
 
 import queue
@@ -23,6 +28,10 @@ _MODEL = re.compile(r"^[A-Za-z0-9._:\-\[\]]{0,80}$")
 _FOLDER = re.compile(r"^[A-Za-z0-9._-]{0,80}$")
 PRESETS = {"lecture", "web", "brouillons", "edition", "assiste", "complet"}
 EFFORTS = {"", "low", "medium", "high", "xhigh", "max"}
+# Empreinte de la clé d'inscription écrite dans JARVIS (console/hub_client.py) : seule une copie de JARVIS
+# crée un compte. JARVIS_HUB_REGISTER_KEY_HASH dans hub.env la remplace, pour changer de clé sans attendre.
+REGISTER_KEY_HASH = "a3213ee4d3ec31c3acfeae059f9390a4cb4f4830b745e5a3876579b09662a53d"
+REGISTER_TRIES = 10     # essais refusés tolérés par minute, tous postes confondus
 
 
 def create_app(db: HubDB) -> FastAPI:
@@ -62,9 +71,13 @@ def create_app(db: HubDB) -> FastAPI:
         if not user["admin"]:
             raise HTTPException(403, {"error": "réservé à l'administrateur"})
         try:
-            project = db.create_project(user["id"], body.model_dump())
+            project = db.create_project(user["id"], body.model_dump(exclude={"members"}),
+                                        [m.model_dump() for m in body.members])
+        except LookupError as exc:
+            raise HTTPException(400, {"error": "utilisateur inconnu", "users": [str(exc.args[0])]}) from exc
         except ValueError as exc:
             raise HTTPException(409, {"error": str(exc)}) from exc
+        app.state.live.publish("members", {"project": project["id"]})
         return {"api": API, "project": project}
 
     @app.put("/api/v1/projects/{project_id}")
@@ -86,6 +99,47 @@ def create_app(db: HubDB) -> FastAPI:
         # Les comptes actifs, pour choisir les membres d'un projet : ni jeton ni empreinte.
         return {"api": API, "users": [{"id": u["id"], "name": u["name"], "color": u["color"]} for u in db.users()]}
 
+    refused: list[float] = []
+    refused_lock = threading.Lock()
+
+    @app.post("/api/v1/register", status_code=201)
+    def register(body: RegisterIn):
+        """Un poste JARVIS sans jeton crée son compte. Le jeton n'est rendu qu'ici, une seule fois."""
+        now = time.time()
+        with refused_lock:
+            refused[:] = [t for t in refused if now - t < 60]
+            if len(refused) >= REGISTER_TRIES:
+                raise HTTPException(429, {"error": "trop d'essais, réessaie dans une minute"})
+            expected = os.environ.get("JARVIS_HUB_REGISTER_KEY_HASH") or REGISTER_KEY_HASH
+            if not hmac.compare_digest(hashlib.sha256(body.key.encode("utf-8")).hexdigest(), expected):
+                refused.append(now)
+                raise HTTPException(403, {"error": "clé d'inscription refusée : mets JARVIS à jour"})
+        try:
+            token = db.register_user(body.id, body.name, body.color.lower())
+        except ValueError as exc:
+            raise HTTPException(409, {"error": str(exc)}) from exc
+        app.state.live.publish("users", {"user": body.id})
+        return {"api": API, "user": db.user_row(body.id), "token": token}
+
+    @app.delete("/api/v1/users/{user_id}")
+    def revoke_user(user_id: str, user: dict = Depends(current_user)):
+        """L'administrateur retire un compte : son jeton ne vaut plus rien et ses postes quittent chaque dossier."""
+        if not user["admin"]:
+            raise HTTPException(403, {"error": "réservé à l'administrateur"})
+        if user_id == user["id"]:
+            raise HTTPException(400, {"error": "un administrateur ne se révoque pas lui-même"})
+        projects = [p["id"] for p in db.projects_of(user_id)] if db.user_row(user_id) else []
+        try:
+            db.revoke_user(user_id)
+        except ValueError as exc:
+            raise HTTPException(404 if "inconnu" in str(exc) else 409, {"error": str(exc)}) from exc
+        from .sync_link import revoke
+        errors = []
+        for project_id in projects:
+            errors += revoke(db, user_id, project_id)
+        app.state.live.publish("users", {"user": user_id})
+        return {"api": API, "ok": True, **({"sync_errors": errors} if errors else {})}
+
     @app.get("/api/v1/projects/{project_id}/members")
     def get_members(project_id: str, user: dict = Depends(current_user)):
         state, _project = db.access(user["id"], project_id, manage=False)
@@ -98,11 +152,27 @@ def create_app(db: HubDB) -> FastAPI:
         missing = db.members_known([m.id for m in body.members])
         if missing:
             raise HTTPException(400, {"error": "utilisateur inconnu", "users": missing})
+        before = {m["id"] for m in db.members(project_id)}
         try:
             members = db.set_members(user["id"], project_id, [m.model_dump() for m in body.members])
         except KeyError:
             raise HTTPException(404, {"error": "projet introuvable"}) from None
-        return {"api": API, "members": members}
+        errors = _revoke_left(db, project_id, before - {m["id"] for m in members})
+        app.state.live.publish("members", {"project": project_id})
+        return {"api": API, "members": members, **({"sync_errors": errors} if errors else {})}
+
+    @app.delete("/api/v1/projects/{project_id}/members/me")
+    def leave(project_id: str, user: dict = Depends(current_user)):
+        """Un membre quitte le projet de lui-même ; le dernier administrateur passe d'abord la main."""
+        _need_member(db, user, project_id)
+        try:
+            db.remove_member(user["id"], project_id, user["id"])
+        except ValueError as exc:
+            raise HTTPException(409, {"error": "dernier administrateur du projet : nomme d'abord un autre administrateur"
+                                      if "dernier" in str(exc) else str(exc)}) from exc
+        _revoke_left(db, project_id, {user["id"]})
+        app.state.live.publish("members", {"project": project_id})
+        return {"api": API, "ok": True}
 
     @app.get("/api/v1/audit")
     def audit(user: dict = Depends(current_user)):
@@ -142,6 +212,7 @@ def create_app(db: HubDB) -> FastAPI:
                      label=project["name"], name=f"{user['id']}-{body.device_id[:7]}")
         except ValueError as exc:
             raise HTTPException(422, {"error": str(exc)}) from exc
+        db.add_device(user["id"], project_id, body.device_id, project["syncthing_folder"] or project["id"])
         return {"api": API, "ok": True}
 
     @app.get("/api/v1/events")
@@ -290,6 +361,15 @@ def current_user(request: Request) -> dict:
     return user
 
 
+def _revoke_left(db: HubDB, project_id: str, left: set[str]) -> list[str]:
+    """Ceux qui ne sont plus membres : leurs postes ne reçoivent plus les fichiers du projet."""
+    from .sync_link import revoke
+    errors = []
+    for user_id in sorted(left):
+        errors += revoke(db, user_id, project_id)
+    return errors
+
+
 def _need_member(db: HubDB, user: dict, project_id: str):
     if not db.is_member(user["id"], project_id):
         raise HTTPException(404, {"error": "projet introuvable"})
@@ -322,6 +402,35 @@ class SyncIn(BaseModel):
     device_id: str
 
 
+class RegisterIn(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    id: str
+    name: str = Field(min_length=1, max_length=40)
+    color: str = ""
+
+    @field_validator("id")
+    @classmethod
+    def _id(cls, value: str) -> str:
+        if not _ID.fullmatch(value or "") or value == "me":   # « me » désigne soi-même dans /members/me
+            raise ValueError("pseudo invalide")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value or any(ord(ch) < 32 for ch in value):
+            raise ValueError("nom invalide")
+        return value
+
+    @field_validator("color")
+    @classmethod
+    def _color(cls, value: str) -> str:
+        if value and not _COLOR.fullmatch(value):
+            raise ValueError("couleur invalide")
+        return value
+
+
 class RefIn(BaseModel):
     kind: Literal["file", "conversation"]
     path: str = ""
@@ -346,6 +455,7 @@ class ProjectIn(BaseModel):
     preset: str = "assiste"
     model: str = ""
     effort: str = ""
+    members: list["MemberIn"] = Field(default_factory=list)   # les collègues invités dès la création
 
     @field_validator("id")
     @classmethod
@@ -458,3 +568,6 @@ class MembersIn(BaseModel):
         if not any(m.role == "administrateur" for m in value):
             raise ValueError("il faut un administrateur du projet")
         return value
+
+
+ProjectIn.model_rebuild()

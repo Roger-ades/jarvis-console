@@ -176,6 +176,21 @@ def share(data_dir: Path, folder: str, folder_id: str, remote: str, *, label: st
               {"devices": [*devices, {"deviceID": remote}]})
 
 
+def unshare(data_dir: Path, folder: str) -> int:
+    """Ce poste cesse de synchroniser le dossier (le projet quitté, ou retiré) : les fichiers restent sur le
+    disque. Rend le nombre de partages retirés ; sans Syncthing installé, rien à retirer."""
+    if not binary_of(data_dir).is_file() or not (home_of(data_dir) / "config.xml").is_file():
+        return 0
+    start(data_dir)
+    q = urllib.parse.quote
+    gone = 0
+    for current in _rest(data_dir, "GET", "/rest/config/folders") or []:
+        if _same_path(current.get("path") or "", folder):
+            _rest(data_dir, "DELETE", f"/rest/config/folders/{q(current.get('id') or '')}")
+            gone += 1
+    return gone
+
+
 def _up() -> bool:
     try:
         with urllib.request.urlopen(f"http://{GUI}/rest/noauth/health", timeout=1) as response:

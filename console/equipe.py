@@ -1,6 +1,7 @@
 """Lien entre la console et le hub : la page ne voit jamais le jeton."""
 from __future__ import annotations
 
+import getpass
 import json
 import re
 import threading
@@ -14,7 +15,8 @@ from fastapi import Body, FastAPI
 from . import share, syncbox
 from .config import ConfigStore, expand_path
 from .engine import TaskError
-from .hub_client import HubClient, HubError, normalize_fingerprint
+from .equipe_boite import TeamFeed
+from .hub_client import HUB_FINGERPRINT, HUB_URL, HubClient, HubError, normalize_fingerprint
 
 MARKER = ".jarvis-projet"
 STIGNORE = """~$*
@@ -30,9 +32,31 @@ ACTIVE = {"running", "awaiting"}
 def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     client = HubClient(data_dir)
     app.state.hub = client
+    # Invitations, Fil et conversations partagées dans la boîte de réception (console/equipe_boite.py).
+    feed = TeamFeed(store, engine._inbox_changed)
+    engine.inbox_sources.append(feed)
+    app.state.team_feed = feed
+    feed_lock = threading.Lock()
 
     def cfg():
         return cfg_store.config
+
+    def poll_feed():
+        hub = cfg().hub
+        if not (hub.enabled and hub.fingerprint and client.token()):
+            return
+        with feed_lock:
+            try:
+                me = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/me").get("user") or {}
+                linked = {p.team_id: {"folder": p.folder, "name": p.name, "color": p.color}
+                          for p in cfg().projects if p.team_id}
+                feed.poll(lambda method, path: client.call(hub.url, hub.fingerprint, method, path), me, linked)
+            except Exception:  # noqa: BLE001 - hub hors d'atteinte : la boîte garde ce qu'elle avait
+                pass
+
+    def refresh_feed():
+        """Après rejoindre, créer, quitter : la boîte de réception n'attend pas la prochaine demi-minute."""
+        threading.Thread(target=poll_feed, name="hub-boite", daemon=True).start()
 
     def fail(exc: HubError):
         from .app import _err
@@ -77,6 +101,69 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
             return fail(exc)
         store.audit("jeton d'équipe enregistré", {})
         return {"ok": True}
+
+    def signup_target() -> tuple[str, str]:
+        """Le hub configuré à la main s'il est complet, sinon celui de l'équipe, écrit dans JARVIS."""
+        hub = cfg().hub
+        if hub.url and hub.fingerprint:
+            return hub.url, hub.fingerprint
+        return HUB_URL, HUB_FINGERPRINT
+
+    @app.get("/api/hub/signup")
+    def signup_state():
+        """Au lancement : ce poste a-t-il un compte sur le hub ? Hors VPN, on n'ouvre rien (et on réessaiera)."""
+        if client.token():
+            return {"needed": False}
+        url, fingerprint = signup_target()
+        try:
+            reachable = client.probe(url, timeout=4) == fingerprint
+        except HubError:
+            reachable = False
+        return {"needed": True, "reachable": reachable, "url": url, "suggest": suggest_identity()}
+
+    @app.post("/api/hub/signup")
+    def signup(body: dict = Body(...)):
+        if client.token():
+            return fail(HubError("Ce poste est déjà inscrit sur le hub.", 409))
+        user_id = str(body.get("id") or "").strip().lower()
+        name = " ".join(str(body.get("name") or "").split())
+        color = str(body.get("color") or "").lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", user_id) or user_id == "me":
+            return fail(HubError("Pseudo : lettres minuscules, chiffres et tirets, sans accent ni espace.", 422))
+        if not name or len(name) > 40:
+            return fail(HubError("Nom affiché : entre 1 et 40 caractères.", 422))
+        if color and not re.fullmatch(r"#[0-9a-f]{6}", color):
+            color = ""
+        url, fingerprint = signup_target()
+        try:
+            user = client.register(url, fingerprint, user_id, name, color)
+        except HubError as exc:
+            if exc.status == 409:
+                exc = HubError(f"Le pseudo « {user_id} » est déjà pris sur le hub : choisis-en un autre.", 409)
+            elif exc.status == 422:
+                exc = HubError("Le hub refuse ce pseudo ou ce nom.", 422)
+            return fail(exc)
+        updated = cfg()
+        updated.hub.enabled, updated.hub.url, updated.hub.fingerprint = True, url, fingerprint
+        cfg_store.save(updated, "inscription au hub")
+        store.audit("inscription au hub", {"compte": user_id})
+        engine.bus.publish("config", {"reason": "équipe"})
+        refresh_feed()
+        return {"ok": True, "user": user}
+
+    @app.post("/api/hub/revoke")
+    def revoke(body: dict = Body(...)):
+        """L'administrateur retire un compte depuis la boîte de réception."""
+        user_id = str(body.get("user") or "")
+        hub = cfg().hub
+        try:
+            res = client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/users/{_q(user_id)}")
+        except HubError as exc:
+            return fail(exc)
+        store.audit("compte d'équipe révoqué", {"compte": user_id})
+        refresh_feed()
+        errors = res.get("sync_errors") or []
+        return {"ok": True, **({"warning": "Syncthing : " + "; ".join(errors)} if errors else {})}
 
     @app.get("/api/hub/projects")
     def projects():
@@ -145,7 +232,9 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
             engine.bus.publish("projects", {"projects": engine.projects()})
         store.audit("projet d'équipe rejoint", {"projet": team_id})
         engine.bus.publish("config", {"reason": "équipe"})
-        return {"ok": True, "folder": folder, "syncthing": _link_sync(client, cfg().hub, remote, str(folder), data_dir)}
+        linked = _link_sync(client, cfg().hub, remote, str(folder), data_dir)
+        refresh_feed()
+        return {"ok": True, "folder": folder, "syncthing": linked}
 
     @app.post("/api/hub/create")
     def create(body: dict = Body(...)):
@@ -165,11 +254,19 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
                   "preset": local.preset or "assiste", "model": local.model, "effort": local.effort}
         if re.fullmatch(r"#[0-9a-fA-F]{6}", local.color or ""):
             fields["color"] = local.color
+        # Les membres choisis : un projet d'équipe n'est pas forcément partagé avec tout le monde.
+        chosen = {}
+        for m in body.get("members") or []:
+            uid = str((m or {}).get("id") or "").strip() if isinstance(m, dict) else str(m or "").strip()
+            if uid:
+                role = (m or {}).get("role") if isinstance(m, dict) else ""
+                chosen[uid] = role if role in ("membre", "administrateur") else "membre"
+        fields["members"] = [{"id": uid, "role": role} for uid, role in chosen.items()]
         try:
             client.call(hub.url, hub.fingerprint, "POST", "/api/v1/projects", fields)
         except HubError as exc:
             return fail(exc)
-        store.audit("projet d'équipe créé", {"projet": team_id})
+        store.audit("projet d'équipe créé", {"projet": team_id, "membres": sorted(chosen)})
         return join({"team_id": team_id, "folder": str(folder)})
 
     @app.get("/api/hub/users")
@@ -197,6 +294,81 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
                                {"members": body.get("members") or []})
         except HubError as exc:
             return fail(exc)
+
+    @app.post("/api/hub/leave")
+    def leave(body: dict = Body(...)):
+        """Quitter un projet d'équipe : le hub retire ce compte, puis ce poste détache le dossier (les fichiers
+        restent). Le dernier administrateur doit d'abord passer la main."""
+        hub = cfg().hub
+        proj = _linked(str(body.get("folder") or ""))
+        team_id = proj.team_id if proj else str(body.get("team_id") or "")
+        if not team_id:
+            return fail(HubError("Ce dossier n'est pas un projet d'équipe.", 409))
+        try:
+            client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/projects/{_q(team_id)}/members/me")
+        except HubError as exc:
+            if exc.status != 404:   # déjà retiré : il reste à détacher
+                return fail(exc)
+        store.audit("projet d'équipe quitté", {"projet": team_id})
+        out = detach(proj) if proj else {"ok": True}
+        refresh_feed()
+        return out
+
+    @app.post("/api/hub/unlink")
+    def unlink(body: dict = Body(...)):
+        """Détacher le dossier de son projet d'équipe sur ce poste seulement (après un retrait, ou pour ne plus
+        le synchroniser ici) : il redevient un projet JARVIS local, ses fichiers restent."""
+        proj = _linked(str(body.get("folder") or ""))
+        if proj is None:
+            return fail(HubError("Ce dossier n'est pas un projet d'équipe.", 404))
+        team_id = proj.team_id
+        out = detach(proj)
+        with feed._lock:
+            # encore membre : le projet ne revient pas comme une invitation à chaque passage
+            feed.dismissed.add(team_id)
+            feed._save()
+        store.audit("projet d'équipe détaché", {"projet": team_id, "dossier": proj.folder})
+        refresh_feed()
+        return out
+
+    @app.post("/api/hub/seen")
+    def seen(body: dict = Body(...)):
+        """La page montre le fil ou les conversations du projet : ce qui y est arrivé est lu."""
+        team_id = str(body.get("project") or "")
+
+        def upto(key):
+            try:
+                return float(body[key]) if body.get(key) is not None else None
+            except (TypeError, ValueError):
+                return None
+        if team_id:
+            feed.read_team(team_id, msg=upto("msg"), conv=upto("conv"))
+        return {"ok": True}
+
+    def _linked(folder: str):
+        return next((p for p in cfg().projects if p.team_id and _same(p.folder, folder)), None) if folder else None
+
+    def detach(proj) -> dict:
+        team_id = proj.team_id
+        warning = ""
+        try:
+            syncbox.unshare(data_dir, proj.folder)
+        except (OSError, TimeoutError, ValueError) as exc:
+            warning = f"Syncthing : {exc}"
+        marker = Path(expand_path(proj.folder)) / MARKER
+        try:
+            if marker.read_text(encoding="utf-8").strip() == team_id:
+                marker.unlink()
+        except OSError:
+            pass
+        updated = cfg()
+        target = next((p for p in updated.projects if p.team_id == team_id and _same(p.folder, proj.folder)), None)
+        if target is not None:
+            target.team_id = ""
+            cfg_store.save(updated, "projet d'équipe détaché")
+        engine.bus.publish("projects", {"projects": engine.projects()})
+        engine.bus.publish("config", {"reason": "équipe"})
+        return {"ok": True, "folder": proj.folder, **({"warning": warning} if warning else {})}
 
     @app.get("/api/hub/presence")
     def presence():
@@ -359,8 +531,10 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
                 relink()
         except Exception:
             pass
+        poll_feed()
         while True:
             time.sleep(30)
+            poll_feed()
             try:
                 hub = cfg().hub
                 if not (hub.enabled and hub.fingerprint and client.token()):
@@ -396,6 +570,16 @@ def _link_sync(client: HubClient, hub, project: dict, folder: str, data_dir: Pat
         return {"ok": False, "error": exc.message}
     except Exception as exc:
         return {"ok": False, "error": str(exc) or exc.__class__.__name__}
+
+
+def suggest_identity() -> dict:
+    """Pseudo et nom proposés d'après la session Windows ou macOS : « paul.martin » → paul-martin, Paul Martin."""
+    try:
+        login = getpass.getuser()
+    except (OSError, KeyError, ImportError):
+        login = ""
+    words = [w for w in re.split(r"[._\-\s]+", login) if w]
+    return {"id": slug(login), "name": " ".join(w[:1].upper() + w[1:] for w in words)[:40]}
 
 
 def slug(text: str) -> str:

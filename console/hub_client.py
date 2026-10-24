@@ -9,6 +9,13 @@ import ssl
 import urllib.parse
 from pathlib import Path
 
+# Le hub de l'équipe, écrit ici pour que chacun s'inscrive au premier lancement sans rien saisir
+# (docs/equipe.md). Un autre hub reste possible dans Configuration → Équipe.
+HUB_URL = "https://10.20.10.249:8443"
+HUB_FINGERPRINT = "531a7cbbdd2e3fcb995102ee6896d8ce0c2a9a436b55729dcece601d8e02eba0"
+# Seule une copie de JARVIS peut créer un compte : le hub en garde l'empreinte (hub/app.py, REGISTER_KEY_HASH).
+REGISTER_KEY = "1arQQ8m8R0f_5mnfh0KOgGkFPz0MnbWVzFMtNdqodzY"
+
 
 class HubError(Exception):
     def __init__(self, message: str, status: int = 400):
@@ -45,9 +52,18 @@ class HubClient:
         self.file.parent.mkdir(parents=True, exist_ok=True)
         self.file.write_text(token, encoding="utf-8")
 
-    def probe(self, url: str) -> str:
+    def probe(self, url: str, timeout: float = 30) -> str:
         """Empreinte SHA-256 du certificat, sans envoyer le jeton."""
-        return self._exchange(url, "GET", "/health", token="", fingerprint="", want="fingerprint")
+        return self._exchange(url, "GET", "/health", token="", fingerprint="", want="fingerprint", timeout=timeout)
+
+    def register(self, url: str, fingerprint: str, user_id: str, name: str, color: str) -> dict:
+        """Crée le compte de ce poste et garde le jeton rendu. Rend le compte."""
+        if not normalize_fingerprint(fingerprint):
+            raise HubError("Empreinte du hub inconnue.", 409)
+        answer = self._exchange(url, "POST", "/api/v1/register", token="", fingerprint=fingerprint,
+                                body={"key": REGISTER_KEY, "id": user_id, "name": name, "color": color})
+        self.set_token(str(answer.get("token") or ""))
+        return answer.get("user") or {}
 
     def call(self, url: str, fingerprint: str, method: str, path: str, body=None,
              content: bytes | None = None, content_type: str | None = None, query: str = "",
@@ -63,13 +79,14 @@ class HubClient:
                               want="bytes" if raw else "json")
 
     def _exchange(self, url: str, method: str, path: str, *, token: str, fingerprint: str,
-                  body=None, content: bytes | None = None, content_type: str | None = None, want: str = "json"):
+                  body=None, content: bytes | None = None, content_type: str | None = None, want: str = "json",
+                  timeout: float = 30):
         parsed = check_url(url)
         port = parsed.port or 443
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        conn = http.client.HTTPSConnection(parsed.hostname, port, timeout=30, context=context)
+        conn = http.client.HTTPSConnection(parsed.hostname, port, timeout=timeout, context=context)
         try:
             conn.connect()
             der = conn.sock.getpeercert(binary_form=True)

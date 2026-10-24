@@ -9,7 +9,7 @@ import { accountState } from "./limits.js";
 import { projectFor } from "./projects.js";
 import { tintOf } from "./tint.js";
 import { inputView } from "./taskwin.js";
-import { $, fmtDate, h, noticeRoot, paint, toast, toolIcon, toolLabel } from "./util.js";
+import { $, confirmDialog, fmtDate, h, noticeRoot, paint, toast, toolIcon, toolLabel } from "./util.js";
 
 let ctx = null;
 let data = { entries: [], counts: { todo: 0, read: 0, reminder: 0 } };
@@ -26,7 +26,8 @@ const keyOf = (f) => String(f || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").
 const time = (ts) => new Date(ts * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
 /** ctx: profiles(), openTask(id), retry(id), openRoutines(), editNote(note), notes(), routines(),
- * closeDrawers(except), openDisplay(taskId, key, color), reveal() (a notice shown: the desktop app's bar). */
+ * closeDrawers(except), openDisplay(taskId, key, color), reveal() (a notice shown: the desktop app's bar),
+ * openProject(folder, tab) and joinTeam(teamId) (the team's entries). */
 export async function initInbox(context) {
   ctx = context;
   await refresh();
@@ -44,7 +45,18 @@ export function inboxChanged(d) {
 }
 
 export const inboxCounts = () => data.counts || { todo: 0, read: 0, reminder: 0 };
+
+/** What the team brought to a team project (console/equipe_boite.py): new messages in its Fil (`mention`:
+ * one names the user), conversations shared since the user looked, and whether the account was removed from it. */
+export function teamNews(teamId) {
+  const of = (...kinds) => (teamId ? data.entries.find((e) => e.team_id === teamId && kinds.includes(e.kind)) : null);
+  const fil = of("team_message", "team_mention"), shared = of("team_share");
+  return { fil: fil?.count || 0, mention: fil?.kind === "team_mention", partage: shared?.count || 0, removed: !!of("team_removed") };
+}
+/** The team projects this account was added to, not yet on this computer (and not put away). */
+export const teamInvitations = () => data.entries.filter((e) => e.kind === "team_invite");
 export function onInbox(fn) { listeners.add(fn); }
+export function offInbox(fn) { listeners.delete(fn); }
 export function rerender() {
   badge();
   if (el() && !el().hidden) render();
@@ -134,6 +146,12 @@ export async function back() {
   const parts = [say(n(["hook", "permission", "question", "plan", "proposal"]), "à valider"),
     say(n(["expired"]), "validation expirée", "validations expirées"), say(n(["error", "interrupted"]), "erreur", "erreurs"),
     say(n(["choice"]), "choix en attente"), say(n(["done", "routine", "run"]), "résultat", "résultats"),
+    say(n(["team_invite"]), "invitation à un projet d'équipe", "invitations à des projets d'équipe"),
+    say(n(["team_mention"]), "mention dans un fil d'équipe", "mentions dans des fils d'équipe"),
+    say(n(["team_message"]), "fil d'équipe actif", "fils d'équipe actifs"),
+    say(n(["team_share"]), "conversation partagée", "conversations partagées"),
+    say(n(["team_removed"]), "retrait d'un projet d'équipe", "retraits de projets d'équipe"),
+    say(n(["team_signup"]), "inscription au hub", "inscriptions au hub"),
     say(n(["reminder"]), "rappel", "rappels")].filter(Boolean);
   if (!parts.length) return;
   const close = () => { awayBar?.remove(); awayBar = null; };
@@ -299,10 +317,13 @@ const LABELS = {
   hook: "Validation", permission: "Validation", question: "Question de Claude", plan: "Plan à approuver",
   proposal: "Proposition de Claude", expired: "Validation expirée", choice: "Claude attend ton choix",
   error: "En erreur", interrupted: "Interrompue", done: "Terminée", routine: "Routine", run: "Routine",
-  reminder: "Rappel",
+  reminder: "Rappel", team_invite: "Invitation · projet d'équipe", team_message: "Fil d'équipe",
+  team_mention: "On te mentionne", team_share: "Conversation partagée", team_removed: "Retiré d'un projet d'équipe",
+  team_signup: "Inscription au hub",
 };
 const ICON = { question: "help", plan: "list", proposal: "bolt", expired: "clock", choice: "sparkle", error: "error",
-  interrupted: "alert", done: "check", routine: "clock", run: "clock", reminder: "bell" };
+  interrupted: "alert", done: "check", routine: "clock", run: "clock", reminder: "bell",
+  team_invite: "team", team_message: "team", team_mention: "team", team_share: "team", team_removed: "team", team_signup: "team" };
 
 function row(e, inGroup = false) {
   const actions = h("div", { class: "ib-actions" });
@@ -382,6 +403,34 @@ function row(e, inGroup = false) {
       actions.append(btn("Ouvrir", main, "ghost"), later, btn("Vu", () => dismiss(e), "primary"));
       break;
     }
+    case "team_invite":
+      lines.push(h("div", { class: "ib-text" }, e.summary));
+      meta.unshift(e.members > 1 ? `${e.members} membres` : "");
+      main = () => ctx.joinTeam?.(e.team_id);
+      actions.append(btn("Ignorer", () => dismiss(e), "ghost"), btn("Rejoindre…", main, "primary"));
+      break;
+    case "team_message": case "team_mention":
+      if (e.count > 1) label = `${LABELS[e.kind]} · ${e.count} messages`;
+      if (e.excerpt) lines.push(h("div", { class: "ib-text" }, e.excerpt));
+      main = () => { ctx.openProject?.(e.folder, "fil"); mark({ ids: [e.id] }); };
+      actions.append(btn("Lu", () => mark({ ids: [e.id] }), "ghost"), btn("Ouvrir le fil", main, "primary"));
+      break;
+    case "team_share":
+      if (e.count > 1) label = `${e.count} conversations partagées`;
+      if (e.excerpt) lines.push(h("div", { class: "ib-text" }, e.excerpt));
+      main = () => { ctx.openProject?.(e.folder, "partage"); mark({ ids: [e.id] }); };
+      actions.append(btn("Lu", () => mark({ ids: [e.id] }), "ghost"), btn("Voir", main, "primary"));
+      break;
+    case "team_removed":
+      lines.push(h("div", { class: "ib-text" }, e.summary));
+      main = () => ctx.openProject?.(e.folder, "equipe");
+      actions.append(btn("Ignorer", () => dismiss(e), "ghost"), btn("Détacher le dossier…", () => detach(e), "primary"));
+      break;
+    case "team_signup":
+      lines.push(h("div", { class: "ib-text" }, e.summary));
+      main = () => mark({ ids: [e.id] });
+      actions.append(btn("Révoquer…", () => revoke(e), "ghost"), btn("Vu", main, "primary"));
+      break;
     default:
       main = () => e.task_id && ctx.openTask(e.task_id);
   }
@@ -450,4 +499,29 @@ function snooze(e, v) {
 }
 
 function mark(body) { return call({ id: body.ids?.[0] || `section:${body.section}` }, () => api("/api/inbox/read", { method: "POST", body })); }
+/** A team project this account lost: its folder becomes a personal project again (its files stay). */
+async function detach(e) {
+  const yes = await confirmDialog("Détacher le dossier ?",
+    `« ${e.title} » redevient un projet personnel sur ce poste : ses fichiers restent, ils ne se synchronisent plus avec l'équipe.`,
+    "Détacher");
+  if (!yes) return;
+  return call(e, async () => {
+    const res = await api("/api/hub/unlink", { method: "POST", body: { folder: e.folder } });
+    toast(res.warning ? `« ${e.title} » est détaché. ${res.warning}` : `« ${e.title} » est redevenu un projet personnel.`,
+      res.warning ? "warn" : "ok");
+  });
+}
+
+/** A hub administrator removes an account that registered from JARVIS. */
+async function revoke(e) {
+  const yes = await confirmDialog("Révoquer ce compte ?",
+    `${e.title} (${e.user}) ne pourra plus se connecter au hub, et ses postes ne recevront plus les fichiers des projets d'équipe. `
+    + "Ce pseudo ne pourra pas être réutilisé.", "Révoquer");
+  if (!yes) return;
+  return call(e, async () => {
+    const res = await api("/api/hub/revoke", { method: "POST", body: { user: e.user } });
+    toast(res.warning ? `Compte révoqué. ${res.warning}` : `Le compte de ${e.title} est révoqué.`, res.warning ? "warn" : "ok");
+  });
+}
+
 function dismiss(e) { return call(e, () => api("/api/inbox/dismiss", { method: "POST", body: { ids: [e.id] } })); }

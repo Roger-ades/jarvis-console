@@ -55,6 +55,24 @@ Trois sections, dans cet ordre.
 | Résultat de routine | idem, tâche `origin: "routine"` ; regroupé par routine (« 3 exécutions ») | Ouvrir, Marquer comme lu ; extrait |
 | Routine non lancée, manquée ou reportée | `runs` de la routine (sans tâche, ou programmée plus tard) | Ouvrir la routine, Lancer maintenant, Marquer comme lu |
 
+**Équipe** ([console/equipe_boite.py](../console/equipe_boite.py)) : avec le hub configuré, la console
+lui demande toutes les 30 secondes ce qui concerne ce compte. Les entrées se rangent dans les sections
+ci-dessus.
+
+| Entrée | Section | Boutons |
+|---|---|---|
+| Invitation à un projet d'équipe (membre, pas de dossier sur ce poste) | À faire | Rejoindre…, Ignorer |
+| On te mentionne (`@nom` dans le fil) | À faire | Ouvrir le fil, Lu |
+| Fil d'équipe : messages des autres depuis la dernière lecture (« 3 messages ») | À lire | Ouvrir le fil, Lu |
+| Conversation partagée par un collègue | À lire | Voir, Lu |
+| Retiré d'un projet d'équipe relié à ce poste | À faire | Détacher le dossier…, Ignorer |
+| Inscription d'un collègue au hub (administrateur du hub seulement) | À lire | Révoquer…, Vu |
+
+Lu avance la marque jusqu'au dernier message ; le fil ou les conversations affichés dans le projet
+valent lecture. Une invitation ignorée ne revient que si on est retiré puis ajouté à nouveau. Les inscriptions
+antérieures au premier passage de l'administrateur valent déjà vues. Rien de
+ce qui vient du hub n'est donné à Claude : ce sont des entrées de la console.
+
 **Rappels** : les rappels des notes arrivés à leur heure (`remind_at` passé, `reminded` faux), avec
 Ouvrir, Plus tard… et Vu, comme la popup actuelle.
 
@@ -345,6 +363,8 @@ les tapant après `/`.
    onglet Actions du projet (« Du compte … »), routines, doublons de nom. *Fait.*
 6. **Finitions** : « Pendant ton absence » (verrouillage ou veille de la session dans l'application de
    bureau, `powerMonitor` ; page cachée plus de 15 min dans le navigateur), regroupements. *Fait.*
+7. **Équipe** : invitations, fil (messages et mentions), conversations partagées, retrait d'un projet ;
+   invitations en attente sur l'accueil. *Fait.*
 
 ## Ce qui est vérifié
 
@@ -353,7 +373,9 @@ les tapant après `/`.
   expiration, affichage en attente, routines « erreurs » et en tête, rappels, événement regroupé, API)
   et [tests/test_brief_actions.py](../tests/test_brief_actions.py) (réglages du brief, demande écrite,
   routine qui suit le compte, liste des utilisateurs Odoo, actions du compte : désactivées par défaut,
-  validation, modification, doublons, routines, API).
+  validation, modification, doublons, routines, API), [tests/test_equipe_boite.py](../tests/test_equipe_boite.py)
+  (invitation et Ignorer, fil et mention, ce que la page a lu, retrait d'un projet, marques gardées au
+  redémarrage, hub injoignable).
 - **Dans Chromium**, sur le serveur de démo (fausse CLI) : badge, panneau, Approuver depuis la boîte
   (journal « utilisateur (boîte de réception) »), Détail, Lu, carte en tête avec son affichage,
   section Aujourd'hui, « Pendant ton absence », bouton d'action du compte sur l'accueil et dans
@@ -381,7 +403,6 @@ routine.
   avec le même réglage de signalement que les routines.
 - **Téléphone** (étape 5) : la page mobile reprend `GET /api/inbox` et les décisions ; c'est là qu'une
   attente de validation plus longue que 30 min aura un sens.
-- **Hub d'équipe** (étape 8) : les mentions dans le fil d'un projet.
 - **Routines claude.ai** : leurs exécutions restent dans le panneau Routines. Les faire entrer dans la
   boîte demanderait d'interroger claude.ai régulièrement.
 

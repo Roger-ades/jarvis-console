@@ -12,13 +12,14 @@ import { odooChanged, renderOdoo } from "./odoo.js";
 import { projectTint } from "./tint.js";
 import { $, STATUS, confirmDialog, dialog, fmtDate, h, paint, toast } from "./util.js";
 import { renderEquipe, renderFil, renderPartage, shareDiscussion } from "./equipe.js";
+import { onInbox, teamNews } from "./inbox.js";
 import { openPreview } from "./viewer.js";
 import * as wm from "./wm.js";
 
 const GROUPS = [
   { id: "cours", label: "En cours", screens: [["tasks", "Discussions"], ["files", "Fichiers"], ["suivi", "Suivi"]] },
   { id: "retenu", label: "Ce que Claude retient" },
-  { id: "equipe", label: "Équipe", screens: [["equipe", "Membres"], ["partage", "Conversations"], ["fil", "Fil"]] },
+  { id: "equipe", label: "Équipe", screens: [["fil", "Fil"], ["partage", "Conversations"], ["equipe", "Membres"]] },
   { id: "actions", label: "Actions" },
   { id: "notes", label: "Notes" },
 ];
@@ -33,6 +34,7 @@ const join = (a, b) => (a ? `${a}/${b}` : b);
 let ctx = null, ws = null, tab = "instructions", sub = "", note = null, loading = false, focusSection = null;
 let epoch = 0, paintGen = 0, wsParts = null, fileSig = null, filesGen = 0, sessionSig = null;
 let liveTimer = 0, liveRunning = false, liveAgain = false;
+let shownTeam = "";   // the team project the panel was drawn for
 const el = () => $("#project");
 
 export function toggleProject(context) {
@@ -59,12 +61,16 @@ export function showProject(context, { folder = null, tab: on = "tasks" } = {}) 
 
 /** The request bar changed account or folder: follow it while open. */
 export function projectFollow() { if (ctx && !el().hidden) load(); }
+/** The configuration was read again (the bar did not move): the panel reads its own folder again, where it is. */
+export function projectReload() { if (ctx && ws && !el().hidden) load(ws.folder, false); }
 
 /** Projects or routines changed (an action added or validated, a routine accepted): the Actions tab follows,
  * and the Suivi tab (an Odoo project linked from a discussion). */
 export function projectActionsChanged() {
   if (!ctx || !ws || el().hidden) return;
-  if (tab === "actions" || tab === "suivi") render();
+  // shared, joined, left or detached: its tabs change (the Fil, the conversations)
+  if ((ctx.project(ws.folder)?.team_id || "") !== shownTeam) render();
+  else if (tab === "actions" || tab === "suivi") render();
   else syncBadges();
 }
 /** A discussion was archived or brought back: the Discussions tab follows. */
@@ -169,8 +175,17 @@ function tabCount(id) {
   if (id === "actions") return toReview ? { n: toReview, warn: true, title: "Actions à valider" } : null;
   if (id === "notes") { const n = notesHere(ws.folder); return n ? { n } : null; }
   if (id === "suivi") return proj?.odoo?.length ? { n: proj.odoo.length } : null;
+  // the team's news, as the inbox has them (an @mention counts as to do)
+  const news = teamNews(proj?.team_id);
+  if (id === "fil") return news.fil ? { n: news.fil, warn: news.mention, title: news.mention ? "On te mentionne" : "Nouveaux messages" } : null;
+  if (id === "partage") return news.partage ? { n: news.partage, title: "Partagées depuis ta dernière visite" } : null;
+  if (id === "equipe:groupe") {
+    const n = news.fil + news.partage;
+    return n ? { n, warn: news.mention, title: "Nouveau dans le fil et les conversations" } : null;
+  }
   return null;
 }
+onInbox(() => { if (ctx && ws && !el()?.hidden) syncBadges(); });
 
 function countNode(c) {
   return h("span", { class: c.warn ? "cnt warn" : "cnt", ...(c.title ? { title: c.title } : {}) }, String(c.n));
@@ -398,8 +413,12 @@ function render() {
   const d = el();
   if (d.hidden) return;
   const proj = ws ? ctx.project(ws.folder) : null;
+  const team = !!proj?.team_id;
+  shownTeam = proj?.team_id || "";
   paint(d, proj ? tint() : null); // a project's panel: the colors of the account and of the project
-  const head = h("div", { class: "drawer-head" }, h("h2", {}, proj ? h("span", { class: "pj-name", style: { "--pc": proj.color } }, proj.name) : "Projet"),
+  const head = h("div", { class: "drawer-head" }, h("h2", {}, proj ? h("span", { class: "pj-name", style: { "--pc": proj.color } }, proj.name) : "Projet",
+    team ? h("span", { class: "team-badge", title: "Projet d'équipe : fichiers synchronisés avec le serveur, fil et conversations partagés" },
+      h("span", { class: "i", svg: "team" }), "Équipe") : null),
     ws ? h("span", { class: "badge", style: { "--pc": ctx.profiles().find((p) => p.id === ws.profile)?.color || "var(--accent)" } }, ws.profile_name) : null,
     ws ? h("button", { type: "button", class: "btn small", title: proj ? "Nom, couleur, compte, autorisations et modèle par défaut" : "Donner un nom et des réglages par défaut à ce dossier",
       on: { click: async () => { if (await ctx.editProject(ws.folder, ws.profile)) render(); } } }, proj ? "Réglages" : "En faire un projet") : null,
@@ -413,25 +432,32 @@ function render() {
   const folders = [...new Set([...ws.folders, ...ctx.workdirOptions(), ws.folder])]
     .filter((f) => f === home || f === ws.folder || !hidden.has(fkey(f)));
   const sel = h("select", { class: "pj-folder", title: ws.folder }, ...folders.map((f, i) =>
-    h("option", { value: f, title: f }, i === 0 ? `${baseName(f)} (dossier du compte)` : baseName(f))),
+    h("option", { value: f, title: f }, i === 0 ? `${baseName(f)} (dossier du compte)` : `${baseName(f)}${ctx.project(f)?.team_id ? " · équipe" : ""}`)),
     h("option", { value: "__other__" }, "Autre dossier…"));
   sel.value = ws.folder;
   sel.addEventListener("change", () => (sel.value === "__other__" ? browse() : load(sel.value)));
+  // A personal project has one Équipe screen (share it, or join a team project); a team project has its fil,
+  // conversations and members. Without a hub the group is not shown at all.
+  if (!team && (tab === "fil" || tab === "partage")) tab = "equipe";
+  if (!team && !ctx.hubOn?.() && groupOf(tab) === "equipe") tab = "tasks";
   const group = groupOf(tab);
-  const groups = h("div", { class: "pj-tabs pj-groups", role: "tablist" }, ...GROUPS.map((g) => {
+  const shownGroups = GROUPS.filter((g) => g.id !== "equipe" || team || ctx.hubOn?.());
+  const groups = h("div", { class: "pj-tabs pj-groups", role: "tablist" }, ...shownGroups.map((g) => {
     const on = group === g.id;
-    const c = g.id === "cours" ? null : tabCount(g.id);
+    const key = g.id === "equipe" ? "equipe:groupe" : g.id;   // ("equipe" is also its Membres screen)
+    const c = g.id === "cours" ? null : tabCount(key);
     return h("button", {
       type: "button", role: "tab", class: on ? "on" : "", "aria-selected": String(on),
-      ...(g.id === "cours" ? {} : { "data-tab": g.id }),
+      ...(g.id === "cours" ? {} : { "data-tab": key }),
       on: { click: () => {
         if (g.id === "cours") { if (group !== "cours") tab = "tasks"; }
         else if (g.id === "retenu") { if (group !== "retenu") { tab = "instructions"; focusSection = "instructions"; } }
+        else if (g.id === "equipe") { if (group !== "equipe") tab = team ? "fil" : "equipe"; }
         else tab = g.id;
         note = null; render(); projectDiskChanged();
-      } } }, g.label, c ? countNode(c) : null);
+      } } }, g.id === "equipe" && team ? h("span", { class: "i", svg: "team" }) : null, g.label, c ? countNode(c) : null);
   }));
-  const screens = GROUPS.find((g) => g.id === group)?.screens;
+  const screens = group === "equipe" && !team ? null : GROUPS.find((g) => g.id === group)?.screens;
   const subTabs = screens ? h("div", { class: "pj-tabs pj-sub", role: "tablist" }, ...screens.map(([id, label]) => {
     const c = tabCount(id);
     return h("button", {
@@ -444,8 +470,8 @@ function render() {
     title: "Retirer ce dossier des listes de la console (le dossier et ses fichiers ne changent pas)", on: { click: () => forgetFolder(proj) } }, "Retirer de la liste");
   const move = proj ? h("button", { type: "button", class: "btn small",
     title: "Déplacer le projet et tout ce qui s'y rattache vers un autre dossier du disque (l'ancien dossier n'est pas modifié)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
-  d.replaceChildren(head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
-    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), groups, subTabs, body);
+  d.replaceChildren(...[head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
+    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), groups, subTabs, body].filter(Boolean));
   const screen = group === "retenu" ? "retenu" : tab;
   ({ retenu: renderRetenu, files: renderFiles, tasks: renderTasks,
     actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,

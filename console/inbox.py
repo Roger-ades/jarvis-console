@@ -23,7 +23,7 @@ RUN_STATUSES = ("non lancée", "manquée", "reportée")
 
 # todo: what expires first, then what was refused for lack of an answer, the displays, the failures
 _RANK = {"hook": 0, "permission": 0, "question": 1, "plan": 1, "proposal": 1, "expired": 2, "choice": 3,
-         "error": 4, "interrupted": 4}
+         "team_invite": 3, "team_mention": 3, "error": 4, "interrupted": 4, "team_removed": 4}
 
 
 def plain(text: str, limit: int = EXCERPT) -> str:
@@ -77,11 +77,12 @@ def resume_message(rec: dict, timeout_min: int) -> str:
 
 
 def entries(tasks, routines, notes, *, now: float, since: float | None, approval_timeout: float,
-            profiles: dict | None = None, light: bool = False) -> list[dict]:
+            profiles: dict | None = None, light: bool = False, extra: list[dict] | None = None) -> list[dict]:
     """Every entry, sorted by section then urgency. `since`: what ended before is read (None: only what
-    is live, the approvals waiting and the reminders due). `light`: no excerpt nor input (the counters)."""
+    is live, the approvals waiting and the reminders due). `light`: no excerpt nor input (the counters).
+    `extra`: entries made elsewhere (the team's, equipe_boite), already in this shape."""
     profiles = profiles or {}
-    out: list[dict] = []
+    out: list[dict] = list(extra or [])
     after = since if since is not None else float("inf")
     groups: dict[str, list[dict]] = {}
     heads = {r.get("id"): r for r in routines if r.get("headline")}

@@ -66,6 +66,7 @@ export const ICONS = {
   alert: S('<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4"/><path d="M12 17h.01"/>'),
   clock: S('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   user: S('<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+  team: S('<circle cx="9" cy="8" r="3.2"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.6"/><path d="M15.5 14.2A5 5 0 0 1 21 19"/>'),
   model: S('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/>'),
   gauge: S('<path d="M4 18h3v-4H4zM10.5 18h3V10h-3zM17 18h3V6h-3z"/>'),
   dot: S('<circle cx="12" cy="12" r="3"/>'),

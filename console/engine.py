@@ -411,6 +411,7 @@ class Engine:
         self._inbox_publishing = threading.Lock()  # one publication at a time: the newest is always the last sent
         self._inbox_timer: threading.Timer | None = None
         self._inbox_sig = None
+        self.inbox_sources: list = []   # entries made elsewhere: the team's (console/equipe_boite.py)
         self._launch_wait: dict[str, dict] = {}  # child task -> the parent still waiting for its result
         self._watch: dict = store.kv_get("routine_watch", {}) or {}
         self._watch_pending: dict[str, list] = {}
@@ -1096,9 +1097,15 @@ class Engine:
             tasks = [t for t in self.tasks.values() if not t.get("archived")]  # put away: nothing left to read
             routines = [r.model_dump() for r in self.routines.values()]
         profiles = {p.id: {"name": p.name, "color": p.color} for p in self.cfg.profiles}
+        extra = []
+        for source in self.inbox_sources:
+            try:
+                extra += source.entries(light)
+            except Exception:  # noqa: BLE001 - a source that fails (the hub) never empties the inbox
+                pass
         return inbox_mod.entries(tasks, routines, self.store.list_notes(), now=time.time(), since=self._inbox_since,
                                  approval_timeout=self.cfg.general.approval_timeout_min * 60, profiles=profiles,
-                                 light=light)
+                                 light=light, extra=extra)
 
     def inbox(self, start: bool = False) -> dict:
         """The entries and their counters. `start` (a page asks): the first time, what has already ended
@@ -1159,6 +1166,8 @@ class Engine:
                 if kind in ("done", "routine", "error", "interrupted") or (kind == "headline" and not dismiss):
                     for tid in e.get("task_ids") or [e["task_id"]]:
                         read(tid)
+                elif kind.startswith("team_"):
+                    continue    # below, by its source
                 elif kind == "run":
                     r = self.routines.get((e.get("routine") or {}).get("id") or "")
                     for run in r.runs if r else []:
@@ -1197,6 +1206,10 @@ class Engine:
                 self.save_note({"reminded": True}, nid)
             except TaskError:
                 pass
+        for source in self.inbox_sources:   # the team's entries (equipe_boite): their marks are the source's
+            mine = [e for e in picked if e["kind"] in source.KINDS]
+            if mine:
+                marked += source.mark(mine, dismiss)
         self._inbox_changed()
         return {"marked": marked}
 

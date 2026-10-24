@@ -64,7 +64,8 @@ export function openPalette(ctx) {
         t.archived ? `archivée ${fmtDate(t.archived)}` : fmtDate(t.created)].filter(Boolean).join(" · "),
       run: () => ctx.openTask(t.id) });
     if (projs.length) groups.push(["Projets", projs.slice(0, 6).map((p) => ({
-      icon: "book", color: p.color, title: p.name, sub: baseName(p.folder), run: () => ctx.useProject(p) }))]);
+      icon: p.team_id ? "team" : "book", color: p.color, title: p.name,
+      sub: [p.team_id ? "Équipe" : "", baseName(p.folder)].filter(Boolean).join(" · "), run: () => ctx.useProject(p) }))]);
     if (tasks.length) groups.push(["Discussions", tasks.slice(0, 12).map(taskItem)]);
     if (server.sessions.length) groups.push(["Hors JARVIS", server.sessions.slice(0, 10).map((s) => ({
       icon: "retry", color: s.color, title: s.title, snippet: s.snippet,

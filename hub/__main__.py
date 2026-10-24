@@ -192,6 +192,9 @@ def member_remove(db: HubDB, project: str, user: str):
         db.remove_member(actor, project, user)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+    from .sync_link import revoke
+    for error in revoke(db, user, project):
+        print(f"Syncthing : {error}")
     print(f"{user} retiré de {project}")
 
 
