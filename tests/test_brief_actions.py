@@ -252,3 +252,48 @@ def test_account_actions_api(client):  # noqa: F811
     r = client.post("/api/accounts/work/actions/settings", json={"name": "relance", "menu": True}, headers=hd)
     assert r.json() == {"model": "", "effort": "", "menu": True}
     assert client.post("/api/accounts/inconnu/actions/run", json={"name": "relance"}, headers=hd).status_code == 404
+
+
+# ------------------------------------------------------------ the Odoo user asked at start
+
+def test_an_odoo_server_is_seen_even_without_a_web_address(engine):
+    from console import mcp
+    p = engine.cfg.profile("work").model_copy(deep=True)
+    p.mcp.import_desktop, p.mcp.strict = False, True
+    assert not mcp.has_odoo(p)
+    p.mcp.extra_servers = {"erp": {"command": "uvx", "args": ["mcp-server-odoo"]}}
+    assert mcp.has_odoo(p)
+    p.mcp.disabled_servers = ["erp"]
+    assert not mcp.has_odoo(p)
+
+
+def test_an_account_with_odoo_and_no_odoo_user_is_asked_for_it(data_dir, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from console import mcp
+    from console.app import create_app
+    from console.config import ConfigStore
+
+    from .test_security import FAKE, PORT
+    monkeypatch.setattr(mcp, "has_odoo", lambda p: p.id == "work")
+    store = ConfigStore(data_dir)
+    cfg = store.config.model_copy(deep=True)
+    store.save(cfg, "tests")
+    app = create_app(data_dir, PORT, cli_command=FAKE, extra_hosts=("testserver",), start_threads=False)
+    with TestClient(app, headers={"X-Console-Token": app.state.auth.token}) as c:
+        assert c.get("/api/odoo-user").json()["missing"] == []      # a fresh install: the first-run assistant first
+        cfg.general.setup_done = True
+        store.save(cfg, "tests")
+        app2 = create_app(data_dir, PORT, cli_command=FAKE, extra_hosts=("testserver",), start_threads=False)
+        app.state.store.close()
+    with TestClient(app2, headers={"X-Console-Token": app2.state.auth.token}) as c:
+        st = c.get("/api/odoo-user").json()
+        assert [m["id"] for m in st["missing"]] == ["work"] and "name" in st["suggest"]
+        assert c.put("/api/profiles/work/odoo-user", json={"name": "   "}).status_code == 422
+        assert c.put("/api/profiles/nobody/odoo-user", json={"name": "X"}).status_code == 404
+        r = c.put("/api/profiles/work/odoo-user", json={"name": "  Roger   T. ", "id": 7})
+        assert r.status_code == 200 and r.json()["odoo_user"] == "Roger T."
+        work = ConfigStore(data_dir).config.profile("work")   # saved on disk
+        assert work.brief.odoo_user == "Roger T." and work.brief.odoo_user_id == 7
+        assert c.get("/api/odoo-user").json() == {"missing": [], "suggest": None}
+    app2.state.store.close()

@@ -256,6 +256,12 @@ Configuration → Profils → *compte* → **Brief du matin** :
   compte, en lecture seule, qui reste dans l'historique et n'entre pas dans la boîte. Vide : l'utilisateur
   avec lequel le serveur Odoo est connecté. Une tâche (`project.task`), un projet (`project.project`) ou
   un événement (`calendar.event`) créé dans une discussion de ce compte lui est assigné.
+  Au lancement, un compte qui a un serveur Odoo et pas encore d'utilisateur Odoo le demande dans une
+  fenêtre (**Ton utilisateur Odoo**) : elle lit aussitôt la liste des utilisateurs (même courte
+  discussion, gardée une semaine sur le poste), choisit la personne dont le nom ou l'identifiant
+  correspond à la session Windows ou macOS quand une seule correspond, et laisse taper un nom.
+  **Plus tard** : elle revient au lancement suivant. Après la fenêtre d'inscription au hub, et jamais
+  pendant l'assistant de première installation.
 - **Modèle et effort** : ceux du compte par défaut ; un modèle moyen et un effort faible suffisent pour
   une exécution par jour.
 

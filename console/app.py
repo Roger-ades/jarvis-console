@@ -19,7 +19,7 @@ from urllib.parse import quote
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from starlette.datastructures import MutableHeaders
 
 from . import __version__, attachments, claude_cli, content, mcp, updater, winsys
@@ -27,7 +27,7 @@ from . import addons as addons_mod
 from .config import (BASE_MODELS, MODE_LABELS, Config, ConfigStore, default_config, dump,
                      expand_path, format_errors, web_domain)
 from .engine import Engine, TaskError, file_stamp
-from .equipe import mount as mount_equipe
+from .equipe import mount as mount_equipe, suggest_identity
 from .permissions import LOCKED_RULES
 from .store import Store
 
@@ -134,6 +134,17 @@ class InboxMarkIn(BaseModel):
     ids: list[str] = Field(default_factory=list, max_length=500)
     section: Literal["", "todo", "read", "reminder"] = ""
     tasks: list[str] = Field(default_factory=list, max_length=500)  # discussions the user looked at
+
+
+class OdooUserIn(BaseModel):
+    """The Odoo user of an account: a name, and its number when it was picked in the list read from Odoo."""
+    name: str = Field(min_length=1, max_length=120)
+    id: int | None = Field(None, gt=0)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _name(cls, v):
+        return " ".join(str(v or "").split())
 
 
 def _err(status: int, detail: str, **extra) -> JSONResponse:
@@ -430,6 +441,28 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     @app.get("/api/profiles/{pid}/odoo-users/{tid}")
     def odoo_users_result(pid: str, tid: str):
         return engine.odoo_users_result(pid, tid)
+
+    @app.get("/api/odoo-user")
+    def odoo_user_missing():
+        """The accounts with an Odoo server and no Odoo user yet: the launch window asks for it."""
+        cfg = cfg_store.config
+        if cfg.general.setup_done is False:
+            return {"missing": []}
+        missing = [{"id": p.id, "name": p.name} for p in cfg.profiles
+                   if not (p.brief.odoo_user.strip() or p.brief.odoo_user_id) and mcp.has_odoo(p)]
+        # who this probably is in Odoo: the window picks it in the list read from Odoo when only one user matches
+        return {"missing": missing, "suggest": suggest_identity() if missing else None}
+
+    @app.put("/api/profiles/{pid}/odoo-user")
+    def odoo_user_set(pid: str, body: OdooUserIn):
+        cfg = cfg_store.config.model_copy(deep=True)
+        prof = cfg.profile(pid)
+        if not prof:
+            return _err(404, "Profil inconnu.")
+        prof.brief.odoo_user = body.name
+        prof.brief.odoo_user_id = body.id
+        save(cfg, f"utilisateur Odoo de {prof.name} : {body.name}")
+        return {"ok": True, "odoo_user": body.name, "odoo_user_id": body.id}
 
     @app.get("/api/profiles/{pid}/mcp")
     def profile_mcp(pid: str):

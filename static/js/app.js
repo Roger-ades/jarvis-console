@@ -18,6 +18,7 @@ import { openSetup } from "./setup.js";
 import { openConfig, openConsumption, updateProbe } from "./config.js";
 import { officeAccountChanged, openAccount } from "./office.js";
 import { joinTeamProject, offerSignup } from "./equipe.js";
+import { offerOdooUser } from "./odoo.js";
 import { openDiscussions, renderHistory } from "./history.js";
 import { away, back, inboxChanged, inboxCounts, initInbox, isUnread, markTasksRead, onInbox, refresh as refreshInbox, teamInvitations, toggleInbox } from "./inbox.js";
 import { showSession } from "./library.js";
@@ -111,8 +112,8 @@ async function boot() {
   checkVersion();
   setInterval(checkVersion, 60_000);
   if (S.config.general.setup_done === false) startSetup(); // fresh install: the first-run assistant
-  // no hub account yet on this poste: the registration window, then the rest
-  else offerSignup().finally(() => setTimeout(proposeDesktopApp, 2500));
+  // no hub account yet on this poste: the registration window; no Odoo user for an account with Odoo: its window
+  else offerSignup().catch(() => {}).then(offerOdooUser).finally(() => setTimeout(proposeDesktopApp, 2500));
 }
 
 /** In the desktop app, once: should start.bat, the launcher and the session start open it rather than the
@@ -144,7 +145,10 @@ function startSetup() {
   openSetup({
     state: () => S.state, profiles: () => profiles().map((p) => ({ ...p, workdir: S.meta?.profiles?.[p.id]?.workdir || p.workdir })),
     probes: () => S.probes, newProject, recentFolders: (pid) => recentFolders(pid),
-    onDone: async () => { if (!(await offerSignup())) toast("Bienvenue ! Ctrl+K pour tout retrouver.", "ok"); },
+    onDone: async () => {
+      if (!(await offerSignup())) toast("Bienvenue ! Ctrl+K pour tout retrouver.", "ok");
+      await offerOdooUser();
+    },
   });
 }
 window.addEventListener("jarvis-check-version", () => checkVersion());

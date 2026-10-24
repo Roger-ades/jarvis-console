@@ -3,7 +3,7 @@
 // a click edits its text and its status (Claude writes them in Odoo, under the account's preset), a right click
 // shows it to Claude (Regard).
 import { api } from "./api.js";
-import { dialog, fmtDate, h, toast } from "./util.js";
+import { dialog, fmtDate, h, modalHost, toast } from "./util.js";
 import { openPreview } from "./viewer.js";
 
 const shown = new Map();   // folder -> the state last read
@@ -286,4 +286,122 @@ async function linkDialog(folder, tint, rerender) {
 export function odooChanged(folder, isShown, rerender) {
   shown.delete(folder);
   if (isShown) rerender();
+}
+
+
+// ---------------------------------------------------------------- the account's Odoo user, asked at start
+const plain = (v) => String(v || "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+const userLabel = (u) => `${u.name}${u.login ? ` (${u.login})` : ""}`;
+const USERS_KEPT = 7 * 86400_000;   // the list read from Odoo is kept a week on this poste: no new reading at each start
+
+function keptUsers(pid) {
+  try {
+    const v = JSON.parse(localStorage.getItem(`jarvis-odoo-users:${pid}`) || "null");
+    return v && Date.now() - v.at < USERS_KEPT && Array.isArray(v.users) ? v.users : null;
+  } catch { return null; }
+}
+
+function keepUsers(pid, users) {
+  try { localStorage.setItem(`jarvis-odoo-users:${pid}`, JSON.stringify({ at: Date.now(), users })); } catch { /* private window */ }
+}
+
+/** The users of Odoo, read by a short read-only discussion of the account (Configuration → Brief → Chercher dans Odoo). */
+async function readUsers(pid) {
+  const { task_id: tid } = await api(`/api/profiles/${pid}/odoo-users`, { method: "POST" });
+  let r = { status: "running" };
+  for (let n = 0; n < 180 && r.status === "running"; n++) {
+    await new Promise((res) => setTimeout(res, 1000));
+    r = await api(`/api/profiles/${pid}/odoo-users/${tid}`);
+  }
+  if (!r.users?.length) throw new Error(r.error || "Rien trouvé dans Odoo.");
+  keepUsers(pid, r.users);
+  return r.users;
+}
+
+/** The one user that looks like this person (name of the Windows or macOS session), else none. */
+function guess(users, suggest) {
+  const name = plain(suggest?.name), login = plain(suggest?.id);
+  const hits = users.filter((u) => (name && plain(u.name) === name) || (login && plain(String(u.login || "").split("@")[0]) === login));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** At start: each account with an Odoo server and no Odoo user yet (Configuration → Profils → Brief du matin)
+ * asks for it in a window. « Plus tard »: the next start asks again. */
+export async function offerOdooUser() {
+  let st;
+  try { st = await api("/api/odoo-user"); } catch { return; }
+  for (const p of st.missing || []) {
+    if (!(await askOdooUser(p, st.suggest, (st.missing || []).length > 1))) return;
+  }
+}
+
+function askOdooUser(p, suggest, several) {
+  return new Promise((resolve) => {
+    const { root } = modalHost("dialog");
+    let users = keptUsers(p.id) || [];
+    const listId = `odoo-users-ask-${p.id}`;
+    const datalist = h("datalist", { id: listId });
+    const field = h("input", { type: "text", list: listId, maxlength: "120", placeholder: "Prénom Nom", "aria-label": "Utilisateur Odoo",
+      autocomplete: "off" });
+    const note = h("small", { class: "muted" });
+    const error = h("p", { class: "su-error", role: "alert", hidden: true });
+    const later = h("button", { type: "button", class: "btn ghost", on: { click: () => close(false) } }, "Plus tard");
+    const ok = h("button", { type: "button", class: "btn primary", on: { click: send } }, "Enregistrer");
+    const box = h("div", { class: "dialog su-signup", role: "dialog", "aria-modal": "true", "aria-label": "Utilisateur Odoo" },
+      h("h3", {}, several ? `Ton utilisateur Odoo · ${p.name}` : "Ton utilisateur Odoo"),
+      h("div", { class: "dialog-body team-join" },
+        h("p", { class: "muted" }, "JARVIS t'assigne les tâches, projets et événements qu'il crée dans Odoo, et ton brief du matin compte tes devis pas encore envoyés. Dis-lui qui tu es dans Odoo."),
+        h("label", { class: "team-field" }, h("span", {}, "Utilisateur Odoo"), field, datalist, note),
+        error),
+      h("div", { class: "dialog-actions" }, later, ok));
+    const overlay = h("div", { class: "overlay" }, box);
+    const picked = () => users.find((u) => userLabel(u) === field.value || u.name === field.value.trim()) || null;
+    const check = () => {
+      const u = picked();
+      ok.disabled = !field.value.trim();
+      if (!users.length) return;
+      note.textContent = u ? `Utilisateur Odoo n° ${u.id}.` : field.value.trim()
+        ? "Nom libre : Claude cherchera cette personne dans Odoo." : `${users.length} utilisateur${users.length > 1 ? "s" : ""} dans Odoo : choisis dans la liste.`;
+    };
+    const fill = () => {
+      datalist.replaceChildren(...users.map((u) => h("option", { value: userLabel(u) })));
+      const me = !field.value.trim() && guess(users, suggest);
+      if (me) field.value = userLabel(me);
+      check();
+    };
+    field.addEventListener("input", () => { error.hidden = true; check(); });
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); close(false); }
+      if (e.key === "Enter" && e.target === field && !ok.disabled) { e.preventDefault(); send(); }
+    };
+    root.ownerDocument.addEventListener("keydown", onKey, true);
+    let open = true;
+    function close(v) { open = false; overlay.remove(); root.ownerDocument.removeEventListener("keydown", onKey, true); resolve(v); }
+    async function send() {
+      if (ok.disabled) return;
+      const u = picked();
+      const name = u ? u.name : field.value.trim();
+      ok.disabled = later.disabled = true;
+      try {
+        await api(`/api/profiles/${p.id}/odoo-user`, { method: "PUT", body: { name, id: u ? u.id : null } });
+        close(true);
+        toast(`Utilisateur Odoo enregistré : ${name}. Il se change dans Configuration → Profils → Brief du matin.`, "ok");
+      } catch (e) {
+        later.disabled = false;
+        check();
+        error.textContent = e.message;
+        error.hidden = false;
+      }
+    }
+    root.append(overlay);
+    if (users.length) fill();
+    else {
+      // read the list at once: picking in it gives Odoo's number for the user, which a typed name does not
+      note.textContent = "Lecture des utilisateurs dans Odoo (lecture seule)… Tu peux aussi taper ton nom.";
+      readUsers(p.id).then((list) => { users = list; if (open) fill(); })
+        .catch((e) => { if (open) note.textContent = `${e.message} Tape ton nom tel qu'il est dans Odoo.`; });
+    }
+    check();
+    field.focus();
+  });
 }

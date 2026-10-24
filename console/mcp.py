@@ -110,6 +110,19 @@ def _app_url(conf: dict, odoo: bool) -> str:
     return f"https://{u[0]}" if u else ""
 
 
+def _is_odoo(name: str, conf: dict) -> bool:
+    env = conf.get("env") if isinstance(conf.get("env"), dict) else {}
+    return "odoo" in " ".join(map(str, [name, conf.get("command", ""), conf.get("args", ""), conf.get("url", ""), *env])).lower()
+
+
+def has_odoo(profile: Profile) -> bool:
+    """An Odoo server among the account's own servers (Claude Desktop, Intégrations, Claude Code), even without
+    a web address."""
+    cli = {} if profile.mcp.strict else _cli_servers(profile)
+    return any(_is_odoo(name, conf) for name, conf in {**cli, **profile_servers(profile)[0]}.items()
+               if isinstance(conf, dict))
+
+
 def web_apps(profile: Profile, workdir: str = "") -> list[dict]:
     """The web applications behind the MCP servers of a task, so that Claude can open their pages (afficher) and
     the console opens them without asking (the user gave that address to the server): [{name, url, kind}].
@@ -119,8 +132,7 @@ def web_apps(profile: Profile, workdir: str = "") -> list[dict]:
     servers = {**cli, **profile_servers(profile)[0]}
     apps = []
     for name, conf in servers.items():
-        env = conf.get("env") if isinstance(conf.get("env"), dict) else {}
-        odoo = "odoo" in " ".join(map(str, [name, conf.get("command", ""), conf.get("args", ""), conf.get("url", ""), *env])).lower()
+        odoo = _is_odoo(name, conf)
         url = _app_url(conf, odoo)
         if url and all(a["url"] != url for a in apps):
             apps.append({"name": name, "url": url, "kind": "odoo" if odoo else ""})
