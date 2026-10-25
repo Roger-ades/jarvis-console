@@ -96,6 +96,18 @@ export function popover(anchor, ...content) {
 
 const svg = (name, cls = "") => h("span", { class: `i ${cls}`, svg: name });
 
+/** Long reasons fold past a few lines so actions stay visible in a small window. */
+function reasonBlock(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  const lines = t.split(/\n/).length;
+  const long = t.length > 220 || lines > 4;
+  if (!long) return h("div", { class: "appr-reason" }, t);
+  return h("details", { class: "appr-reason fold" },
+    h("summary", {}, t.split(/\n/)[0].slice(0, 120) + (t.length > 120 || lines > 1 ? "…" : "")),
+    h("div", {}, t));
+}
+
 function pretty(v) {
   if (v && typeof v === "object" && v["_tronqué"]) return String(v["aperçu"] || "");
   try { return JSON.stringify(v, null, 2); } catch { return String(v); }
@@ -1127,7 +1139,7 @@ export class TaskWindow {
     el.append(...[
       this.apprHead(toolIcon(p.tool), "Validation requise", toolLabel(p.tool)),
       p.target ? h("div", { class: "appr-target" }, p.target) : null,
-      h("div", { class: "appr-reason" }, p.reason),
+      reasonBlock(p.reason),
       h("div", { class: "appr-actions" }, msg,
         h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
         p.suggest?.length ? h("button", { type: "button", class: "btn", title: "Approuver et ne plus demander pour ce type d'action dans ce projet",
@@ -1144,6 +1156,8 @@ export class TaskWindow {
   proposalCard(p) {
     const x = p.input || {};
     if (x.quoi === "odoo") return this.odooCard(p);
+    if (x.quoi === "lien") return this.driveCard(p);
+    if (x.quoi === "outil") return this.outilCard(p);
     if (x.quoi === "rattacher") return this.attachCard(p);
     if (x.quoi === "module") return this.moduleCard(p);
     if (x.quoi === "savoir") return this.knowledgeCard(p);
@@ -1219,6 +1233,53 @@ export class TaskWindow {
       h("details", { open: true }, h("summary", { class: "muted" }, "Différences"),
         h("div", { class: "prop-diff" }, diffTable(x.diff || { lines: [] }))),
     ]);
+    return el;
+  }
+
+  /** Claude proposes to move the project folder into OneDrive (proposer, quoi « lien »). */
+  driveCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", {}, v)) : null);
+    el.append(...[
+      this.apprHead("folder", "Déplacer dans OneDrive", `Projet « ${x.projet || ""} »`),
+      h("div", { class: "appr-reason" }, x.description || p.reason),
+      h("div", { class: "prop-fields" }, ...[
+        field("Depuis", x.dossier), field("Vers", x.destination),
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, "JARVIS déplace le dossier ; OneDrive synchronise ensuite. "
+        + "Rien n'est recopié par Microsoft Graph. L'ancien chemin disparaît du disque (déplacement)."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } }, "Déplacer")),
+    ]);
+    return el;
+  }
+
+  /** Claude proposes a deterministic project tool (proposer, quoi « outil »). */
+  outilCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const field = (k, v) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", {}, v)) : null);
+    el.append(...[
+      this.apprHead("bolt", x.remplace != null ? "Outil à remplacer" : "Nouvel outil proposé", `Projet « ${x.projet || ""} »`),
+      h("div", { class: "appr-reason" }, x.description || p.reason),
+      h("div", { class: "prop-fields" }, ...[
+        field("Nom", x.nom), field("Écrit des fichiers", x.ecrit ? "oui" : "non"), field("Fichier", x.fichier),
+      ].filter(Boolean)),
+      h("div", { class: "prop-note muted" }, "Fonction déterministe du projet. Relis le code : il s'exécutera sous les "
+        + "autorisations de la discussion. Rien n'est écrit avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },
+          x.remplace != null ? "Remplacer l'outil" : "Ajouter l'outil")),
+      h("details", { open: true }, h("summary", { class: "muted" }, "Code Python"),
+        h("pre", { class: "prop-code" }, x.contenu || "")),
+      x.remplace != null ? h("details", {}, h("summary", { class: "muted" }, "Code actuel"),
+        h("pre", { class: "prop-code" }, x.remplace)) : null,
+    ].filter(Boolean));
     return el;
   }
 
@@ -1312,7 +1373,13 @@ export class TaskWindow {
   /** Several questions: one at a time, with tabs, so none is missed in a small window; all must be answered. */
   questionCard(p) {
     const qs = (p.input && p.input.questions) || [];
-    const state = qs.map(() => ({ sel: new Set(), other: "" }));
+    this.qAnswers ||= new Map();
+    const saved = this.qAnswers.get(p.id);
+    const state = qs.map((_, i) => {
+      const s = saved?.[i];
+      return { sel: new Set(s?.sel || []), other: s?.other || "" };
+    });
+    const remember = () => this.qAnswers.set(p.id, state.map((s) => ({ sel: [...s.sel], other: s.other })));
     const answered = (i) => state[i].sel.size > 0 || state[i].other.trim() !== "";
     const many = qs.length > 1;
     let cur = 0;
@@ -1324,11 +1391,13 @@ export class TaskWindow {
       const opts = h("div", { class: "q-opts" });
       for (const o of q.options || []) {
         const b = h("button", { type: "button", class: "btn q-opt" }, o.label, o.description ? h("small", {}, o.description) : null);
+        if (state[i].sel.has(o.label)) b.classList.add("sel");
         b.addEventListener("click", () => {
           const s = state[i].sel;
           if (q.multiSelect) { s.has(o.label) ? s.delete(o.label) : s.add(o.label); }
           else { s.clear(); s.add(o.label); opts.querySelectorAll(".q-opt").forEach((x) => x.classList.remove("sel")); }
           b.classList.toggle("sel", s.has(o.label));
+          remember();
           refresh();
           // a single choice moves on to the next question still without an answer
           if (!q.multiSelect && many) {
@@ -1338,8 +1407,8 @@ export class TaskWindow {
         });
         opts.append(b);
       }
-      const other = h("input", { type: "text", placeholder: "Autre réponse…" });
-      other.addEventListener("input", () => { state[i].other = other.value; refresh(); });
+      const other = h("input", { type: "text", placeholder: "Autre réponse…", value: state[i].other });
+      other.addEventListener("input", () => { state[i].other = other.value; remember(); refresh(); });
       other.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); next.click(); } });
       return h("div", { class: "q" }, h("div", { class: "q-title" }, q.question || q.header || ""),
         q.multiSelect ? h("div", { class: "q-hint" }, "Plusieurs choix possibles.") : null, opts, other);

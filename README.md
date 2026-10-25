@@ -129,6 +129,10 @@ réinitialisation au lieu d'échouer.
 projets, discussions de la console (titre, demandes et réponses de Claude) et sessions
 Claude Code (Desktop, CLI), avec l'extrait trouvé ; flèches et Entrée pour ouvrir.
 
+**Aide** (`F1`, Plus → Aide, ou Ctrl+K → Aide) : rubrique dédiée à ce que sait faire JARVIS —
+interface, demandes, validations, projets, boîte, regard, outils MCP, skills et actions,
+routines, modules, équipe, raccourcis et consommation.
+
 **Toujours pour ce projet** : dans une demande de validation, ce bouton approuve et
 mémorise une règle pour les discussions du dossier (la plus étroite possible et
 modifiable : une commande précise, les fichiers du dossier, un outil Odoo, un domaine

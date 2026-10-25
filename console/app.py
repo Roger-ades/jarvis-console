@@ -671,6 +671,15 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
     def project_office(folder: str):
         return engine.office_state(folder)
 
+    @app.get("/api/projects/drive")
+    def project_drive(folder: str):
+        from . import drive
+        return drive.sync_of(folder)
+
+    @app.post("/api/projects/drive/move")
+    def project_drive_move(body: dict = Body(...)):
+        return engine.drive_move(str(body.get("folder") or ""), str(body.get("destination") or ""))
+
     @app.post("/api/projects/office/refresh")
     def project_office_refresh(body: dict = Body(...)):
         return engine.office_refresh(str(body.get("folder") or ""))

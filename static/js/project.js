@@ -18,15 +18,14 @@ import * as wm from "./wm.js";
 
 const GROUPS = [
   { id: "cours", label: "En cours", screens: [["tasks", "Discussions"], ["files", "Fichiers"], ["suivi", "Suivi"]] },
-  { id: "retenu", label: "Ce que Claude retient" },
+  { id: "reglages", label: "Réglages", screens: [["retenu", "Consignes"], ["actions", "Actions"], ["notes", "Notes"]] },
   { id: "equipe", label: "Équipe", screens: [["fil", "Fil"], ["partage", "Conversations"], ["equipe", "Membres"]] },
-  { id: "actions", label: "Actions" },
-  { id: "notes", label: "Notes" },
 ];
 const RETENU = new Set(["instructions", "memory", "rules", "retenu"]);
+const REGLAGES = new Set([...RETENU, "actions", "notes", "reglages"]);
 const EQUIPE = new Set(["equipe", "partage", "fil"]);
 const groupOf = (id) => (id === "tasks" || id === "files" || id === "suivi" ? "cours"
-  : RETENU.has(id) ? "retenu" : EQUIPE.has(id) ? "equipe" : id);
+  : REGLAGES.has(id) ? "reglages" : EQUIPE.has(id) ? "equipe" : id);
 const TEMPLATE = "# Contexte\n\nÀ quoi sert ce dossier, pour qui, avec quels outils.\n\n# Règles\n\n- \n\n# Fichiers importants\n\n- \n";
 const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const join = (a, b) => (a ? `${a}/${b}` : b);
@@ -175,6 +174,10 @@ function tabCount(id) {
   if (id === "actions") return toReview ? { n: toReview, warn: true, title: "Actions à valider" } : null;
   if (id === "notes") { const n = notesHere(ws.folder); return n ? { n } : null; }
   if (id === "suivi") return proj?.odoo?.length ? { n: proj.odoo.length } : null;
+  if (id === "reglages:groupe") {
+    const n = (toReview || 0) + (ws.memory.files.length || 0) + (ws.rules?.length || 0) + notesHere(ws.folder);
+    return n ? { n, warn: !!toReview, title: toReview ? "Actions à valider" : "Consignes, actions et notes" } : null;
+  }
   // the team's news, as the inbox has them (an @mention counts as to do)
   const news = teamNews(proj?.team_id);
   if (id === "fil") return news.fil ? { n: news.fil, warn: news.mention, title: news.mention ? "On te mentionne" : "Nouveaux messages" } : null;
@@ -440,18 +443,19 @@ function render() {
   // conversations and members. Without a hub the group is not shown at all.
   if (!team && (tab === "fil" || tab === "partage")) tab = "equipe";
   if (!team && !ctx.hubOn?.() && groupOf(tab) === "equipe") tab = "tasks";
+  if (RETENU.has(tab) && tab !== "retenu") { focusSection = tab; tab = "retenu"; }
   const group = groupOf(tab);
   const shownGroups = GROUPS.filter((g) => g.id !== "equipe" || team || ctx.hubOn?.());
   const groups = h("div", { class: "pj-tabs pj-groups", role: "tablist" }, ...shownGroups.map((g) => {
     const on = group === g.id;
-    const key = g.id === "equipe" ? "equipe:groupe" : g.id;   // ("equipe" is also its Membres screen)
+    const key = g.id === "equipe" ? "equipe:groupe" : g.id === "reglages" ? "reglages:groupe" : g.id;
     const c = g.id === "cours" ? null : tabCount(key);
     return h("button", {
       type: "button", role: "tab", class: on ? "on" : "", "aria-selected": String(on),
       ...(g.id === "cours" ? {} : { "data-tab": key }),
       on: { click: () => {
         if (g.id === "cours") { if (group !== "cours") tab = "tasks"; }
-        else if (g.id === "retenu") { if (group !== "retenu") { tab = "instructions"; focusSection = "instructions"; } }
+        else if (g.id === "reglages") { if (group !== "reglages") { tab = "retenu"; focusSection = "instructions"; } }
         else if (g.id === "equipe") { if (group !== "equipe") tab = team ? "fil" : "equipe"; }
         else tab = g.id;
         note = null; render(); projectDiskChanged();
@@ -460,9 +464,14 @@ function render() {
   const screens = group === "equipe" && !team ? null : GROUPS.find((g) => g.id === group)?.screens;
   const subTabs = screens ? h("div", { class: "pj-tabs pj-sub", role: "tablist" }, ...screens.map(([id, label]) => {
     const c = tabCount(id);
+    const on = id === "retenu" ? group === "reglages" && (tab === "retenu" || RETENU.has(tab)) : tab === id;
     return h("button", {
-      type: "button", role: "tab", class: tab === id ? "on" : "", "aria-selected": String(tab === id), "data-tab": id,
-      on: { click: () => { tab = id; note = null; render(); projectDiskChanged(); } } }, label, c ? countNode(c) : null);
+      type: "button", role: "tab", class: on ? "on" : "", "aria-selected": String(on), "data-tab": id,
+      on: { click: () => {
+        tab = id === "retenu" ? "retenu" : id;
+        if (id === "retenu") focusSection = "instructions";
+        note = null; render(); projectDiskChanged();
+      } } }, label, c ? countNode(c) : null);
   })) : null;
   const body = h("div", { class: "pj-body" });
   const pick = h("button", { type: "button", class: "btn small", title: "Choisir un autre dossier sur le disque", on: { click: browse } }, "Parcourir…");
@@ -470,9 +479,17 @@ function render() {
     title: "Retirer ce dossier des listes de la console (le dossier et ses fichiers ne changent pas)", on: { click: () => forgetFolder(proj) } }, "Retirer de la liste");
   const move = proj ? h("button", { type: "button", class: "btn small",
     title: "Déplacer le projet et tout ce qui s'y rattache vers un autre dossier du disque (l'ancien dossier n'est pas modifié)", on: { click: () => moveProject(proj) } }, "Changer de dossier…") : null;
+  const sync = h("div", { class: "pj-sync muted" }, "…");
+  api(`/api/projects/drive?${new URLSearchParams({ folder: ws.folder })}`).then((st) => {
+    if (!sync.isConnected) return;
+    sync.textContent = st.label || "";
+    sync.title = st.hint || st.url || st.root || "";
+    sync.classList.toggle("on", !!st.synced);
+  }).catch(() => { if (sync.isConnected) sync.textContent = ""; });
   d.replaceChildren(...[head, h("div", { class: "pj-where" }, h("div", { class: "pj-pick" }, sel, pick),
-    h("small", { title: ws.folder }, ws.folder), forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), groups, subTabs, body].filter(Boolean));
-  const screen = group === "retenu" ? "retenu" : tab;
+    h("small", { title: ws.folder }, ws.folder), sync,
+    forget || move ? h("div", { class: "pj-pick" }, move, forget) : null), groups, subTabs, body].filter(Boolean));
+  const screen = (tab === "retenu" || RETENU.has(tab)) ? "retenu" : tab;
   ({ retenu: renderRetenu, files: renderFiles, tasks: renderTasks,
     actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,
     suivi: renderSuivi, equipe: (b) => renderEquipe(b, ws, ctx),

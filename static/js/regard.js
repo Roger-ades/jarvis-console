@@ -295,8 +295,33 @@ wm.onDocument((doc) => doc.addEventListener("contextmenu", (ev) => {
   const items = p
     ? [{ label: "Demander à Claude à propos de ceci", run: () => pick(el, p, src) },
        { label: "Copier", run: () => navigator.clipboard?.writeText(p.detail) }]
-    : [{ label: "Demander à Claude à propos de ceci", run: () => inputFor(el)?.focus() }];
+    : [{ label: "Demander à Claude à propos de ceci", run: () => {
+        if (selected && src) {
+          current = { ...src.desc, selection: selected.length > MAX ? `${selected.slice(0, MAX)} […]` : selected, wid: src.wid };
+          changed();
+        }
+        inputFor(el)?.focus();
+      } }];
   menu(ev, items);
+}));
+
+/** In a frame the console cannot read (PDF viewer…): after Ctrl+C, offer to join the clipboard text. */
+export function offerClipboard(desc = null) {
+  if (!settings.enabled() || !navigator.clipboard?.readText) return;
+  navigator.clipboard.readText().then((t) => {
+    const text = String(t || "").trim();
+    if (!text || text.length < 2) return;
+    joinText(text, desc || { type: "texte", title: "texte copié" });
+  }).catch(() => {});
+}
+
+// Desktop app: Ctrl+Shift+V joins the clipboard as regard (frames where selection is opaque).
+wm.onDocument((doc) => doc.addEventListener("keydown", (ev) => {
+  if (!settings.enabled()) return;
+  if (!(ev.ctrlKey || ev.metaKey) || !ev.shiftKey || (ev.key !== "v" && ev.key !== "V")) return;
+  if (ev.target?.closest?.("input, textarea, select, [contenteditable]")) return;
+  ev.preventDefault();
+  offerClipboard();
 }));
 
 /** A chip that follows what would be sent. visible(): whether this bar shows it now; here: the

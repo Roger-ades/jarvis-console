@@ -1,6 +1,7 @@
 // Ctrl+K: one place to find anything (actions, projects, discussions, Claude Code sessions)
 // and to act on it, with the keyboard.
 import { api } from "./api.js";
+import { joinText } from "./regard.js";
 import { fmtDate, h, modalHost, reveal, statusLabel } from "./util.js";
 import { openPreview } from "./viewer.js";
 
@@ -32,8 +33,18 @@ export function openPalette(ctx) {
   const list = h("div", { class: "pal-list", role: "listbox" });
   const box = h("div", { class: "pal", role: "dialog", "aria-modal": "true", "aria-label": "Recherche", "data-regard": "Recherche" },
     h("div", { class: "pal-top" }, h("span", { class: "i", svg: "search" }), input, h("kbd", {}, "Échap")), list,
-    h("div", { class: "pal-foot" }, h("span", {}, h("kbd", {}, "↑"), h("kbd", {}, "↓"), " choisir"), h("span", {}, h("kbd", {}, "Entrée"), " ouvrir"),
-      h("span", { class: "grow" }), h("span", { class: "muted" }, "Recherche aussi dans le contenu des discussions")));
+    h("div", { class: "pal-foot" },
+      h("span", {}, h("kbd", {}, "↑"), h("kbd", {}, "↓"), " choisir"),
+      h("span", {}, h("kbd", {}, "Entrée"), " ouvrir"),
+      h("span", { class: "grow" }),
+      h("span", { class: "muted pal-keys", title: "Raccourcis utiles" },
+        ...[
+          h("kbd", {}, "Ctrl+K"), " ici · ",
+          h("kbd", {}, "Ctrl+,"), " config · ",
+          h("kbd", {}, "F1"), " aide · ",
+          h("kbd", {}, "Boîte"), " ce qui attend",
+          ...(window.jarvis ? [" · ", h("kbd", {}, "Ctrl+Alt+J"), " barre"] : []),
+        ])));
   const overlay = h("div", { class: "overlay pal-overlay", on: { mousedown: (e) => { if (e.target === overlay) close(); } } }, box);
   const { root, doc } = modalHost("palette");
   let items = [], index = 0, server = { tasks: [], sessions: [], documents: [] }, timer = null, seq = 0, loading = false;
@@ -75,7 +86,12 @@ export function openPalette(ctx) {
       icon: "file", title: baseName(d.path), snippet: d.snippet, serverMarks: true,
       sub: [KIND[d.kind] || d.kind, d.title && d.title !== baseName(d.path).replace(/\.[^.]+$/, "") ? d.title : "", parentName(d.path), fmtDate(d.mtime)].filter(Boolean).join(" · "),
       path: d.path,
-      run: () => openPreview({ doc: true, path: d.path, focus: { text: d.snippet, words: (d.snippet.match(/\x02[^\x03]*\x03/g) || []).map((w) => w.slice(1, -1)), page: d.page || 0 } }) }))]);
+      run: () => {
+        const words = (d.snippet.match(/\x02[^\x03]*\x03/g) || []).map((w) => w.slice(1, -1));
+        const plain = String(d.snippet || "").replace(/\x02|\x03/g, "");
+        if (plain) joinText(plain, { type: "fichier", path: d.path, title: baseName(d.path) });
+        openPreview({ doc: true, path: d.path, focus: { text: d.snippet, words, page: d.page || 0 } });
+      } }))]);
     if (acts.length) groups.push(["Actions", acts.slice(0, q ? 8 : 10).map((a) => ({ icon: a.icon || "sparkle", title: a.label, sub: a.hint || "", run: a.run }))]);
     if (shelved.length) groups.push(["Archivées", shelved.slice(0, 10).map(taskItem)]);
     items = groups.flatMap(([, xs]) => xs);

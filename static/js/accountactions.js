@@ -5,8 +5,11 @@
 // folder chosen in the bar (a project brings its preset, model and effort).
 import { api, ApiError } from "./api.js";
 import { reviewAction } from "./actions.js";
+import { slashDescription } from "./slash-fr.js";
 import { tintOf } from "./tint.js";
 import { dialog, h, toast } from "./util.js";
+
+const actionDesc = (a) => slashDescription(a.name, a.description);
 
 const lists = new Map();      // profile id -> its actions (without their content)
 const listeners = new Set();
@@ -51,7 +54,7 @@ export async function runAccountAction(ctx, profile, a, { workdir = "", args = n
   const tint = tintOf(profile.color);
   let text = args;
   if (text === null && a.hint) {
-    text = await dialog({ title: a.label, body: a.description || `/${a.name}`, input: { placeholder: a.hint }, tint,
+    text = await dialog({ title: a.label, body: actionDesc(a) || `/${a.name}`, input: { placeholder: a.hint }, tint,
       buttons: [{ label: "Annuler", value: null }, { label: "Lancer", value: true, cls: "primary" }] });
     if (text === null || text === undefined) return null;
   }
@@ -101,7 +104,7 @@ export function accountActionRows(ctx, profile, actions, refresh) {
     return h("div", { class: `hrow file act-row s-${a.status}`, style: { "--pc": a.status === "ok" ? profile.color : "var(--warn)" } },
       h("span", { class: "i", svg: "bolt" }),
       h("div", { class: "hm" }, h("div", { class: "ht" }, a.label, a.status !== "ok" ? h("span", { class: "act-st" }, STATE[a.status]) : null),
-        h("div", { class: "hs" }, [`/${a.name}${a.hint ? ` ${a.hint}` : ""}`, a.description].filter(Boolean).join(" · "))),
+        h("div", { class: "hs" }, [`/${a.name}${a.hint ? ` ${a.hint}` : ""}`, actionDesc(a)].filter(Boolean).join(" · "))),
       h("label", { class: "check act-menu" }, menu, "Dans le menu"),
       btn(a.status === "ok" ? "Voir" : "Relire", async () => { if (await reviewAccountAction(profile, a)) refresh(); }),
       btn("Lancer", () => runAccountAction(ctx, profile, a, { workdir: ctx.workdir?.() || "" }), "primary"));

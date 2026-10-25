@@ -8,10 +8,11 @@ const MAX = 5;
 const ORIGIN = { desktop: "Claude Desktop", cli: "CLI", console: "Console" };
 
 export class ContextPicker {
-  /** list: element for the chips; profile(): the account of the next request. */
-  constructor(list, profile) {
+  /** list: element for the chips; profile(): the account of the next request; onChange after any change. */
+  constructor(list, profile, onChange = () => {}) {
     this.list = list;
     this.profile = profile;
+    this.onChange = onChange;
     this.items = [];
     this.render();
   }
@@ -58,6 +59,7 @@ export class ContextPicker {
     this.list.hidden = !this.items.length;
     if (this.count) { this.count.hidden = !this.items.length; this.count.textContent = String(this.items.length); }
     this.btn?.setAttribute("aria-pressed", String(!!this.items.length));
+    this.onChange?.();
   }
 
   async pick() {

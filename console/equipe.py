@@ -29,6 +29,31 @@ CLAUDE.local.md
 ACTIVE = {"running", "awaiting"}
 
 
+def _sync_phone(client: HubClient, hub, engine) -> None:
+    """Push local pending approvals to the hub, and apply decisions made on the phone."""
+    pending = []
+    for t in engine.tasks.values():
+        for p in t.get("pending") or []:
+            if p.get("kind") not in ("hook", "permission", "question", "plan", "proposal"):
+                continue
+            pending.append({
+                "task_id": t["id"], "approval_id": p.get("id"), "kind": p.get("kind") or "",
+                "tool": p.get("tool") or "", "target": p.get("target") or "",
+                "reason": p.get("reason") or "", "title": t.get("title") or "",
+            })
+    try:
+        client.call(hub.url, hub.fingerprint, "PUT", "/api/v1/phone/pending", {"pending": pending})
+        got = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/phone/decisions")
+    except HubError:
+        return
+    for d in got.get("decisions") or []:
+        try:
+            engine.decide(str(d.get("task_id") or ""), str(d.get("approval_id") or ""),
+                          str(d.get("decision") or ""), str(d.get("message") or ""))
+        except Exception:  # noqa: BLE001 - already decided or task gone
+            pass
+
+
 def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     client = HubClient(data_dir)
     app.state.hub = client
@@ -51,6 +76,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
                 linked = {p.team_id: {"folder": p.folder, "name": p.name, "color": p.color}
                           for p in cfg().projects if p.team_id}
                 feed.poll(lambda method, path: client.call(hub.url, hub.fingerprint, method, path), me, linked)
+                _sync_phone(client, hub, engine)
             except Exception:  # noqa: BLE001 - hub hors d'atteinte : la boîte garde ce qu'elle avait
                 pass
 

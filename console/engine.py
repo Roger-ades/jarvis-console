@@ -31,7 +31,7 @@ from . import documents as docs_mod
 from . import inbox as inbox_mod
 from . import claude_cli, cloud, content, library, mcp, presence
 from . import addons as addons_mod
-from . import addon_share, addon_tasks, odoo_api
+from . import addon_share, addon_tasks, drive, odoo_api, outils
 from . import knowledge, lessons, notes_tool, odoo_link, office_link, project_nav, project_tools
 from . import launch as launch_mod
 from . import triggers
@@ -566,13 +566,16 @@ class Engine:
                     self.store.save_task(t)
 
     def _purge_old(self):
-        days = self.cfg.history.retention_days
-        n = self.store.purge(time.time() - days * 86400, sorted(TERMINAL))
-        with self._lock:
-            alive = {t["id"] for t in self.store.list_tasks(limit=100000)}
-            if n:
-                self.tasks = {k: v for k, v in self.tasks.items() if k in alive}
-        self.changes.sweep(alive)
+        mode = getattr(self.cfg.history, "purge_mode", "toutes") or "toutes"
+        if mode != "jamais":
+            days = self.cfg.history.retention_days
+            n = self.store.purge(time.time() - days * 86400, sorted(TERMINAL),
+                                 archived_only=(mode == "archives"))
+            with self._lock:
+                alive = {t["id"] for t in self.store.list_tasks(limit=100000)}
+                if n:
+                    self.tasks = {k: v for k, v in self.tasks.items() if k in alive}
+            self.changes.sweep(alive)
         self.auto_archive()
 
     def shutdown(self):
@@ -1559,7 +1562,7 @@ class Engine:
             if n.get("folder") and norm(n["folder"]) == key:
                 moved.append({**n, "folder": new})
                 self.store.save_note(moved[-1])
-        for name in ("action_pins", "action_prefs"):
+        for name in ("action_pins", "action_prefs", "outil_pins"):
             data = self.store.kv_get(name, {}) or {}
             if key in data:
                 data[nkey] = {**data.pop(key), **data.get(nkey, {})}
@@ -2058,8 +2061,11 @@ class Engine:
         except TaskError as exc:
             return reply("Rien de proposé : " + exc.message, True)
         what = {"action": "une action", "routine": "une routine", "consigne": "une consigne",
-                "odoo": "un lien vers Odoo"}.get(prop["quoi"], "quelque chose")
-        verb = "remplacer" if prop["quoi"] in ("consigne", "odoo") and prop.get("remplace") is True else "ajouter"
+                "odoo": "un lien vers Odoo", "lien": "un déplacement OneDrive",
+                "outil": "un outil-script"}.get(prop["quoi"], "quelque chose")
+        verb = ("déplacer" if prop["quoi"] == "lien"
+                else "remplacer" if prop["quoi"] in ("consigne", "odoo", "outil") and prop.get("remplace") is not None and prop.get("remplace") is not False
+                else "ajouter")
         appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=PROPOSE_TOOL, input=prop,
                         reason=f"Claude propose de {verb} {what} au projet « {prop['projet']} ».")
 
@@ -2453,6 +2459,18 @@ class Engine:
             replace = flag is True or str(flag or "").strip().lower() in ("1", "true", "oui", "vrai")
             return {**base, "nom": "lien", "projets_odoo": [x.model_dump() for x in links],
                     "actuels": [x.model_dump() for x in proj.odoo], **({"remplace": True} if replace else {})}
+        if quoi == "lien":
+            try:
+                prop = drive.propose_move(proj.folder, str(args.get("racine") or "") or None)
+            except ValueError as exc:
+                raise TaskError(str(exc)) from None
+            return {**base, **prop, "projet": proj.name}
+        if quoi == "outil":
+            try:
+                prop = outils.propose(args, proj.folder)
+            except ValueError as exc:
+                raise TaskError(str(exc)) from None
+            return {**base, **prop}
         if quoi == "action":
             name = text("nom", 40, True).lower()
             if not project_tools.NAME.match(name):
@@ -2467,7 +2485,7 @@ class Engine:
             return {**base, "nom": name, "libelle": label, "parametre": hint, "consigne": body, "fichier": str(path),
                     "remplace": old, "contenu": project_tools.command_file(name, label, base["description"], hint, body)}
         if quoi != "routine":
-            raise TaskError("« quoi » vaut action, routine, consigne ou odoo.")
+            raise TaskError("« quoi » vaut action, routine, consigne, odoo, lien ou outil.")
         from .routines import Schedule
         action = text("action", 40).lower().lstrip("/")
         if action:
@@ -2500,6 +2518,10 @@ class Engine:
             names = ", ".join(f"« {x['name']} »" for x in proj["odoo"])
             return (f"Projets Odoo liés au projet « {proj['name']} » : {names}. Leurs tâches et sous-tâches s'affichent "
                     "dans l'onglet Suivi du panneau Projet ; la console les lit maintenant.")
+        if prop["quoi"] == "lien":
+            return self._apply_drive_lien(t, prop)
+        if prop["quoi"] == "outil":
+            return self._apply_outil(t, prop)
         if prop["quoi"] == "action":
             path = Path(prop["fichier"])
             now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
@@ -2521,6 +2543,39 @@ class Engine:
                 if enabled and r.get("next_run") else "")
         return (f"Routine « {r['name']} » ({r['schedule_label']}) ajoutée au projet "
                 f"{'et activée' if enabled else 'mais désactivée : l’utilisateur l’activera'}.{when}")
+
+    def _apply_drive_lien(self, t: dict, prop: dict) -> str:
+        """Move the project folder into OneDrive after the user's click."""
+        try:
+            dest = drive.move_into(prop["dossier"], prop["destination"])
+        except ValueError as exc:
+            raise TaskError(str(exc)) from None
+        saved = self.move_project(prop["dossier"], dest)
+        self._audit("projet déplacé dans OneDrive", {"projet": prop.get("projet"), "de": prop["dossier"], "vers": dest}, t)
+        return (f"Projet « {saved.get('name') or prop.get('projet')} » déplacé dans OneDrive "
+                f"({dest}). OneDrive synchronise le dossier ; JARVIS n'a rien recopié lui-même.")
+
+    def drive_move(self, folder: str, destination: str) -> dict:
+        """UI path: move a project into OneDrive after confirmation (same as proposer quoi=lien)."""
+        try:
+            dest = drive.move_into(folder, destination)
+        except ValueError as exc:
+            raise TaskError(str(exc)) from None
+        return self.move_project(folder, dest)
+
+    def _apply_outil(self, t: dict, prop: dict) -> str:
+        try:
+            fp = outils.write(prop)
+        except (OSError, ValueError) as exc:
+            raise TaskError(str(exc)) from None
+        pins = self.store.kv_get("outil_pins", {}) or {}
+        key = os.path.normcase(os.path.normpath(prop["dossier"]))
+        pins.setdefault(key, {})[prop["nom"]] = fp
+        self.store.kv_set("outil_pins", pins)
+        self._audit("outil de projet ajouté", {"projet": prop.get("projet"), "outil": prop["nom"],
+                                                "ecrit": bool(prop.get("ecrit"))}, t)
+        return (f"Outil « {prop['nom']} » {'remplacé' if prop.get('remplace') is not None else 'ajouté'} "
+                f"au projet « {prop.get('projet')} ». Claude pourra l'appeler dans les discussions de ce dossier.")
 
     def _apply_consigne(self, t: dict, prop: dict) -> str:
         """Append a mail instruction the user just accepted. A read mail never writes this by itself."""

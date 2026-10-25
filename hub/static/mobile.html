@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f15">
+<title>JARVIS · Téléphone</title>
+<style>
+:root { color-scheme: dark; --bg:#0b0f15; --card:#151b24; --text:#e8eef7; --muted:#8b9bb0; --ok:#3ecf8e; --err:#f07178; --line:#243041; }
+*{box-sizing:border-box} body{margin:0;font:16px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text);padding:16px;padding-bottom:48px}
+h1{font-size:1.15rem;margin:0 0 4px} .muted{color:var(--muted);font-size:.85rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+.card b{display:block;margin-bottom:4px} .card .t{font-size:.9rem;color:var(--muted);margin:6px 0 10px;word-break:break-word}
+.row{display:flex;gap:8px;flex-wrap:wrap} button{flex:1;min-height:44px;border:0;border-radius:10px;font:inherit;font-weight:600;cursor:pointer}
+.ok{background:var(--ok);color:#062016} .deny{background:var(--err);color:#2a0a0c}
+input{width:100%;margin:8px 0;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0e141c;color:var(--text)}
+.empty{padding:32px 8px;text-align:center;color:var(--muted)} .err{color:var(--err)} a{color:var(--ok)}
+</style>
+</head>
+<body>
+<h1>JARVIS · À valider</h1>
+<p class="muted" id="who">Connexion…</p>
+<div id="list"></div>
+<script>
+const list = document.getElementById("list");
+const who = document.getElementById("who");
+function token() { return localStorage.getItem("jarvisPhoneToken") || ""; }
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    ...opts,
+    headers: { ...(opts.headers || {}), Authorization: "Bearer " + token(), "Content-Type": "application/json" },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function askToken() {
+  const t = prompt("Colle le jeton d'équipe (Configuration → Équipe sur ton PC) :", token());
+  if (t) { localStorage.setItem("jarvisPhoneToken", t.trim()); location.reload(); }
+}
+async function boot() {
+  if (!token()) { who.textContent = "Jeton manquant."; askToken(); return; }
+  try {
+    const me = await api("/api/v1/me");
+    who.textContent = (me.user?.name || me.user?.id || "Connecté") + " · actualisé automatiquement";
+    await refresh();
+    setInterval(refresh, 8000);
+  } catch (e) {
+    who.innerHTML = "";
+    const err = document.createElement("span");
+    err.className = "err";
+    err.textContent = e.message + " · ";
+    const a = document.createElement("a");
+    a.href = "#";
+    a.textContent = "changer le jeton";
+    a.onclick = (ev) => { ev.preventDefault(); askToken(); };
+    who.append(err, a);
+  }
+}
+async function refresh() {
+  const data = await api("/api/v1/phone/pending");
+  const rows = data.pending || [];
+  if (!rows.length) {
+    list.replaceChildren(Object.assign(document.createElement("div"), { className: "empty", textContent: "Rien n'attend." }));
+    return;
+  }
+  list.replaceChildren(...rows.map(card));
+}
+function card(p) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const title = document.createElement("b");
+  title.textContent = p.title || p.tool || p.kind || "Validation";
+  const t = document.createElement("div");
+  t.className = "t";
+  t.textContent = p.reason || p.target || "";
+  const input = document.createElement("input");
+  input.placeholder = "Message pour Claude (facultatif)";
+  const row = document.createElement("div");
+  row.className = "row";
+  const deny = document.createElement("button");
+  deny.className = "deny";
+  deny.textContent = "Refuser";
+  deny.onclick = () => decide(p, "deny", input.value);
+  const ok = document.createElement("button");
+  ok.className = "ok";
+  ok.textContent = "Approuver";
+  ok.onclick = () => decide(p, "allow", input.value);
+  row.append(deny, ok);
+  el.append(title, t, input, row);
+  return el;
+}
+async function decide(p, decision, message) {
+  try {
+    await api("/api/v1/phone/decide", {
+      method: "POST",
+      body: JSON.stringify({
+        id: p.id, task_id: p.task_id, approval_id: p.approval_id, decision, message: message || "",
+      }),
+    });
+    await refresh();
+  } catch (e) { alert(e.message); }
+}
+boot();
+</script>
+</body>
+</html>

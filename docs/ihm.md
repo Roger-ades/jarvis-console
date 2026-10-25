@@ -378,12 +378,12 @@ partout et l'archivage sont les suivants.
 | Piste | Ce que ça apporte | Points d'attention |
 |---|---|---|
 | **`demander_validation`** : aperçu ou différences, relié aux validations existantes | Une décision claire avant une action sensible, au lieu d'un refus brut. | Ne doit jamais permettre de valider à la place de l'utilisateur. |
-| **Vue « Consommation »** : par compte, projet et discussion, cache lu et écrit, compactions, part des sous-agents | Voir où partent les tokens. L'analyse du 2 octobre l'a montré : c'est le mode équipe qui coûte, pas la console. | Les données viennent des transcriptions (`<config>/projects/…`) : pas de nouvel appel. |
-| **Signaler ce qui fait perdre le cache** : pause de plus d'une heure, compaction automatique | Comprendre une consommation inattendue. « Garder au chaud » existe (à la main) ; l'étape suivante, garder au chaud ou compacter automatiquement avant l'expiration, est chiffrée dans [feuille-de-route.md](feuille-de-route.md#reprise-dune-discussion-inactive--faut-il-compacter-avant-lexpiration-du-cache-). | La compaction est normale : il s'agit d'informer, pas d'alarmer. Compacter n'est rentable que si la discussion est reprise. |
+| ~~**Vue « Consommation »**~~ | *Fait* (Configuration → Historique, et Ctrl+K). | — |
+| ~~**Reprise inactive**~~ | *Fait* (mode chaud / compactage dans Historique). | — |
 | **`notifier` / progression** dans la barre des tâches | Les tâches longues en arrière-plan tiennent l'utilisateur au courant. | Limiter la fréquence des notifications. |
-| **Coordination entre discussions** : voir les autres, leur écrire, proposer une discussion qui s'ouvre dans sa propre fenêtre | Un vrai poste multi-agents, et non des sous-agents invisibles. | La piste la plus puissante, mais aussi la plus coûteuse en tokens. Lancer une discussion reste soumis à validation. |
+| ~~**Coordination entre discussions**~~ | *Fait* (`lancer_discussion`). | — |
 | **Proposer une note de projet** (consignes, mémoire), que l'utilisateur valide | Les routines et les actions se proposent déjà : il reste le texte du projet. | Toujours une proposition, montrée en différences, jamais une écriture directe. |
-| **Outils-scripts** (voir plus bas) | Des fonctions déterministes du projet que Claude appelle comme des outils. | Du code exécuté : la validation la plus stricte. |
+| ~~**Outils-scripts**~~ | *Partiel* : `proposer` quoi=`outil` écrit `.claude/outils/` après validation ([console/outils.py](../console/outils.py)). Exposition MCP complète à suivre. | Du code exécuté : la validation la plus stricte. |
 
 ## Outils-scripts (à venir)
 

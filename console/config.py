@@ -514,6 +514,9 @@ class UISettings(BaseModel):
 class History(BaseModel):
     retention_days: int = Field(90, ge=1, le=3650)
     auto_archive_days: int = Field(0, ge=0, le=3650)  # archive the discussions inactive that long (0: never)
+    # Auto purge: "toutes" = terminal discussions older than retention; "archives" = archived only;
+    # "jamais" = no automatic purge (manual button still uses retention_days).
+    purge_mode: Literal["toutes", "archives", "jamais"] = "toutes"
 
 
 class Resume(BaseModel):

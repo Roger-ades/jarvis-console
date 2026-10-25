@@ -76,11 +76,14 @@ class Store:
             self.db.execute("DELETE FROM tasks WHERE id=?", (task_id,))
             self.db.execute("DELETE FROM events WHERE task_id=?", (task_id,))
 
-    def purge(self, older_than: float, statuses: list[str]) -> int:
+    def purge(self, older_than: float, statuses: list[str], archived_only: bool = False) -> int:
         with self._lock:
+            where = f"created < ? AND status IN ({','.join('?' * len(statuses))})"
+            args: list = [older_than, *statuses]
+            if archived_only:
+                where += " AND archived > 0"
             ids = [r["id"] for r in self.db.execute(
-                f"SELECT id FROM tasks WHERE created < ? AND status IN ({','.join('?' * len(statuses))})",
-                [older_than, *statuses]).fetchall()]
+                f"SELECT id FROM tasks WHERE {where}", args).fetchall()]
             for tid in ids:
                 self.db.execute("DELETE FROM tasks WHERE id=?", (tid,))
                 self.db.execute("DELETE FROM events WHERE task_id=?", (tid,))

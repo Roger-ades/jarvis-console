@@ -13,11 +13,11 @@ import queue
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from . import API, git_http
+from . import API, git_http, phone
 from .db import HubDB
 from .live import Live
 
@@ -58,6 +58,35 @@ def create_app(db: HubDB) -> FastAPI:
             body["refresh"] = True
             body["rev"] = refresh.current_rev()
         return body
+
+    @app.get("/m", response_class=HTMLResponse)
+    def mobile_page():
+        """Validations Approuver / Refuser depuis le téléphone (VPN / LAN)."""
+        phone.ensure(db)
+        return HTMLResponse(phone.mobile_html())
+
+    @app.put("/api/v1/phone/pending")
+    def phone_push(body: dict, user: dict = Depends(current_user)):
+        items = body.get("pending") if isinstance(body, dict) else None
+        if not isinstance(items, list):
+            raise HTTPException(422, {"error": "pending (liste) requis"})
+        n = phone.put_many(db, user["id"], items)
+        return {"api": API, "ok": True, "n": n}
+
+    @app.get("/api/v1/phone/pending")
+    def phone_list(user: dict = Depends(current_user)):
+        return {"api": API, "pending": phone.list_pending(db, user["id"])}
+
+    @app.post("/api/v1/phone/decide")
+    def phone_decide(body: dict, user: dict = Depends(current_user)):
+        try:
+            return {"api": API, **phone.decide(db, user["id"], body or {})}
+        except ValueError as exc:
+            raise HTTPException(400, {"error": str(exc)}) from exc
+
+    @app.get("/api/v1/phone/decisions")
+    def phone_decisions(user: dict = Depends(current_user)):
+        return {"api": API, "decisions": phone.take_decisions(db, user["id"])}
 
     @app.get("/api/v1/me")
     def me(user: dict = Depends(current_user)):

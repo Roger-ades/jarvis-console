@@ -30,8 +30,8 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | **Archivage des discussions** | Fait (reste à trancher : la purge des archives) |
 | **Reprise d'une discussion inactive** (cache, compactage) | Partiel (« Garder au chaud » existe, à la main) |
 | Déclencheurs (dossier surveillé, enchaînement) | À faire |
-| Validations depuis le téléphone | À faire |
-| `lancer_discussion`, outils-scripts | À faire |
+| Validations depuis le téléphone | Partiel (hub `/m` + synchro console ; VPN/LAN) |
+| `lancer_discussion`, outils-scripts | Partiel (`lancer_discussion` fait ; outils via `proposer` quoi=outil) |
 | Vue « Consommation » | À faire |
 | Hub d'équipe | Partiel (Debian en service ; création, membres, partage, reprise, fil et synchro Windows/macOS dans JARVIS, essai réel avec un poste — détail au 23 octobre dans [equipe.md](equipe.md)) |
 
@@ -48,7 +48,7 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | Lier un projet Odoo, ses tâches et sous-tâches | Onglet « Suivi » du panneau Projet (lier, tâches en arbre, Ouvrir dans Odoo), ou demandé à Claude et validé sur une carte | `console/odoo_link.py`, `static/js/odoo.js` | Fait |
 | Voir les tâches Office 365, les brouillons et les relances d'un projet | Onglet « Suivi » : lecture seule par le connecteur du compte. Un brouillon n'est jamais envoyé | `console/office_link.py`, `static/js/office.js` | En cours |
 | Le même fil Office 365 pour le compte, hors d'un projet | Pas encore de vue | — | À faire |
-| Synchroniser un dossier du projet avec OneDrive / SharePoint | Hors de JARVIS (client OneDrive) ; seul « en ligne seulement » est reconnu par l'index | `console/documents.py` | À faire |
+| Synchroniser un dossier du projet avec OneDrive / SharePoint | Statut sync dans le panneau Projet ; déplacement proposé (`proposer` quoi=lien) via le client OneDrive | `console/drive.py` | Partiel |
 | Montrer à Claude un passage d'un PDF, d'une page, d'un panneau | Le texte sélectionné dans un PDF, une page web ou un mail HTML (cadres), dans les panneaux, Ctrl+K, les widgets et les fenêtres de dialogue n'est pas lu | `static/js/regard.js` | Partiel |
 | S'y retrouver dans des centaines de discussions | Archivage à la main ou après N jours d'inactivité ; les archivées restent dans l'historique et Ctrl+K | `Engine.archive_tasks`, `Engine.auto_archive` | Fait |
 | Reprendre une discussion après 2 ou 3 heures | Le cache a expiré : tout le contexte est réécrit en cache, sauf « Garder au chaud » activé à la main | `Engine.keep_warm` | Partiel |

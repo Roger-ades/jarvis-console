@@ -5,9 +5,12 @@
 // chosen for the action (else the project's). Its launches are listed under it.
 import { api, ApiError } from "./api.js";
 import { accountActionRows } from "./accountactions.js";
+import { slashDescription } from "./slash-fr.js";
 import { STATUS, dialog, fmtDate, h, modelName, toast } from "./util.js";
 import { openRoutineEditor, setRoutineEnabled } from "./routines.js";
 import { projectTint } from "./tint.js";
+
+const actionDesc = (a) => slashDescription(a.name, a.description);
 
 const STATE = { ok: "validée", nouvelle: "à valider", modifiee: "modifiée depuis sa validation" };
 
@@ -63,7 +66,7 @@ export function reviewAction(a, { launching = false, readOnly = false, tint = nu
         a.hint ? h("div", { class: "prop-field" }, h("dt", {}, "À saisir"), h("dd", {}, a.hint)) : null,
         h("div", { class: "prop-field" }, h("dt", {}, "Fichier"), h("dd", { class: "mono", title: a.path }, a.path)),
         a.files?.length ? h("div", { class: "prop-field" }, h("dt", {}, "Avec"), h("dd", { class: "mono" }, a.files.join("\n"))) : null),
-      a.description ? h("p", {}, a.description) : null,
+      actionDesc(a) ? h("p", {}, actionDesc(a)) : null,
       h("pre", { class: "prop-code" }, a.content || "")),
     buttons: readOnly ? [{ label: "Fermer", value: false, cls: "primary" }]
       : [{ label: "Annuler", value: false }, { label: launching ? "Valider et lancer" : "Valider", value: true, cls: "primary" }],
@@ -76,7 +79,7 @@ export async function runAction(ctx, folder, a, { args = null } = {}) {
   let text = args;
   const tint = projectTint(folder, ctx.currentProfile?.());
   if (text === null && a.hint) {
-    text = await dialog({ title: a.label, body: a.description || `/${a.name}`, input: { placeholder: a.hint }, tint,
+    text = await dialog({ title: a.label, body: actionDesc(a) || `/${a.name}`, input: { placeholder: a.hint }, tint,
       buttons: [{ label: "Annuler", value: null }, { label: "Lancer", value: true, cls: "primary" }] });
     if (text === null || text === undefined) return null;
   }
@@ -181,7 +184,7 @@ function actionRow(ctx, proj, a, refresh) {
     on: { click: toggle, keydown: (e) => { if (e.key === "Enter" && e.target === row) toggle(); } } },
     h("span", { class: "i", svg: "bolt" }),
     h("div", { class: "hm" }, h("div", { class: "ht" }, a.label, a.status !== "ok" ? h("span", { class: "act-st" }, STATE[a.status]) : null),
-      h("div", { class: "hs" }, [`/${a.name}${a.hint ? ` ${a.hint}` : ""}`, a.description].filter(Boolean).join(" · ")),
+      h("div", { class: "hs" }, [`/${a.name}${a.hint ? ` ${a.hint}` : ""}`, actionDesc(a)].filter(Boolean).join(" · ")),
       h("div", { class: "hs act-meta" }, [modelLabel(ctx, a), a.effort ? `effort ${EFFORT[a.effort].toLowerCase()}` : "",
         runs.length ? `${runs.length} exécution${runs.length > 1 ? "s" : ""}` : "jamais lancée",
         last ? `dernière : ${STATUS[last.status] || last.status} le ${fmtDate(last.created)}` : ""].filter(Boolean).join(" · "))),

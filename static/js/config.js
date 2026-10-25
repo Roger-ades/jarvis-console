@@ -7,11 +7,13 @@ import { pickFolder } from "./folderpicker.js";
 import { checkUpdateNow, restartConsole, updateConsole } from "./system.js";
 import { confirmDialog, createLauncher, dialog, fmtDate, h, modalHost, reveal, toast } from "./util.js";
 
-const TABS = [
-  ["general", "Général"], ["profiles", "Profils"], ["permissions", "Autorisations"],
-  ["integrations", "Intégrations"], ["equipe", "Équipe"], ["documents", "Documents"], ["models", "Modèles et consignes"], ["security", "Sécurité"],
-  ["interface", "Interface"], ["history", "Historique"],
+/** Three intentions: compte, sécurité, préférences — same screens, clearer hierarchy. */
+const TAB_GROUPS = [
+  ["Compte et connexion", [["general", "Général"], ["profiles", "Profils"], ["integrations", "Intégrations"], ["equipe", "Équipe"]]],
+  ["Sécurité et droits", [["permissions", "Autorisations"], ["security", "Sécurité"], ["documents", "Documents"]]],
+  ["Préférences", [["models", "Modèles et consignes"], ["interface", "Interface"], ["history", "Historique"]]],
 ];
+const TABS = TAB_GROUPS.flatMap(([, tabs]) => tabs);
 const DOC_KINDS = { pdf: ["PDF", "PDF"], word: ["Word", "Word"], excel: ["Excel", "Excel"], powerpoint: ["PowerPoint", "PowerPoint"],
   mail: ["mail", "mails"], page: ["page HTML", "pages HTML"], texte: ["texte", "textes"] };
 const EFFORTS = [["", "défaut du profil"], ["low", "faible"], ["medium", "moyen"], ["high", "élevé"], ["xhigh", "très élevé"], ["max", "max"]];
@@ -773,7 +775,12 @@ function tabHistory() {
       num("Archiver les discussions inactives depuis (jours)", "history.auto_archive_days", { min: 0, max: 3650,
         help: "0 : jamais. Vérifié au démarrage puis toutes les heures. Jamais une discussion en cours, en attente d'une validation ou d'un clic, gardée au chaud, épinglée ou affichée par un widget. Une archivée reste dans l'historique (filtre « Archivées ») et dans Ctrl+K ; y écrire la désarchive." }),
       num("Durée de conservation (jours)", "history.retention_days", { min: 1, max: 3650,
-        help: "Purge automatique au démarrage : les discussions terminées plus anciennes sont supprimées, archivées comprises." })),
+        help: "Âge au-delà duquel la purge (auto ou manuelle) s'applique." }),
+      select("Purge automatique", "history.purge_mode", [
+        ["toutes", "Discussions terminées (archivées comprises)"],
+        ["archives", "Seulement les discussions archivées"],
+        ["jamais", "Jamais (purge manuelle seulement)"],
+      ], { help: "Avec l'archivage, « Seulement les archivées » évite de perdre une discussion encore utile." })),
       h("div", { class: "row" },
         h("button", { type: "button", class: "btn", on: { click: () => download("/api/history/export", "historique.json") } }, "Exporter l'historique (JSON)"),
         h("button", { type: "button", class: "btn", on: { click: () => purge(draft.history.retention_days) } }, "Purger au-delà de la durée"),
@@ -1032,6 +1039,10 @@ function tabEquipe() {
   api("/api/hub/probe", { method: "POST", body: { url: getPath("hub.url") || "" } })
     .then((r) => api("/api/hub/status").then((s) => paint({ ...s, seen: r.fingerprint || s.seen })))
     .catch((e) => box.replaceChildren(h("div", { class: "line err" }, e.message)));
+  const phoneUrl = () => {
+    const base = (getPath("hub.url") || "").replace(/\/$/, "");
+    return base ? `${base}/m` : "https://…:8443/m";
+  };
   return [
     section("Hub", "JARVIS parle au serveur d'équipe. Le jeton reste sur ce poste, la page ne le voit pas.",
       text("Adresse", "hub.url", { placeholder: "https://10.20.10.249:8443", help: "HTTPS du hub, port 8443." }),
@@ -1048,6 +1059,15 @@ function tabEquipe() {
         try { await api("/api/hub/token", { method: "POST", body: { token: token.value } }); token.value = ""; toast("Jeton enregistré.", "ok"); }
         catch (e) { toast(e.message, "err"); }
       } } }, "Enregistrer le jeton"))),
+    ),
+    section("Téléphone", "Approuver ou refuser une validation depuis le téléphone, sur le VPN ou le LAN (jamais sur internet public).",
+      h("p", { class: "muted" }, "Ouvre ", h("code", {}, phoneUrl()), " sur ton téléphone, colle le même jeton d'équipe une fois. "
+        + "La console pousse ce qui attend ; ta décision revient ici automatiquement."),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn small", on: { click: () => {
+        const u = phoneUrl();
+        if (u.startsWith("http")) window.open(u, "_blank", "noopener");
+        else toast("Indique d'abord l'adresse du hub.", "warn");
+      } } }, "Ouvrir la page téléphone")),
     ),
   ];
 }
@@ -1070,7 +1090,10 @@ export async function openConfig(context, startTab = null) {
   probes = pr.probes || {};
   dirty = false;
   if (startTab) tab = startTab;
-  navEl = h("nav", { class: "cfg-nav" }, TABS.map(([id, label]) => h("button", { type: "button", dataset: { tab: id }, on: { click: () => { tab = id; bodyEl.scrollTop = 0; render(); } } }, label)));
+  navEl = h("nav", { class: "cfg-nav" }, ...TAB_GROUPS.flatMap(([title, tabs]) => [
+    h("div", { class: "cfg-nav-group" }, title),
+    ...tabs.map(([id, label]) => h("button", { type: "button", dataset: { tab: id }, on: { click: () => { tab = id; bodyEl.scrollTop = 0; render(); } } }, label)),
+  ]));
   bodyEl = h("div", { class: "cfg-body" });
   msgEl = h("div", { class: "msg-area" }, "Les changements s'appliquent aux nouvelles tâches.");
   const box = h("div", { class: "dialog cfg", role: "dialog", "aria-modal": "true", "aria-label": "Configuration" },

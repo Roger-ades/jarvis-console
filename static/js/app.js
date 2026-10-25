@@ -14,6 +14,8 @@ import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
 import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, addonsRetheme, initAddons } from "./addons.js";
 import { openPalette } from "./palette.js";
+import { openHelp, toggleHelp } from "./help.js";
+import { slashItem } from "./slash-fr.js";
 import { openSetup } from "./setup.js";
 import { openConfig, openConsumption, updateProbe } from "./config.js";
 import { officeAccountChanged, openAccount } from "./office.js";
@@ -692,13 +694,14 @@ function dropMention() {
 function renderMention() {
   const box = $("#cmd-project");
   box.hidden = !mention;
-  if (!mention) { box.replaceChildren(); return; }
+  if (!mention) { box.replaceChildren(); syncCmdWith(); return; }
   const p = mention.project;
   box.replaceChildren(h("div", { class: "att ok project", style: { "--pc": p.color || "var(--accent)" },
     title: `Reconnu dans la demande : elle partira dans ${p.folder}` },
   h("span", { class: "att-ic", svg: "folder" }), h("span", { class: "att-name" }, h("b", {}, "Projet : "), p.name),
   h("button", { type: "button", class: "att-x", title: "Ne pas utiliser ce projet", "aria-label": "Ne pas utiliser ce projet", svg: "x",
     on: { click: () => { dismissed = dirKey(p.folder); undoMention(); input.focus(); } } })));
+  syncCmdWith();
 }
 
 function updateProjectButton() {
@@ -793,11 +796,19 @@ function rememberWorkdir(pid, dir) {
 
 function history() { return store.get("jarvis.prompts", []); }
 
-const attacher = new Attacher($("#cmd-files"));
-const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile);
+/** Shows the « Ce qui part » band when any chip (projet, regard, contexte, fichiers) is present. */
+function syncCmdWith() {
+  const band = $("#cmd-with");
+  if (!band) return;
+  const any = [...band.querySelectorAll(".att-list")].some((el) => !el.hidden && el.children.length);
+  band.hidden = !any;
+}
+const attacher = new Attacher($("#cmd-files"), syncCmdWith);
+const contextPicker = new ContextPicker($("#cmd-context"), () => S.profile, syncCmdWith);
 // "Ce que je regarde": the preview, display or text the user looks at goes with the next request
 regard.configure({ enabled: () => S.config?.ui?.regard !== false, displayTitle, taskTitle: (id) => S.tasks.get(id)?.title || "" });
 regard.chip($("#cmd-regard"));
+regard.onChange(syncCmdWith);
 // desktop app, "Intégré au bureau": no JARVIS window; the command bar floats in a window of its own, with
 // the top bar and the home screen in its menu, and the notices above it (bar.js)
 setupBar({ dock: $("#dock"), popups: [suggest, $("#opt-panel"), $("#folder-pop")],
@@ -981,8 +992,11 @@ function updateSuggest() {
   if ((m = upto.match(/^\/([\w:.-]*)$/))) {
     const q = m[1].toLowerCase();
     const cmds = S.probes[S.profile]?.commands || [];
-    sgItems = cmds.filter((c) => c.name && c.name.toLowerCase().includes(q)).sort((a, b) => a.name.toLowerCase().indexOf(q) - b.name.toLowerCase().indexOf(q)).slice(0, 40)
-      .map((c) => ({ value: `/${c.name} `, label: `/${c.name}`, desc: c.description }));
+    sgItems = cmds
+      .map(slashItem)
+      .filter((it) => it && it.label.slice(1).toLowerCase().includes(q))
+      .sort((a, b) => a.label.toLowerCase().indexOf(q) - b.label.toLowerCase().indexOf(q))
+      .slice(0, 40);
     sgMode = cmds.length ? "Skills et commandes du profil" : "Lance une tâche ou teste la connexion pour charger les skills";
   } else if ((m = upto.match(/^@([\w-]*)$/))) {
     const q = m[1].toLowerCase();
@@ -1359,6 +1373,9 @@ function onShortcut(e) {
   } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
     e.preventDefault();
     searchAnything();
+  } else if (e.key === "F1" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    toggleHelp(panelCtx);
   } else if ((e.ctrlKey || (e.metaKey && window.jarvis?.platform === "darwin")) && e.altKey && !e.shiftKey && e.code === "KeyW") {
     e.preventDefault();
     closeAll();
@@ -1437,6 +1454,8 @@ function searchAnything() {
       { label: "Tout fermer (fenêtres et modales)", icon: "close", hint: "Ctrl+Alt+W", run: closeAll },
       { label: "Redémarrer la console", icon: "retry", keywords: "mise à jour", run: restartConsole },
       { label: "Rechercher une mise à jour", icon: "retry", keywords: "github version git pull", run: () => updateConsole() },
+      { label: "Aide", icon: "help", hint: "F1", keywords: "aide documentation manuel tutoriel comment interface outils skills raccourcis",
+        run: () => openHelp(panelCtx) },
       { label: "Assistant de démarrage", icon: "sparkle", keywords: "installation comptes lanceur bienvenue", run: startSetup },
       { label: S.state.emergency_stop ? "Réactiver la console" : "Arrêt d'urgence", icon: "stop", run: () => setEmergency(!S.state.emergency_stop) },
     ],
@@ -1457,7 +1476,7 @@ function projectActions() {
     hint: `${proj.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAction(panelCtx, proj.folder, a) }));
 }
 
-const DRAWERS = ["inbox", "history", "sessions", "routines", "project", "notes"];
+const DRAWERS = ["inbox", "history", "sessions", "routines", "project", "notes", "help"];
 function closeDrawers(except) {
   if (wm.isNative()) return;   // (desktop app: each panel is a window of its own, wm.nativePanels)
   for (const id of DRAWERS) if (id !== except) document.getElementById(id).hidden = true;
@@ -1608,6 +1627,7 @@ function openDisplayOf(taskId, key, color) {
 $("#btn-history").addEventListener("click", () => openDiscussions(panelCtx, "jarvis"));
 $("#btn-sessions").addEventListener("click", () => openDiscussions(panelCtx, "hors"));
 $("#btn-routines").addEventListener("click", () => toggleRoutines(panelCtx));
+$("#btn-help").addEventListener("click", () => toggleHelp(panelCtx));
 $("#btn-claudeai").addEventListener("click", (e) => {
   e.stopPropagation();
   $("#menu-addons").hidden = true;

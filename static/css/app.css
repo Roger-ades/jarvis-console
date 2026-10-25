@@ -480,6 +480,9 @@ button.meta-chip:hover { border-color: var(--border-3); color: var(--text); }
 .win-approvals { flex: none; max-height: 55%; overflow: auto; border-top: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); background: linear-gradient(180deg, var(--warn-soft), transparent 80%); }
 .win-approvals:empty { display: none; }
 .win-approvals .appr[hidden] { display: none; }
+.appr-nav { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 6px 10px 0; font-size: 12px; color: var(--muted); }
+.appr-reason.fold > summary { cursor: pointer; color: var(--text-2); }
+.appr-reason.fold[open] > summary { margin-bottom: 6px; }
 .appr-nav { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; }
 .appr-nav span { margin-right: auto; font-variant-numeric: tabular-nums; color: var(--text-2); font-size: 12px; }
 .win-foot { flex: none; display: flex; gap: 6px; align-items: flex-end; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--surface); }
@@ -854,6 +857,36 @@ pre, .codeblock pre {
 .hrow .hs { font-size: 11px; color: var(--text-3); }
 
 .drawer.wide { width: min(560px, 100vw); }
+/* Aide : largeur fluide (tiroir navigateur) ; en fenêtre native, 100% (voir panel-doc plus bas) */
+.drawer.wide.help-drawer { width: min(42vw, 900px); min-width: min(560px, 100vw); max-width: 100vw; }
+.help-top { flex: none; padding: 10px 14px 8px; }
+.help-search { width: 100%; box-sizing: border-box; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; }
+.help-layout { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; width: 100%; }
+.help-nav { width: clamp(160px, 22%, 240px); flex: none; overflow: auto; padding: 8px; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; background: var(--bg-2); }
+.help-nav button { text-align: left; border: 0; background: transparent; padding: 8px 10px; border-radius: 8px; color: var(--text-2); font-size: 12.5px; display: flex; align-items: center; gap: 8px; cursor: pointer; width: 100%; box-sizing: border-box; }
+.help-nav button:hover { background: var(--surface-2); color: var(--text); }
+.help-nav button.on { background: var(--accent-soft); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+.help-nav .i { width: 16px; height: 16px; flex: none; opacity: .85; }
+.help-body { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 14px 18px 28px; }
+.help-body-inner { max-width: 52rem; }
+.help-body h2 { font: 600 16px var(--font-display); margin: 0 0 8px; }
+.help-body h3 { font: 600 13px var(--font); margin: 18px 0 6px; color: var(--text); }
+.help-lead { color: var(--text-2); margin: 0 0 10px; line-height: 1.5; }
+.help-body p { margin: 0 0 8px; line-height: 1.5; font-size: 13px; }
+.help-ul { margin: 0 0 10px; padding-left: 1.2em; font-size: 13px; line-height: 1.55; }
+.help-ul li { margin: 4px 0; }
+.help-note { font-size: 12px; margin-top: 12px; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); line-height: 1.45; }
+.help-body kbd { font: 600 11px ui-monospace, monospace; padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface); }
+.help-dl { margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px; }
+.help-dl > div { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--surface-2) 70%, transparent); }
+.help-dl dt { font-weight: 700; font-size: 13px; margin: 0 0 4px; color: var(--text); }
+.help-dl dd { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+@media (max-width: 640px) {
+  .drawer.wide.help-drawer { width: 100vw; min-width: 0; }
+  .help-layout { flex-direction: column; }
+  .help-nav { width: auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); max-height: 140px; }
+  .help-nav button { width: auto; }
+}
 .sec-title { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); padding: 14px 10px 6px; }
 .section.cloud { margin: 0; }
 .section.cloud .drawer-note { border: 0; padding: 0 10px 8px; }
@@ -1087,8 +1120,16 @@ html.col-resizing, html.col-resizing * { cursor: col-resize !important; user-sel
 .update-bar .i svg { width: 15px; height: 15px; }
 
 /* ------------------------------------------------ attachments */
+/* Bande « Ce qui part » : projet, regard, contexte et fichiers regroupés avant l'envoi */
+.cmd-with { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 8px; padding: 8px 12px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.cmd-with[hidden] { display: none; }
+.cmd-with-label { flex: none; align-self: center; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 2px 0; }
+.cmd-with .att-list { padding: 0; flex: 1 1 auto; min-width: 0; }
 .att-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
 .att-list[hidden] { display: none; }
+.cmd-with .att-list[hidden] { display: none; }
+.pj-sync { font-size: 12px; padding: 0 14px 8px; }
+.pj-sync.on { color: var(--ok, #4fd3a0); }
 .att-list.win-att { flex: none; padding: 8px 10px 0; border-top: 1px solid var(--border); background: var(--surface); }
 .att-list.win-att + .win-foot { border-top: 0; }
 .att { position: relative; display: inline-flex; align-items: center; gap: 7px; max-width: 260px; height: 32px; padding: 0 4px 0 6px;
@@ -1139,6 +1180,8 @@ html.col-resizing, html.col-resizing * { cursor: col-resize !important; user-sel
 .cfg-head h2 { margin: 0; font: 600 16px var(--font-display); flex: 1; }
 .cfg-main { flex: 1; display: flex; min-height: 0; }
 .cfg-nav { width: 210px; flex: none; border-right: 1px solid var(--border); padding: 10px; display: flex; flex-direction: column; gap: 2px; overflow: auto; background: var(--bg-2); }
+.cfg-nav-group { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 12px 11px 4px; }
+.cfg-nav-group:first-child { padding-top: 4px; }
 .cfg-nav button { text-align: left; border: 0; background: transparent; padding: 8px 11px; border-radius: 7px; color: var(--text-2); font-size: 12.5px; }
 .cfg-nav button:hover { background: var(--surface-2); color: var(--text); }
 .cfg-nav button.active { background: var(--accent-soft); color: var(--text); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
@@ -1904,6 +1947,8 @@ html.dialog-doc.measuring #modal-root > .overlay:first-child > * { border: 0; }
 /* a panel's window: the drawer fills it, its head is the title strip */
 html.panel-doc .drawer { position: static; width: 100%; height: 100%; padding-bottom: 0; border: 0; box-shadow: none; animation: none;
   backdrop-filter: none; background: var(--surface); }
+/* Spécificité > .drawer.wide.help-drawer : l’Aide remplit la fenêtre native quand on l’agrandit */
+html.panel-doc .drawer.wide.help-drawer { width: 100%; min-width: 0; max-width: none; }
 html.panel-doc .drawer-head { min-height: 48px; box-sizing: border-box; padding-right: 150px; -webkit-app-region: drag; app-region: drag; }
 html.panel-doc.os-darwin .drawer-head { padding: 0 14px 0 80px; }
 html.panel-doc .drawer-head :is(button, input, select, a, label, summary, [role="button"]) { -webkit-app-region: no-drag; app-region: no-drag; }
