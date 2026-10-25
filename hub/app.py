@@ -15,8 +15,9 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
-from . import API
+from . import API, git_http
 from .db import HubDB
 from .live import Live
 
@@ -244,6 +245,19 @@ def create_app(db: HubDB) -> FastAPI:
     def list_conversations(project_id: str, user: dict = Depends(current_user)):
         _need_member(db, user, project_id)
         return {"api": API, "conversations": db.conversations_of(project_id)}
+
+    @app.api_route("/git/" + git_http.NAME + "/{path:path}", methods=["GET", "POST"])
+    async def git_repo(path: str, request: Request, user: dict = Depends(current_user)):
+        """Le dépôt de JARVIS en lecture seule : la mise à jour en un clic des postes inscrits."""
+        query = request.url.query
+        if not git_http.allowed(request.method, path, query):
+            raise HTTPException(403, {"error": "lecture seule"})
+        body = await request.body()
+        if len(body) > git_http.MAX_BODY:
+            raise HTTPException(413, {"error": "requête trop lourde"})
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        status, out, payload = await run_in_threadpool(git_http.backend, request.method, path, query, headers, body)
+        return Response(payload, status_code=status, headers=dict(out))
 
     @app.post("/api/v1/projects/{project_id}/conversations", status_code=201)
     async def publish_conversation(project_id: str, request: Request, user: dict = Depends(current_user)):

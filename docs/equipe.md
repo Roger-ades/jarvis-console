@@ -14,8 +14,9 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
 **Sur la Debian**
 
 - Compte système `jarvis` (sans connexion), répertoires du tableau ci-dessous, dépôt
-  nu `/var/repo/jarvis-console.git` (compte `deploy`). Les postes poussent en SSH
-  (`jarvis-server`, port 23). GitHub n'est plus l'origine des mises à jour.
+  nu `/var/repo/jarvis-console.git` (compte `deploy`). On pousse en SSH
+  (`jarvis-server`, port 23). Les postes inscrits tirent les mises à jour par le hub
+  (ci-dessous). GitHub n'est plus l'origine des mises à jour.
 - Syncthing `syncthing@jarvis` (v2, canal stable), interface seulement sur
   `127.0.0.1:8384`. Appareil `KBMT5Z4-TRKLGY2-SP6MNVQ-CUTE2A2-7ZMQQWO-FFFBB37-GGSNFDW-SSF2JQE`,
   nom SRV-DEBIAN. Le hub crée lui-même le dossier d'un projet d'équipe à la première
@@ -214,14 +215,29 @@ même endroit.
 
 | Rôle | Chemin | Contenu |
 | --- | --- | --- |
-| Dépôt git | `/var/repo/jarvis-console.git` | Dépôt nu, compte `deploy`, comme PassLock. Les postes poussent et tirent en SSH. Plus de GitHub |
+| Dépôt git | `/var/repo/jarvis-console.git` | Dépôt nu, compte `deploy`, comme PassLock. On pousse en SSH ; les postes tirent par le hub (HTTPS, jeton). Plus de GitHub |
 | Service | `/opt/jarvis-hub` | Copie de travail tirée de ce dépôt, `.venv`, `WorkingDirectory` de `jarvis-hub` |
 | Configuration | `/etc/jarvis-hub/hub.env` | Adresse d'écoute et réglages du service, pas les jetons des personnes |
 | Données du hub | `/var/lib/jarvis-hub` | `hub.db`, sauvegardes, conversations partagées |
 | Compte `jarvis` | `/var/lib/jarvis` | Home du compte : configuration Syncthing |
 | Projets | `/var/lib/jarvis/projets/<id>` | Dossiers Syncthing, un par projet d'équipe |
 
-Le dépôt nu appartient au compte `deploy`, comme `/var/repo/passlock.git`. Les postes s'y connectent en SSH (port 23, clé dédiée). GitHub n'est plus une origine.
+Le dépôt nu appartient au compte `deploy`, comme `/var/repo/passlock.git`. On y pousse en SSH (port 23, clé dédiée). GitHub n'est plus une origine.
+
+**Mises à jour des postes.** Le hub sert ce dépôt en lecture seule sur
+`https://10.20.10.249:8443/git/jarvis-console.git` (`hub/git_http.py`, `git http-backend`
+lancé par le hub, sous `jarvis`) : jeton du hub obligatoire, seul `git-upload-pack` passe
+(fetch, clone), tout push est refusé (403). nginx publie déjà tout le 8443 vers le hub :
+rien à installer. Côté poste, `console/updater.py` passe le jeton et le certificat épinglé
+(`console/hub.crt`, OpenSSL sous Windows) à chaque commande, sans les écrire dans
+`.git/config`.
+
+Bascule des postes clonés depuis GitHub : la version qui contient ce code doit être poussée
+**aussi sur GitHub** (`git push github main`). Ces postes la prennent par leur mise à jour
+habituelle ; à la recherche suivante, s'ils ont un jeton du hub, `origin` devient le dépôt
+du serveur et l'ancienne origine reste sous `github`. Sans jeton (pas encore inscrit) ou si
+le serveur refuse, rien ne change. Garder GitHub à jour tant que tous les postes n'ont pas
+basculé, puis l'archiver.
 
 Les transcriptions partagées restent des fichiers :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. La présence vit en mémoire seulement.

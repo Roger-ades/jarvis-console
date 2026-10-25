@@ -567,18 +567,25 @@ du dépôt, pour profiter ensuite des mises à jour en un clic.
 Le code et les données sont séparés : `data/` (configuration, historique, routines,
 jeton, journal) et `.venv/` ne sont jamais remplacés par une mise à jour.
 
-**En un clic** (installation faite avec `git clone`) : la console regarde sur GitHub au
+**En un clic** (installation faite avec `git clone`) : la console regarde sur le dépôt au
 démarrage puis toutes les 6 h ; un bandeau **« Nouvelle version disponible »** propose
 **Mettre à jour** (aussi dans Configuration → Général → Rechercher une mise à jour) : elle
 récupère la version (`git pull`), réinstalle les dépendances si `requirements.txt` a
 changé, puis redémarre. Elle refuse si des fichiers du programme ont été modifiés sur le
-poste (rien n'est écrasé). Pour un dépôt privé, les identifiants GitHub doivent avoir été
-enregistrés une fois (un premier `git pull` à la main).
+poste (rien n'est écrasé).
+
+Le dépôt est sur le serveur de l'équipe : le hub le sert en lecture seule
+(`https://10.20.10.249:8443/git/jarvis-console.git`) aux postes inscrits, avec leur jeton
+(`data/hub-token`) et le certificat du hub (`console/hub.crt`), au bureau ou par le VPN. Une
+copie clonée depuis GitHub y passe d'elle-même à la première recherche de mise à jour après
+l'inscription au hub : l'ancienne origine reste sous le nom `github`, et si le serveur refuse,
+la copie reste sur GitHub. Le jeton n'est pas écrit dans `.git/config` : un `git pull` à la
+main vers le serveur ne passe pas, la mise à jour en un clic oui.
 
 À la main :
 
 1. Arrête la console (Configuration → Général → Arrêter la console).
-2. Remplace les fichiers du projet (idéalement `git pull` depuis un dépôt privé).
+2. Remplace les fichiers du projet.
 3. Relance `start.bat` / `start.command` : les dépendances sont réinstallées d'elles-mêmes
    si `requirements.txt` a changé. Les nouveaux réglages prennent leur valeur par défaut ;
    une configuration devenue invalide est mise de côté et la dernière version valide reprise.

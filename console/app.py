@@ -1122,11 +1122,11 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         threading.Timer(0.6, lambda: setattr(server, "should_exit", True)).start()
         return {"ok": True}
 
-    # -------------------------------------------------------- updates from GitHub
+    # -------------------------------------- updates from the team's server (or GitHub)
     upd: dict = {"status": None}
 
     def check_updates():
-        upd["status"] = updater.status(fetch=True)
+        upd["status"] = updater.status(fetch=True, data_dir=data_dir)
         return upd["status"]
 
     def update_loop():
@@ -1144,7 +1144,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
 
     @app.get("/api/system/update")
     def update_status():
-        if not upd["status"]:  # until the first check on GitHub: what the local copy knows
+        if not upd["status"]:  # until the first check on the remote: what the local copy knows
             upd["status"] = {**updater.status(fetch=False), "stale": True}
         return upd["status"]
 
@@ -1158,7 +1158,7 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
         if server is None:
             return _err(409, "Cette console n'a pas été lancée par start.bat : mets-la à jour depuis son terminal (git pull).")
         try:
-            res = updater.update()
+            res = updater.update(data_dir)
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             return _err(409, str(exc))
         upd["status"] = None
