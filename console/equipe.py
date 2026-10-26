@@ -264,7 +264,7 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
 
     @app.post("/api/hub/create")
     def create(body: dict = Body(...)):
-        """Fait du projet JARVIS de ce dossier un projet d'équipe (administrateur du hub)."""
+        """Fait du projet JARVIS de ce dossier un projet d'équipe ; ce compte en devient l'administrateur."""
         hub = cfg().hub
         folder = expand_path(str(body.get("folder") or ""))
         local = next((p for p in cfg().projects if _same(p.folder, folder)), None) if folder else None

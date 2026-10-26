@@ -78,6 +78,19 @@ def test_a_member_sees_only_their_projects(db, api):
     assert still.status_code == 403
 
 
+def test_any_account_shares_a_project_and_runs_it(db, api):
+    db.add_user("roger")
+    paul = db.add_user("paul")
+    zoe = db.add_user("zoe")
+    created = api.post("/api/v1/projects", headers=_auth(paul), json={
+        "id": "chantier", "name": "Chantier", "members": [{"id": "zoe", "role": "membre"}],
+    })
+    assert created.status_code == 201
+    assert created.json()["project"]["role"] == "administrateur"
+    assert [p["id"] for p in api.get("/api/v1/projects", headers=_auth(zoe)).json()["projects"]] == ["chantier"]
+    assert api.put("/api/v1/projects/chantier", headers=_auth(paul), json={"name": "Chantier B"}).status_code == 200
+
+
 def test_member_list_keeps_one_project_admin(db, api):
     roger = db.add_user("roger")
     paul = db.add_user("paul")

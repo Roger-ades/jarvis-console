@@ -98,8 +98,7 @@ def create_app(db: HubDB) -> FastAPI:
 
     @app.post("/api/v1/projects", status_code=201)
     def create_project(body: ProjectIn, user: dict = Depends(current_user)):
-        if not user["admin"]:
-            raise HTTPException(403, {"error": "réservé à l'administrateur"})
+        # Tout compte actif partage un projet : il en devient l'administrateur.
         try:
             project = db.create_project(user["id"], body.model_dump(exclude={"members"}),
                                         [m.model_dump() for m in body.members])

@@ -48,8 +48,8 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
   `paul.martin` → `paul-martin`) et couleur. « M'inscrire » crée le compte, garde le jeton
   dans `data/hub-token` et active l'équipe dans la configuration ; rien d'autre à saisir.
   « Plus tard », ou hors du bureau et du VPN : la fenêtre revient au lancement suivant.
-- Le compte créé n'a aucun projet : il ne voit rien tant qu'un administrateur ne l'ajoute
-  pas à un projet. Seule une copie de JARVIS peut s'inscrire : elle envoie une clé
+- Le compte créé n'a aucun projet : il ne voit rien tant qu'un administrateur de projet ne
+  l'ajoute pas à l'un d'eux. Il peut aussi partager ses propres projets. Seule une copie de JARVIS peut s'inscrire : elle envoie une clé
   (`REGISTER_KEY`) dont le hub ne garde que l'empreinte (`REGISTER_KEY_HASH` dans
   `hub/app.py`, ou la variable `JARVIS_HUB_REGISTER_KEY_HASH`). Dix essais refusés en une
   minute bloquent les inscriptions une minute (429). Changer de clé : nouvelle clé dans
@@ -61,8 +61,10 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
 - L'administrateur du hub voit chaque inscription dans sa boîte de réception
   (« Inscription au hub », Révoquer…, Vu). Révoquer coupe le jeton et arrête le partage
   Syncthing des dossiers de ses projets avec ce poste (`DELETE /api/v1/users/{id}`).
-- Configuration → Équipe : adresse, activation, empreinte à confirmer, jeton (fichier
-  `data/hub-token`, jamais dans `config.json` ni dans la page), « Démarrer la synchro ».
+- Configuration → Équipe : adresse, activation, empreinte à confirmer, « Démarrer la synchro ».
+  Le jeton (fichier `data/hub-token`, jamais dans `config.json` ni dans la page) est gardé à
+  l'inscription : l'écran l'indique, et « Remplacer le jeton… » ne sert qu'à reprendre un compte
+  existant sur un nouveau poste.
 - Un projet d'équipe se reconnaît partout sans fenêtre à part : badge « Équipe » dans
   le panneau Projet, section « Projets d'équipe » sur l'accueil, icône et mention
   « équipe » dans les listes de dossiers et la recherche (Ctrl+K).
@@ -71,7 +73,7 @@ relance tout seul. Rien à taper sur la Debian. La fin du push affiche `Hub à j
   d'équipe n'y sont pas listés.
 - Projet → Équipe, pour un projet personnel : un seul écran, « Partager avec l'équipe… »
   et « Rejoindre un projet d'équipe… ». Sans hub configuré, l'onglet n'apparaît pas.
-- Partager (administrateur du hub) : le nom sur le hub et **les collègues choisis**, pas
+- Partager (tout compte inscrit) : le nom sur le hub et **les collègues choisis**, pas
   toute l'équipe ; celui qui partage en est l'administrateur. Le hub crée le projet avec
   ces membres, ce poste le rejoint aussitôt. Si un projet d'équipe du même nom existe déjà
   et qu'on en est membre (un dossier détaché, par exemple), la fenêtre propose de le

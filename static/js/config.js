@@ -1023,13 +1023,29 @@ function onKey(e) {
 function tabEquipe() {
   const box = h("div", { class: "muted" }, "Lecture du certificat…");
   const token = h("input", { type: "password", autocomplete: "off", placeholder: "Coller le jeton, une seule fois" });
+  // L'inscription au premier lancement garde le jeton : le champ ne sert qu'à reprendre un compte sur un autre poste.
+  let replacing = false;
+  const tokenField = field("Jeton", h("div", { class: "row" }, token, h("button", { type: "button", class: "btn small", on: { click: async () => {
+    try { await api("/api/hub/token", { method: "POST", body: { token: token.value } }); token.value = ""; toast("Jeton enregistré.", "ok"); }
+    catch (e) { toast(e.message, "err"); }
+  } } }, "Enregistrer le jeton")));
+  tokenField.hidden = true;
+  const tokenSwap = field("Jeton", h("button", { type: "button", class: "btn small", on: { click: () => {
+    replacing = true;
+    tokenSwap.hidden = true;
+    tokenField.hidden = false;
+    token.focus();
+  } } }, "Remplacer le jeton…"));
+  tokenSwap.hidden = true;
   const paint = (s) => {
     const lines = [];
     if (s.error) lines.push(h("div", { class: "line err" }, s.error));
     if (s.seen) lines.push(h("p", {}, "Empreinte vue : ", h("code", {}, pretty(s.seen))));
     if (s.fingerprint) lines.push(h("p", {}, s.confirmed ? "Empreinte confirmée." : "L'empreinte confirmée ne correspond pas."));
     if (s.user) lines.push(h("p", {}, `Compte : ${s.user.name}`));
-    else if (s.has_token) lines.push(h("p", {}, "Jeton enregistré."));
+    if (s.has_token) lines.push(h("p", {}, "Jeton enregistré à l'inscription : rien à saisir."));
+    tokenField.hidden = s.has_token && !replacing;
+    tokenSwap.hidden = !s.has_token || replacing;
     const confirm = h("button", { type: "button", class: "btn small", disabled: !s.seen, on: { click: () => {
       setPath("hub.fingerprint", s.seen);
       toast("Empreinte prête. Enregistre la configuration.", "ok");
@@ -1038,7 +1054,7 @@ function tabEquipe() {
   };
   api("/api/hub/probe", { method: "POST", body: { url: getPath("hub.url") || "" } })
     .then((r) => api("/api/hub/status").then((s) => paint({ ...s, seen: r.fingerprint || s.seen })))
-    .catch((e) => box.replaceChildren(h("div", { class: "line err" }, e.message)));
+    .catch((e) => { box.replaceChildren(h("div", { class: "line err" }, e.message)); tokenField.hidden = false; });
   const phoneUrl = () => {
     const base = (getPath("hub.url") || "").replace(/\/$/, "");
     return base ? `${base}/m` : "https://…:8443/m";
@@ -1055,10 +1071,8 @@ function tabEquipe() {
         } catch (e) { toast(e.message, "err"); }
       } } }, "Démarrer la synchro")),
       box,
-      field("Jeton", h("div", { class: "row" }, token, h("button", { type: "button", class: "btn small", on: { click: async () => {
-        try { await api("/api/hub/token", { method: "POST", body: { token: token.value } }); token.value = ""; toast("Jeton enregistré.", "ok"); }
-        catch (e) { toast(e.message, "err"); }
-      } } }, "Enregistrer le jeton"))),
+      tokenSwap,
+      tokenField,
     ),
     section("Téléphone", "Approuver ou refuser une validation depuis le téléphone, sur le VPN ou le LAN (jamais sur internet public).",
       h("p", { class: "muted" }, "Ouvre ", h("code", {}, phoneUrl()), " sur ton téléphone, colle le même jeton d'équipe une fois. "

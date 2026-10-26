@@ -129,10 +129,6 @@ function here(ws, ctx, user, redraw, replace) {
   if (!proj) return [invite("Pas encore un projet", "Donne d'abord un nom à ce dossier (« En faire un projet », en haut) ; il pourra ensuite être partagé.")];
   const join = h("button", { type: "button", class: "btn small", on: { click: () => joinTeamProject(ctx, { start: ws.folder }) } },
     "Rejoindre un projet d'équipe…");
-  if (!user.admin) {
-    return [invite("Projet personnel", "Ce projet reste sur ce poste. Seul l'administrateur du hub en fait un projet d'équipe ; "
-      + "un projet déjà partagé se rejoint ici ou depuis l'accueil.", join)];
-  }
   const create = h("button", { type: "button", class: "btn small primary", on: { click: async () => {
     create.disabled = true;
     try {
@@ -403,7 +399,7 @@ export async function joinTeamProject(ctx, { start = "", select = "" } = {}) {
   catch (e) { toast(e.message, "err"); return; }
   const free = projects.filter((p) => !p.folder);
   if (!free.length) {
-    toast(projects.length ? "Tous tes projets d'équipe sont déjà sur ce poste." : "Aucun projet d'équipe pour ce compte.", "ok");
+    toast(projects.length ? "Tous tes projets d'équipe sont déjà sur ce poste." : "Aucun projet d'équipe pour ce compte : celui qui a partagé le projet t'ajoute dans son onglet Membres.", "ok");
     return;
   }
   if (select && !free.some((p) => p.id === select)) {
