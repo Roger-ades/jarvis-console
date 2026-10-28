@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { mdElement } from "./md.js";
 import { projects } from "./projects.js";
 import { slashDescription } from "./slash-fr.js";
-import { $, fmtDate, h, iconBtn, store, toast } from "./util.js";
+import { $, dialog, fmtDate, h, iconBtn, store, toast } from "./util.js";
 
 const el = () => $("#skills");
 const TARGET_KEY = "jarvis.skills.target", TALKS_KEY = "jarvis.skills.talks", CLOSED_KEY = "jarvis.skills.closed";
@@ -167,7 +167,9 @@ function renderList(full = false) {
       h("div", { class: "sk-new" },
         h("button", { type: "button", class: "btn small", on: { click: () => select(null) } }, "Nouvelle compétence"),
         h("button", { type: "button", class: "btn small ghost", title: "Un groupe pour ranger la liste : glisse ensuite les compétences dessus",
-          on: { click: () => { S.editing = { path: "", parent: "" }; fillRows(); } } }, "Nouveau groupe")),
+          on: { click: () => { S.editing = { path: "", parent: "" }; fillRows(); } } }, "Nouveau groupe"),
+        h("button", { type: "button", class: "btn small ghost", title: "Envoyer des compétences, ou des groupes entiers, à des collègues du hub",
+          on: { click: () => share() } }, "Partager…")),
       S.rows);
   }
   S.listNote.textContent = S.target?.kind === "projet"
@@ -256,6 +258,10 @@ function groupRow(g, open) {
       S.editing = { path: "", parent: g.path };
       toggleGroup(g.path, true);
     }) : null,
+    iconBtn("send", "Partager ce groupe avec des collègues", (e) => {
+      e.stopPropagation();
+      share(S.list.filter((s) => s.groupe === g.path || s.groupe?.startsWith(`${g.path}/`)).map((s) => s.name));
+    }),
     iconBtn("edit", "Renommer (F2)", (e) => { e.stopPropagation(); edit(g.path); }),
     iconBtn("x", "Défaire le groupe : son contenu remonte d'un niveau", (e) => { e.stopPropagation(); groupAction("dissoudre", g.path); })));
   return row;
@@ -272,6 +278,79 @@ function skillRow(s) {
     h("div", { class: "hs" }, slashDescription(s.name, s.description) || "Sans description")),
   h("span", { class: "sk-meta" }, n ? h("span", { class: "sk-dot", title: `${n} point${n > 1 ? "s" : ""} à revoir` }) : null,
     s.modified ? fmtDate(s.modified) : ""));
+}
+
+// ------------------------------------------------------------ sharing through the team's hub (console/skill_share.py)
+/** Partager: the skills ticked (one, several, whole groups) go to the colleagues ticked, each with its group; they
+ * wait in their inbox, where they pick the account to install them in. `pre`: the skills ticked to begin with. */
+async function share(pre = []) {
+  if (!S.list.length) { toast(`Aucune compétence ${targetName()} à partager.`, "warn"); return; }
+  let people = [];
+  try {
+    const st = await api("/api/hub/status");
+    if (!st.enabled || !st.user) {
+      toast("Partager des compétences passe par le hub de l'équipe : inscris ce poste d'abord (Configuration › Équipe).", "warn");
+      return;
+    }
+    people = ((await api("/api/hub/users")).users || []).filter((u) => u.id !== st.user.id);
+  } catch (e) { toast(e.message, "err"); return; }
+  if (!people.length) { toast("Personne d'autre n'est inscrit sur le hub de l'équipe.", "warn"); return; }
+  const chosen = new Set(pre);
+  // the tree of the page, with every skill (whatever the filter); a group ticks or unticks all it holds
+  const node = (path) => ({ path, name: path.split("/").pop(), groups: new Map(), skills: [] });
+  const root = node("");
+  for (const sk of S.list) {
+    const n = (sk.groupe || "").split("/").filter(Boolean).reduce((m, part, i, all) => {
+      if (!m.groups.has(part)) m.groups.set(part, node(all.slice(0, i + 1).join("/")));
+      return m.groups.get(part);
+    }, root);
+    n.skills.push(sk.name);
+  }
+  const all = (n) => [...n.skills, ...[...n.groups.values()].flatMap(all)];
+  const tree = h("div", { class: "sk-share-tree" });
+  const count = h("p", { class: "muted" });
+  const draw = () => {
+    const level = (n) => [
+      ...[...n.groups.values()].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })).map((g) => {
+        const inside = all(g), on = inside.filter((x) => chosen.has(x)).length;
+        const box = h("input", { type: "checkbox", checked: on === inside.length, on: { change: (e) => {
+          inside.forEach((x) => (e.target.checked ? chosen.add(x) : chosen.delete(x)));
+          draw();
+        } } });
+        box.indeterminate = on > 0 && on < inside.length;
+        return h("div", { class: "sk-share-group" },
+          h("label", { class: "check" }, box, " ", h("span", { class: "i", svg: "folder" }), ` ${g.name} `, h("small", {}, `(${inside.length})`)),
+          h("div", { class: "sk-share-children" }, ...level(g)));
+      }),
+      ...n.skills.sort().map((x) => h("label", { class: "check sk-share-item" },
+        h("input", { type: "checkbox", checked: chosen.has(x), on: { change: (e) => {
+          if (e.target.checked) chosen.add(x); else chosen.delete(x);
+          draw();
+        } } }), ` ${x}`)),
+    ];
+    tree.replaceChildren(...level(root));
+    count.textContent = chosen.size ? `${chosen.size} compétence${chosen.size > 1 ? "s" : ""} cochée${chosen.size > 1 ? "s" : ""}, chacune avec son groupe.`
+      : "Coche des compétences, ou un groupe pour tout ce qu'il contient.";
+  };
+  draw();
+  const boxes = people.map((u) => h("input", { type: "checkbox", value: u.id }));
+  const body = h("div", { class: "sk-share" },
+    h("p", {}, "Elles arriveront dans leur boîte de réception : ils choisissent le compte où les installer, dans les mêmes groupes. "
+      + "Leurs fichiers partent tels quels."),
+    tree, count,
+    h("b", {}, "Avec"),
+    h("div", { class: "ad-share-list" }, ...people.map((u, i) => h("label", { class: "check" }, boxes[i], ` ${u.name || u.id}`))));
+  const ok = await dialog({ title: `Partager des compétences ${targetName()}`, body,
+    buttons: [{ label: "Annuler", value: false }, { label: "Envoyer", value: true, cls: "primary" }] });
+  const to = boxes.filter((b) => b.checked).map((b) => b.value);
+  if (!ok) return;
+  if (!chosen.size) { toast("Aucune compétence cochée : rien n'est parti.", "warn"); return; }
+  if (!to.length) { toast("Aucun collègue coché : rien n'est parti.", "warn"); return; }
+  try {
+    const r = await api("/api/hub/skills/send", { method: "POST", body: { competences: [...chosen], to, ...targetBody() } });
+    const names = people.filter((u) => to.includes(u.id)).map((u) => u.name || u.id);
+    toast(`${r.count > 1 ? `${r.count} compétences envoyées` : `« ${[...chosen][0]} » envoyée`} à ${names.join(", ")}.`, "ok");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 /** The name of a new group (under `parent`) or of the group `path` renamed, typed in the list. */
@@ -388,6 +467,7 @@ function renderSheet() {
     h("header", { class: "sk-head" },
       h("h3", {}, s.name),
       h("span", { class: "muted" }, s.modified ? `Modifiée ${fmtDate(s.modified)}` : ""),
+      iconBtn("send", "Partager avec des collègues", () => share([s.name])),
       iconBtn("copy", "Copier le chemin du dossier", () => navigator.clipboard?.writeText(s.path.replace(/[\\/]SKILL\.md$/i, ""))
         .then(() => toast("Chemin copié.", "ok")).catch(() => {}))),
     h("p", { class: "sk-desc" }, slashDescription(s.name, s.description) || "Sans description."),

@@ -68,6 +68,7 @@ ci-dessus.
 | Retiré d'un projet d'équipe relié à ce poste | À faire | Détacher le dossier…, Ignorer |
 | Inscription d'un collègue au hub (administrateur du hub seulement) | À lire | Révoquer…, Vu |
 | Module reçu d'un collègue (bouton Partager de la fenêtre d'un module) | À faire | Installer, Ignorer |
+| Compétences reçues d'un collègue (Partager, page Compétences), avec leurs groupes | À faire | Installer…, Ignorer |
 
 Lu avance la marque jusqu'au dernier message ; le fil ou les conversations affichés dans le projet
 valent lecture. Une invitation ignorée ne revient que si on est retiré puis ajouté à nouveau. Les inscriptions

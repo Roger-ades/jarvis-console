@@ -243,7 +243,8 @@ basculé, puis l'archiver.
 
 Les transcriptions partagées restent des fichiers :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. Les modules partagés aussi, un zip par contenu
-(`/var/lib/jarvis-hub/modules/<sha256>.zip`), effacé dès que plus personne ne l'attend. La présence vit
+(`/var/lib/jarvis-hub/modules/<sha256>.zip`), effacé dès que plus personne ne l'attend ; de même les
+compétences partagées (`/var/lib/jarvis-hub/competences/<sha256>.zip`). La présence vit
 en mémoire seulement.
 Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
 
@@ -282,6 +283,8 @@ messages       id, project_id, author_id, ts, text, refs (conversation, fichier,
                edited, deleted
 modules        id, sender_id, recipient_id, addon_id, name, version, description, permissions,
                blob (sha256), size, created, removed, outcome (installé | ignoré | remplacé)
+skill_packs    id, sender_id, recipient_id, skills (nom, groupe, description de chacune),
+               blob (sha256), size, created, removed, outcome (installé | ignoré)
 audit          id, ts, user_id, kind, detail
 ```
 
@@ -317,6 +320,10 @@ POST   /api/v1/modules?to=a,b               partager un module (zip avec partage
 GET    /api/v1/modules                      modules qui m'attendent
 GET    /api/v1/modules/{m}/archive          télécharger pour installer (destinataire seulement)
 DELETE /api/v1/modules/{m}?outcome=         installé ou ignoré : il quitte ma boîte
+POST   /api/v1/competences?to=a,b           partager des compétences avec leurs groupes (zip avec partage.json)
+GET    /api/v1/competences                  compétences qui m'attendent
+GET    /api/v1/competences/{p}/archive      télécharger pour installer (destinataire seulement)
+DELETE /api/v1/competences/{p}?outcome=     installées ou ignorées : elles quittent ma boîte
 GET    /api/v1/audit                        (admin)
 ```
 

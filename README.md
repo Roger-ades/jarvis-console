@@ -203,7 +203,8 @@ discussion avec Claude pour les créer et les améliorer : chaque écriture pass
 différences validée d'un clic. La liste se range en groupes imbriqués (glisser-déposer), gardés
 par JARVIS seulement : les skills restent à plat. Claude voit ces groupes (outil `retenir`) : il
 donne le groupe d'une compétence qu'il propose et, sur demande, propose de ranger toute la liste
-(action `classer`), validé d'un clic. Une action peut demander un skill dans son texte ; une action du
+(action `classer`), validé d'un clic. En mode équipe, « Partager… » envoie une compétence, plusieurs
+ou des groupes entiers à des collègues du hub, qui les installent dans les mêmes groupes. Une action peut demander un skill dans son texte ; une action du
 même nom qu'un skill est refusée.
 
 Détails : [docs/boite-de-reception.md](docs/boite-de-reception.md).

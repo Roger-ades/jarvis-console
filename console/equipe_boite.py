@@ -5,7 +5,8 @@ The console asks the hub every 30 s (equipe.loop) and keeps only what the inbox 
 - the Fil and the shared conversations of a linked project: what the others wrote or shared since the user looked;
 - a project the account lost (removed from its members): the folder can be detached;
 - for a hub administrator, a colleague who registered from their JARVIS (the account can be revoked from there);
-- a module a colleague sent through the hub: one click installs it (equipe.py), Claude takes no part.
+- a module a colleague sent through the hub: one click installs it (equipe.py), Claude takes no part;
+- skills a colleague sent through the hub, with their groups: installed in the account picked (equipe.py).
 Each one is signalled once: "Lu" moves the mark to the latest message, "Ignorer" forgets the invitation.
 Nothing from the hub reaches Claude: these entries are the console's, like the rest of the inbox.
 """
@@ -18,7 +19,8 @@ import time
 from . import inbox as inbox_mod
 
 KEY = "team_inbox"
-KINDS = ("team_invite", "team_message", "team_mention", "team_share", "team_removed", "team_signup", "team_module")
+KINDS = ("team_invite", "team_message", "team_mention", "team_share", "team_removed", "team_signup", "team_module",
+         "team_skills")
 
 
 class TeamFeed:
@@ -49,6 +51,7 @@ class TeamFeed:
         self.names: dict[str, str] = {}   # local names of the linked projects
         self.colors: dict[str, str] = {}
         self.modules: list[dict] = []     # modules sent to this account, waiting on the hub
+        self.skill_packs: list[dict] = [] # skills sent to this account, waiting on the hub
 
     # ------------------------------------------------------------ reading the hub
     def poll(self, call, me: dict, linked: dict[str, dict]) -> None:
@@ -69,6 +72,10 @@ class TeamFeed:
             modules = call("GET", "/api/v1/modules").get("modules", [])
         except Exception:  # noqa: BLE001 - an older hub, or out of reach: the last ones then
             modules = self.modules
+        try:
+            packs = call("GET", "/api/v1/competences").get("packs", [])
+        except Exception:  # noqa: BLE001 - an older hub, or out of reach: the last ones then
+            packs = self.skill_packs
         listed = {p["id"] for p in projects}
         messages, conversations = {}, {}
         for team in linked:
@@ -90,6 +97,7 @@ class TeamFeed:
             self.colors = {t: v.get("color") or "" for t, v in linked.items()}
             self.messages, self.conversations = messages, conversations
             self.modules = modules
+            self.skill_packs = packs
             self.gone = {t: v["folder"] for t, v in linked.items() if t not in listed}
             for team in messages:
                 if team not in self.seen:
@@ -197,6 +205,22 @@ class TeamFeed:
                 "summary": f"{who} t'envoie le module « {m.get('name') or m.get('addon')} »{version}.",
                 "actions": ["install", "dismiss"],
             })
+        for pk in self.skill_packs:
+            who = self._who(pk.get("from"))
+            skills = [x for x in pk.get("skills") or [] if isinstance(x, dict) and x.get("nom")]
+            groups = sorted({x.get("groupe") or "" for x in skills} - {""}, key=str.lower)
+            what = (f"la compétence « {skills[0]['nom']} »" if len(skills) == 1
+                    else f"{len(skills)} compétences")
+            where = (f" (groupe{'s' if len(groups) > 1 else ''} {', '.join(g.replace('/', ' › ') for g in groups[:3])}"
+                     f"{'…' if len(groups) > 3 else ''})") if groups else ""
+            out.append({
+                "id": f"equipe-competences:{pk['id']}", "section": "todo", "kind": "team_skills",
+                "ts": pk.get("created") or 0, "pack_id": pk["id"], "skills": skills,
+                "title": skills[0]["nom"] if len(skills) == 1 else f"{len(skills)} compétences",
+                "folder": "", "color": "", "profile": "", "profile_name": "", "from": who, "size": pk.get("size") or 0,
+                "summary": f"{who} t'envoie {what}{where}.",
+                "actions": ["install", "dismiss"],
+            })
         for team, folder in self.gone.items():
             if team in self.gone_dismissed:
                 continue
@@ -259,6 +283,12 @@ class TeamFeed:
         """A module installed or put away: the hub no longer lists it, the inbox drops it now."""
         with self._lock:
             self.modules = [m for m in self.modules if m.get("id") != mod_id]
+        self.changed()
+
+    def forget_skills(self, pack_id: str) -> None:
+        """Skills installed or put away: the inbox drops them now."""
+        with self._lock:
+            self.skill_packs = [p for p in self.skill_packs if p.get("id") != pack_id]
         self.changed()
 
     def pending_invitations(self) -> int:

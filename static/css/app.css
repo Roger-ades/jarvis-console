@@ -889,7 +889,7 @@ pre, .codeblock pre {
 }
 /* Compétences : page plein écran, liste · fiche · discussion avec Claude */
 .drawer.wide.skills-drawer { left: 0; width: auto; border-left: 0; }
-.sk-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(340px, 38%); }
+.sk-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(340px, 38%); grid-template-rows: minmax(0, 1fr); }
 .sk-col { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sk-list { border-right: 1px solid var(--border); background: var(--bg-2); padding: 10px 8px 0; gap: 8px; }
 .sk-list > select, .sk-tools, .sk-new, .sk-note { margin: 0 4px; }
@@ -897,7 +897,8 @@ pre, .codeblock pre {
 .sk-tools { display: flex; gap: 6px; }
 .sk-tools input { flex: 1; min-width: 0; }
 .sk-new { display: flex; flex-wrap: wrap; gap: 6px; }
-.sk-rows { padding: 2px 0 12px; border-radius: 9px; }
+/* .drawer-list.flat ne défile pas : la liste des compétences défile seule */
+.sk-list .sk-rows.flat { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 0 12px; border-radius: 9px; }
 .sk-rows.drop { outline: 2px dashed color-mix(in srgb, var(--pc) 45%, transparent); outline-offset: -2px; }
 .sk-group { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 4px; border-radius: 8px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text-2); user-select: none; }
 .sk-group:hover { background: var(--surface-2); color: var(--text); }
@@ -955,7 +956,7 @@ pre, .codeblock pre {
 .win.embedded { position: static; flex: 1; min-width: 0; min-height: 0; border-radius: 0; box-shadow: none; animation: none; }
 .win.embedded .win-head .who, .win.embedded .win-head .slash { display: none; }
 @media (max-width: 900px) {
-  .sk-layout { grid-template-columns: 1fr; grid-auto-rows: minmax(260px, auto); overflow: auto; }
+  .sk-layout { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: minmax(260px, auto); overflow: auto; }
   .sk-list { border-right: 0; border-bottom: 1px solid var(--border); max-height: 300px; }
   .sk-talk { border-left: 0; border-top: 1px solid var(--border); min-height: 420px; }
 }
@@ -998,6 +999,20 @@ pre, .codeblock pre {
 .viewer-foot textarea { width: 100%; resize: vertical; }
 .viewer-foot .check, .dialog .check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); cursor: pointer; }
 .ad-share-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; margin-top: 10px; }
+/* Compétences: share (a tree of groups to tick) and install from the inbox */
+.dialog:has(.sk-share) { width: min(560px, 100%); }
+.sk-share { display: flex; flex-direction: column; gap: 8px; }
+.sk-share > b { margin-top: 4px; font-size: 12.5px; }
+.sk-share-tree, .sk-share-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
+.sk-share-group { display: flex; flex-direction: column; gap: 4px; }
+.sk-share-children { display: flex; flex-direction: column; gap: 4px; padding-left: 20px; }
+.sk-share-children:empty { display: none; }
+.sk-share .check .i svg { width: 13px; height: 13px; vertical-align: -2px; color: var(--text-3); }
+.sk-share .check small, .sk-share-item small { color: var(--text-3); }
+.dialog .sk-share-list .check { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; row-gap: 0; }
+.sk-share-warn { flex-basis: 100%; padding-left: 20px; color: var(--warn); font-size: 11.5px; }
+.sk-share-field { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.sk-share > p { margin: 0; }
 .dialog.routine-ed { width: min(760px, 100%); }
 .routine-ed .dialog-body { color: var(--text); }
 .routine-ed .field select, .routine-ed .field input[type="text"], .routine-ed .field textarea { width: 100%; }

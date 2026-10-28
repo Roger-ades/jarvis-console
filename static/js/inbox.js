@@ -9,7 +9,7 @@ import { accountState } from "./limits.js";
 import { projectFor } from "./projects.js";
 import { tintOf } from "./tint.js";
 import { inputView } from "./taskwin.js";
-import { $, confirmDialog, fmtDate, h, noticeRoot, paint, toast, toolIcon, toolLabel } from "./util.js";
+import { $, confirmDialog, dialog, fmtDate, h, noticeRoot, paint, toast, toolIcon, toolLabel } from "./util.js";
 
 let ctx = null;
 let data = { entries: [], counts: { todo: 0, read: 0, reminder: 0 } };
@@ -153,6 +153,7 @@ export async function back() {
     say(n(["team_removed"]), "retrait d'un projet d'équipe", "retraits de projets d'équipe"),
     say(n(["team_signup"]), "inscription au hub", "inscriptions au hub"),
     say(n(["team_module"]), "module reçu", "modules reçus"),
+    say(n(["team_skills"]), "envoi de compétences", "envois de compétences"),
     say(n(["reminder"]), "rappel", "rappels")].filter(Boolean);
   if (!parts.length) return;
   const close = () => { awayBar?.remove(); awayBar = null; };
@@ -321,11 +322,12 @@ const LABELS = {
   reminder: "Rappel", team_invite: "Invitation · projet d'équipe", team_message: "Fil d'équipe",
   team_mention: "On te mentionne", team_share: "Conversation partagée", team_removed: "Retiré d'un projet d'équipe",
   team_signup: "Inscription au hub", team_module: "Module reçu",
+  team_skills: "Compétences reçues",
 };
 const ICON = { question: "help", plan: "list", proposal: "bolt", expired: "clock", choice: "sparkle", error: "error",
   interrupted: "alert", done: "check", routine: "clock", run: "clock", reminder: "bell",
   team_invite: "team", team_message: "team", team_mention: "team", team_share: "team", team_removed: "team", team_signup: "team",
-  team_module: "puzzle" };
+  team_module: "puzzle", team_skills: "sparkle" };
 
 function row(e, inGroup = false) {
   const actions = h("div", { class: "ib-actions" });
@@ -446,6 +448,16 @@ function row(e, inGroup = false) {
       actions.append(btn("Ignorer", () => ignoreModule(e), "ghost"), btn("Installer", main, "primary"));
       break;
     }
+    case "team_skills": {
+      lines.push(h("div", { class: "ib-text" }, e.summary));
+      if (e.skills?.length > 1) {
+        lines.push(h("div", { class: "ib-excerpt" }, e.skills.slice(0, 8).map((c) => c.nom).join(", ")
+          + (e.skills.length > 8 ? `… (+${e.skills.length - 8})` : "")));
+      } else if (e.skills?.[0]?.description) lines.push(h("div", { class: "ib-excerpt" }, e.skills[0].description));
+      main = () => installSkills(e);
+      actions.append(btn("Ignorer", () => ignoreSkills(e), "ghost"), btn("Installer…", main, "primary"));
+      break;
+    }
     default:
       main = () => e.task_id && ctx.openTask(e.task_id);
   }
@@ -550,6 +562,53 @@ function installModule(e) {
 
 function ignoreModule(e) {
   return call(e, () => api(`/api/hub/modules/${encodeURIComponent(e.module_id)}/dismiss`, { method: "POST" }));
+}
+
+/** Skills a colleague sent through the hub: the user picks the account and which ones; each goes in its group. */
+async function installSkills(e) {
+  const accounts = ctx.profiles();
+  if (!accounts.length) return;
+  const pick = h("select", {}, ...accounts.map((p) => h("option", { value: p.id }, p.name)));
+  const list = h("div", { class: "sk-share-list" });
+  const boxes = new Map();
+  const fill = async () => {
+    let mine = new Set();
+    try { mine = new Set(((await api(`/api/skills?profile=${encodeURIComponent(pick.value)}`)).compte || []).map((s) => s.name)); }
+    catch { /* the list without "remplacera" */ }
+    list.replaceChildren(...e.skills.map((c) => {
+      const box = boxes.get(c.nom) || h("input", { type: "checkbox", checked: true });
+      boxes.set(c.nom, box);
+      return h("label", { class: "check sk-share-item", title: c.description || "" }, box, h("b", {}, c.nom),
+        c.groupe ? h("small", {}, c.groupe.split("/").join(" › ")) : null,
+        mine.has(c.nom) ? h("span", { class: "sk-share-warn" }, "Remplacera la tienne, gardée dans skills-anciennes.") : null);
+    }));
+  };
+  pick.addEventListener("change", fill);
+  await fill();
+  const body = h("div", { class: "sk-share" },
+    h("p", {}, `${e.from} t'envoie ${e.skills.length > 1 ? "ces compétences" : "cette compétence"}, chacune dans son groupe.`),
+    accounts.length > 1 ? h("label", { class: "sk-share-field" }, "Dans le compte ", pick) : null,
+    list,
+    h("div", { class: "appr-reason" }, "Claude suivra ces consignes dans tous les projets de ce compte : "
+      + "installe seulement ce que tu as lu ou ce qui vient d'un collègue de confiance."));
+  const ok = await dialog({ title: "Installer les compétences", body,
+    buttons: [{ label: "Annuler", value: false }, { label: "Installer", value: true, cls: "primary" }] });
+  const names = e.skills.filter((c) => boxes.get(c.nom)?.checked).map((c) => c.nom);
+  if (!ok) return;
+  if (!names.length) { toast("Aucune compétence cochée : rien n'est installé.", "warn"); return; }
+  return call(e, async () => {
+    const res = await api(`/api/hub/skills/${encodeURIComponent(e.pack_id)}/install`, { method: "POST",
+      body: { profile: pick.value, competences: names } });
+    const n = res.installees.length;
+    const kept = res.installees.filter((c) => c.ancien).length;
+    toast(`${n > 1 ? `${n} compétences installées` : `« ${res.installees[0].nom} » installée`}, dans leurs groupes`
+      + (kept ? ` (${kept > 1 ? "les anciennes versions sont gardées" : "l'ancienne version est gardée"} dans skills-anciennes)` : "") + ".", "ok");
+    ctx.openCompetences?.({ profile: res.profile, skill: res.installees[0]?.nom });
+  });
+}
+
+function ignoreSkills(e) {
+  return call(e, () => api(`/api/hub/skills/${encodeURIComponent(e.pack_id)}/dismiss`, { method: "POST" }));
 }
 
 function dismiss(e) { return call(e, () => api("/api/inbox/dismiss", { method: "POST", body: { ids: [e.id] } })); }

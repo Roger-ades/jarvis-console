@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS modules (
     outcome TEXT
 );
 CREATE INDEX IF NOT EXISTS modules_recipient ON modules(recipient_id, removed);
+CREATE TABLE IF NOT EXISTS skill_packs (
+    id TEXT PRIMARY KEY,
+    sender_id TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    skills TEXT NOT NULL,
+    blob TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created REAL NOT NULL,
+    removed REAL,
+    outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS skill_packs_recipient ON skill_packs(recipient_id, removed);
 """
 
 COLORS = ("#40dcff", "#7dffb3", "#ffb020", "#ff7ad9", "#c9a6ff", "#ff8f6b")
@@ -694,6 +706,86 @@ class HubDB:
             for f in folder.glob("*.zip"):
                 if f.stem not in kept:
                     f.unlink(missing_ok=True)
+
+    # ---------------------------------------------------------------- compétences envoyées d'un JARVIS à l'autre
+    def send_skills(self, sender: str, recipients: list[str], skills: list[dict], blob: bytes) -> list[dict]:
+        """Un paquet de compétences (avec leurs groupes) par destinataire ; le zip n'est gardé qu'une fois."""
+        digest = hashlib.sha256(blob).hexdigest()
+        folder = self.files / "competences"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{digest}.zip"
+
+        def go():
+            if not path.is_file():
+                tmp = folder / f".{digest}.{secrets.token_hex(3)}.tmp"
+                tmp.write_bytes(blob)
+                tmp.replace(path)
+            now, ids = time.time(), []
+            for to in recipients:
+                row = self.db.execute("SELECT revoked FROM users WHERE id=?", (to,)).fetchone()
+                if row is None or row["revoked"] is not None:
+                    raise KeyError(to)
+                pack_id = secrets.token_hex(8)
+                self.db.execute(
+                    "INSERT INTO skill_packs(id, sender_id, recipient_id, skills, blob, size, created) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (pack_id, sender, to, json.dumps(skills, ensure_ascii=False), digest, len(blob), now))
+                ids.append(pack_id)
+            self._audit(sender, "skills.send", {"skills": [s["nom"] for s in skills], "to": recipients})
+            return [_pack_row(self.db.execute("SELECT * FROM skill_packs WHERE id=?", (i,)).fetchone()) for i in ids]
+
+        try:
+            return self._write(go)
+        finally:
+            self._drop_unused_packs()
+
+    def skills_for(self, user_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT * FROM skill_packs WHERE recipient_id=? AND removed IS NULL ORDER BY created DESC", (user_id,)
+            ).fetchall()
+        return [_pack_row(r) for r in rows]
+
+    def skills_zip(self, user_id: str, pack_id: str) -> Path | None:
+        with self._lock:
+            row = self.db.execute(
+                "SELECT blob FROM skill_packs WHERE id=? AND recipient_id=? AND removed IS NULL", (pack_id, user_id)
+            ).fetchone()
+        path = self.files / "competences" / f"{row['blob']}.zip" if row else None
+        return path if path and path.is_file() else None
+
+    def close_skills(self, user_id: str, pack_id: str, outcome: str) -> dict:
+        """Le destinataire les a installées ou ignorées : le paquet quitte sa boîte."""
+        def go():
+            row = self.db.execute(
+                "SELECT * FROM skill_packs WHERE id=? AND recipient_id=? AND removed IS NULL", (pack_id, user_id)
+            ).fetchone()
+            if row is None:
+                raise KeyError(pack_id)
+            self.db.execute("UPDATE skill_packs SET removed=?, outcome=? WHERE id=?", (time.time(), outcome, pack_id))
+            self._audit(user_id, "skills." + ("install" if outcome == "installé" else "ignore"),
+                        {"skills": [s["nom"] for s in json.loads(row["skills"] or "[]")], "from": row["sender_id"]})
+            return _pack_row(row)
+
+        try:
+            return self._write(go)
+        finally:
+            self._drop_unused_packs()
+
+    def _drop_unused_packs(self):
+        folder = self.files / "competences"
+        if not folder.is_dir():
+            return
+        with self._lock:
+            kept = {r["blob"] for r in self.db.execute("SELECT DISTINCT blob FROM skill_packs WHERE removed IS NULL")}
+            for f in folder.glob("*.zip"):
+                if f.stem not in kept:
+                    f.unlink(missing_ok=True)
+
+
+def _pack_row(row: sqlite3.Row) -> dict:
+    return {"id": row["id"], "from": row["sender_id"], "to": row["recipient_id"],
+            "skills": json.loads(row["skills"] or "[]"), "size": row["size"], "created": row["created"]}
 
 
 def _module_row(row: sqlite3.Row) -> dict:

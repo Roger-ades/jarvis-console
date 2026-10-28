@@ -1645,6 +1645,7 @@ const inboxCtx = {
   openProject: (folder, tab) => { if (projectFor(folder)) showProject(panelCtx, { folder, tab }); },
   joinTeam: (id) => joinTeamProject(panelCtx, { start: currentFolder(), select: id }),
   openAddon: (id) => { closeDrawers(); openAddon(id); },
+  openCompetences: (opts) => { closeDrawers(); openCompetences(panelCtx, opts); },
 };
 // the browser: a page hidden more than 15 minutes is an absence (the desktop app says when the session locks)
 let hiddenAt = 0;

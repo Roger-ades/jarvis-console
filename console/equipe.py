@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import Body, FastAPI
 
-from . import addon_share, share, syncbox
+from . import addon_share, share, skill_share, syncbox
 from .config import ConfigStore, expand_path
 from .engine import TaskError
 from .equipe_boite import TeamFeed
@@ -261,6 +261,87 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
             if exc.status != 404:
                 return fail(exc)
         feed.forget(mod_id)
+        return {"ok": True}
+
+    # ------------------------------------------------------------ compétences partagées, avec leurs groupes (sans Claude)
+    @app.post("/api/hub/skills/send")
+    def send_skills(body: dict = Body(...)):
+        """Page Compétences : les compétences cochées (une, plusieurs, des groupes entiers) partent par le hub,
+        chacune avec son groupe."""
+        to = sorted({str(u).strip() for u in body.get("to") or [] if str(u).strip()})
+        if not to:
+            return fail(HubError("Choisis au moins un collègue.", 422))
+        try:
+            key, base = engine._skill_groups_key(str(body.get("folder") or ""), body.get("profile") or None)
+        except TaskError as exc:
+            return fail(HubError(str(exc), 404))
+        groups = engine._skill_groups(key)["classement"]
+        hub = cfg().hub
+        work = Path(tempfile.mkdtemp(prefix="competences-", dir=data_dir))
+        try:
+            me = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/me").get("user") or {}
+            path, skills = skill_share.export(base, list(body.get("competences") or []), groups, work,
+                                              me.get("name") or me.get("id") or "")
+            sent = client.call(hub.url, hub.fingerprint, "POST", "/api/v1/competences", content=path.read_bytes(),
+                               content_type="application/zip", query=urlencode({"to": ",".join(to)}))
+        except HubError as exc:
+            return fail(exc)
+        except skill_share.ShareError as exc:
+            return fail(HubError(str(exc), 422))
+        except OSError as exc:
+            return fail(HubError(f"Export impossible : {exc}", 500))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        store.audit("compétences partagées", {"compétences": [s["nom"] for s in skills], "avec": to})
+        return {"ok": True, "sent": len(sent.get("packs") or []), "count": len(skills)}
+
+    @app.post("/api/hub/skills/{pack_id}/install")
+    def install_skills(pack_id: str, body: dict = Body(default={})):
+        """Installer, dans la boîte de réception : dans le compte choisi, chacune dans son groupe ; une compétence
+        du même nom déjà là est gardée dans skills-anciennes."""
+        try:
+            key, base = engine._skill_groups_key("", body.get("profile") or None)
+        except TaskError as exc:
+            return fail(HubError(str(exc), 404))
+        only = body.get("competences")
+        only = [str(x) for x in only] if isinstance(only, list) else None
+        hub = cfg().hub
+        work = Path(tempfile.mkdtemp(prefix="competences-", dir=data_dir))
+        try:
+            blob = client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/competences/{_q(pack_id)}/archive", raw=True)
+            path = work / "competences.zip"
+            path.write_bytes(blob)
+            done = skill_share.install(path, base, only)
+        except HubError as exc:
+            return fail(exc)
+        except (skill_share.ShareError, OSError) as exc:
+            return fail(HubError(f"Installation impossible : {exc}", 422))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        g = engine._skill_groups(key)
+        engine._save_skill_groups(key, {**g["classement"], **{c["nom"]: c["groupe"] for c in done["installees"]}},
+                                  [*g["groupes"], *(c["groupe"] for c in done["installees"])])
+        try:
+            client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/competences/{_q(pack_id)}",
+                        query=urlencode({"outcome": "installé"}))
+        except HubError:
+            pass    # installées quand même ; le hub les reproposera
+        feed.forget_skills(pack_id)
+        names = [c["nom"] for c in done["installees"]]
+        store.audit("compétences installées", {"compétences": names, "de": done.get("de") or "", "compte": key})
+        engine.bus.publish("skills", {"competence": "", "chemin": ""})
+        return {"ok": True, "installees": done["installees"], "profile": key.split(":", 1)[1]}
+
+    @app.post("/api/hub/skills/{pack_id}/dismiss")
+    def dismiss_skills(pack_id: str):
+        hub = cfg().hub
+        try:
+            client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/competences/{_q(pack_id)}",
+                        query=urlencode({"outcome": "ignoré"}))
+        except HubError as exc:
+            if exc.status != 404:
+                return fail(exc)
+        feed.forget_skills(pack_id)
         return {"ok": True}
 
     @app.get("/api/hub/projects")

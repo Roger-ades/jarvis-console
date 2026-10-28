@@ -429,6 +429,45 @@ def create_app(db: HubDB) -> FastAPI:
             raise HTTPException(404, {"error": "introuvable"}) from None
         return {"api": API, "ok": True}
 
+    # Des compétences envoyées d'un JARVIS à l'autre, avec leurs groupes : le zip attend dans la boîte du destinataire.
+    @app.post("/api/v1/competences", status_code=201)
+    async def send_skills(request: Request, user: dict = Depends(current_user)):
+        blob = await request.body()
+        if len(blob) > MAX_MODULE:
+            raise HTTPException(413, {"error": "compétences trop lourdes"})
+        to = sorted({t.strip() for t in (request.query_params.get("to") or "").split(",") if t.strip()} - {user["id"]})
+        if not to or len(to) > 50:
+            raise HTTPException(400, {"error": "destinataires requis"})
+        skills = _skills_info(blob)
+        if not skills:
+            raise HTTPException(422, {"error": "ce ne sont pas des compétences JARVIS"})
+        try:
+            sent = db.send_skills(user["id"], to, skills, blob)
+        except KeyError as exc:
+            raise HTTPException(404, {"error": f"compte inconnu : {exc.args[0]}"}) from None
+        return {"api": API, "packs": sent}
+
+    @app.get("/api/v1/competences")
+    def received_skills(user: dict = Depends(current_user)):
+        return {"api": API, "packs": db.skills_for(user["id"])}
+
+    @app.get("/api/v1/competences/{pack_id}/archive")
+    def skills_archive(pack_id: str, user: dict = Depends(current_user)):
+        path = db.skills_zip(user["id"], pack_id)
+        if path is None:
+            raise HTTPException(404, {"error": "introuvable"})
+        return Response(path.read_bytes(), media_type="application/zip")
+
+    @app.delete("/api/v1/competences/{pack_id}")
+    def close_skills(pack_id: str, user: dict = Depends(current_user), outcome: str = "ignoré"):
+        if outcome not in ("installé", "ignoré"):
+            raise HTTPException(400, {"error": "installé ou ignoré"})
+        try:
+            db.close_skills(user["id"], pack_id, outcome)
+        except KeyError:
+            raise HTTPException(404, {"error": "introuvable"}) from None
+        return {"api": API, "ok": True}
+
     return app
 
 
@@ -451,6 +490,31 @@ def _module_info(blob: bytes) -> dict | None:
         return " ".join(str(info.get(key) or "").split())[:limit]
     return {"id": info["id"], "nom": text("nom", 80) or info["id"], "version": text("version", 20),
             "description": text("description", 400), "permissions": sorted({str(x)[:20] for x in perms})[:10]}
+
+
+_SKILL = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")    # console/project_tools.py NAME
+
+
+def _skills_info(blob: bytes) -> list[dict]:
+    """Ce que la boîte du destinataire affiche, lu dans partage.json du zip (console/skill_share.py) : chaque
+    compétence, son groupe et sa description. La console qui les installe revérifie tout le zip."""
+    import io
+    import json
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            info = json.loads(z.read("partage.json").decode("utf-8-sig"))
+    except (zipfile.BadZipFile, KeyError, ValueError, OSError):
+        return []
+    if not isinstance(info, dict) or info.get("type") != "competences" or not isinstance(info.get("competences"), list):
+        return []
+    out = []
+    for c in info["competences"][:200]:
+        if not isinstance(c, dict) or not _SKILL.match(str(c.get("nom") or "")):
+            return []
+        out.append({"nom": c["nom"], "groupe": " ".join(str(c.get("groupe") or "").split())[:200],
+                    "description": " ".join(str(c.get("description") or "").split())[:300]})
+    return out
 
 
 def current_user(request: Request) -> dict:

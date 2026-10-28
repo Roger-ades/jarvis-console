@@ -140,6 +140,11 @@ validation ; rien ne dépasse le preset de la discussion.
    et les groupes existants, `proposer` accepte un `groupe` (montré sur la carte, appliqué avec
    l'écriture), et `classer` propose un rangement de plusieurs compétences sur une carte
    « Rangement des compétences » (avant / après, nouveaux groupes), appliqué au clic.
+   « Partager… » (et l'icône d'envoi d'un groupe ou de la fiche) envoie une compétence, plusieurs ou des
+   groupes entiers à des collègues du hub ([console/skill_share.py](../console/skill_share.py)) :
+   arbre à cocher, chacune part avec son groupe. Le collègue les reçoit dans sa boîte de réception,
+   choisit le compte et les compétences ; elles s'installent dans les mêmes groupes, une compétence
+   du même nom déjà là étant gardée dans `skills-anciennes/`. Claude n'y prend aucune part.
    Une action peut demander un skill dans son texte ; une action qui porte le nom d'un skill est
    refusée.
    - Elles apparaissent dans l'onglet « Actions » de la page projet et dans Ctrl+K.
