@@ -301,6 +301,9 @@ function barOptions() {
     frame: false, transparent: true, backgroundColor: CLEAR, hasShadow: false,
     resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true,
     alwaysOnTop: true, show: false, title: "JARVIS — nouvelle demande", icon: ICON,
+    // macOS: a window shown while JARVIS is not the active app is not given the keyboard, so a click
+    // elsewhere never blurs it. A panel takes the keyboard without activating JARVIS (like Spotlight).
+    ...(IS_MAC ? { type: "panel" } : {}),
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: true } };
 }
 
@@ -329,6 +332,10 @@ function showBar({ select = true, menu = false, fromEdge = false } = {}) {
   // Shown from the screen edge, Windows often refuses the focus (the call comes from a timer).
   // A click beside the bar would then not blur it. A clear layer behind the bar takes that click.
   if (fromEdge && !barPinned && !barHold) showBarShield();
+  // macOS: if the bar still has no keyboard, the clear layer takes the click beside it, as above.
+  else if (IS_MAC) setTimeout(() => {
+    if (bar && !bar.isDestroyed() && bar.isVisible() && !bar.isFocused() && !barPinned && !barHold) showBarShield();
+  }, 150);
   const cmd = menu ? "menu" : select ? "nouvelle-demande" : "";
   if (cmd && hub && !hub.isDestroyed()) hub.webContents.send("jarvis:command", { cmd });
 }

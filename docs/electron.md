@@ -195,6 +195,9 @@ Ce qu'il faut adapter pour les documents enfants :
   envoyée ou un clic ailleurs la rangent, sauf si elle est épinglée (pas pendant le choix d'un
   fichier). Elle grandit vers le haut, bord du bas fixe, quand une liste (skills, profils), les
   réglages, le menu JARVIS, un message ou un rappel s'ouvrent au-dessus.
+  Sous macOS, la barre est un panneau (`type: "panel"`) : elle prend le clavier sans activer JARVIS,
+  comme Spotlight, si bien qu'un clic ailleurs la range ; si elle n'a toujours pas le clavier, la couche
+  transparente de l'appel par le bord de l'écran prend ce clic.
 - **Menu JARVIS** : la barre du haut et l'accueil de la fenêtre JARVIS, déplacés dans la barre (mêmes
   éléments, mêmes modules) : compteurs, comptes (leurs limites s'ouvrent dans la barre), actions,
   projets épinglés, discussions à reprendre. Les bandeaux (connexion, arrêt d'urgence, mise à jour) et
