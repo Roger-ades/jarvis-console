@@ -80,7 +80,7 @@ def test_claude_lists_and_reads_the_skills_of_the_account(engine):
     skill(engine)
     t = call(engine, {"action": "lister"})
     settle(engine, t["id"])
-    assert "incendie : Dossiers de sécurité incendie" in engine.tasks[t["id"]]["result"]
+    assert "incendie [hors groupe] : Dossiers de sécurité incendie" in engine.tasks[t["id"]]["result"]
     assert "lecons.md" in engine.tasks[t["id"]]["result"]
     t = call(engine, {"action": "lire", "competence": "incendie", "fichier": "lecons.md"})
     settle(engine, t["id"])
@@ -236,3 +236,76 @@ def test_skills_are_put_in_groups_without_touching_them(engine, tmp_path):
     assert engine.skills(str(folder))["groupes"]["projet"] == []
     g = engine.classify_skill("incendie", "", profile="work")
     assert g["classement"] == {} and g["groupes"] == ["Bureau", "Bureau/Incendie"]
+
+
+def test_claude_sees_the_groups_and_proposes_one(engine):
+    d = skill(engine)
+    engine.classify_skill("incendie", "Métier", profile="work")
+    t = call(engine, {"action": "lister"})
+    settle(engine, t["id"])
+    assert "incendie [groupe Métier]" in engine.tasks[t["id"]]["result"]
+    assert "Groupes existants : Métier." in engine.tasks[t["id"]]["result"]
+    # a new skill with its group: written and put in it on the same click
+    t = call(engine, {"action": "proposer", "competence": "desenfumage", "description": "Désenfumage des ERP",
+                      "texte": "# Méthode", "groupe": "Métier / Incendie"})
+    p = proposal(engine, t["id"])
+    assert p["input"]["groupe"] == "Métier/Incendie" and p["input"]["groupe_avant"] == ""
+    assert engine.skills(profile="work")["groupes"]["compte"] == ["Métier"]  # nothing before the click
+    engine.decide(t["id"], p["id"], "allow")
+    settle(engine, t["id"])
+    assert "rangée dans le groupe Métier/Incendie" in engine.tasks[t["id"]]["result"]
+    assert engine._skill_groups("compte:work")["classement"] == {"incendie": "Métier", "desenfumage": "Métier/Incendie"}
+    # the group it already has, or none given: the card says nothing about it
+    for extra in ({"groupe": "Métier"}, {}):
+        t = call(engine, {"action": "proposer", "competence": "incendie", "texte": f"- Règle {len(extra)}.", **extra})
+        assert "groupe" not in proposal(engine, t["id"])["input"]
+    assert (d / "SKILL.md").is_file()
+
+
+def test_claude_proposes_to_sort_the_skills(engine):
+    skill(engine)
+    (base(engine) / "skills" / "mails").mkdir()
+    (base(engine) / "skills" / "mails" / "SKILL.md").write_text(
+        "---\nname: mails\ndescription: Mails\n---\n", encoding="utf-8")
+    for bad, why in (({"classement": []}, "requis"),
+                     ({"classement": [{"competence": "absente", "groupe": "x"}]}, "pas de compétence"),
+                     ({"classement": [{"competence": "mails", "groupe": "a/b/c/d/e"}]}, "quatre niveaux"),
+                     ({"classement": [{"competence": "mails", "groupe": ""}]}, "déjà")):
+        t = call(engine, {"action": "classer", **bad})
+        settle(engine, t["id"])
+        assert why in engine.tasks[t["id"]]["result"]
+    args = {"action": "classer", "raison": "Ranger par métier.",
+            "classement": [{"competence": "incendie", "groupe": "Métier › Incendie"},
+                           {"competence": "mails", "groupe": "Bureau"}]}
+    t = call(engine, args)
+    p = proposal(engine, t["id"])
+    x = p["input"]
+    assert x["quoi"] == "classement" and x["nouveaux_groupes"] == ["Bureau", "Métier/Incendie"]
+    assert x["lignes"] == [{"competence": "mails", "avant": "", "apres": "Bureau"},
+                           {"competence": "incendie", "avant": "", "apres": "Métier/Incendie"}]
+    assert engine._skill_groups("compte:work")["classement"] == {}  # nothing before the click
+    engine.decide(t["id"], p["id"], "allow")
+    settle(engine, t["id"])
+    assert "2 compétences rangées" in engine.tasks[t["id"]]["result"]
+    assert engine._skill_groups("compte:work")["classement"] == {"incendie": "Métier/Incendie", "mails": "Bureau"}
+    assert len(engine.store.audit_rows(kind="classement des compétences")[0]) == 1
+    # refused: nothing moves
+    t = call(engine, {"action": "classer", "classement": [{"competence": "mails", "groupe": ""}]})
+    p = proposal(engine, t["id"])
+    engine.decide(t["id"], p["id"], "deny")
+    settle(engine, t["id"])
+    assert engine._skill_groups("compte:work")["classement"]["mails"] == "Bureau"
+
+
+def test_the_workshop_of_a_project_sorts_its_own_skills(engine, tmp_path):
+    folder = project(engine, tmp_path)
+    d = folder / ".claude" / "skills" / "cotations"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: cotations\ndescription: Cotations\n---\n", encoding="utf-8")
+    args = {"action": "classer", "classement": [{"competence": "cotations", "groupe": "Bourse"}]}
+    t = engine.skills_workshop("RETENIR " + json.dumps(args, ensure_ascii=False), folder=str(folder))
+    p = proposal(engine, t["id"])
+    engine.decide(t["id"], p["id"], "allow")
+    settle(engine, t["id"])
+    sk = engine.skills(str(folder))
+    assert sk["projet"][0]["groupe"] == "Bourse" and sk["groupes"]["compte"] == []

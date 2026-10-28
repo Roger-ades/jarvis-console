@@ -137,7 +137,8 @@ export function inputView(tool, inp) {
   return box;
 }
 
-const baseName = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+const groupLabel = (g) => (g ? String(g).split("/").join(" › ") : "hors groupe");
+const baseName = (p) =>String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
 const mcpCls = (s) => (s === "connected" ? "" : s === "pending" ? "wait" : "ko");
 
 export class TaskWindow {
@@ -1173,6 +1174,7 @@ export class TaskWindow {
     if (x.quoi === "rattacher") return this.attachCard(p);
     if (x.quoi === "module") return this.moduleCard(p);
     if (x.quoi === "savoir") return this.knowledgeCard(p);
+    if (x.quoi === "classement") return this.sortingCard(p);
     if (x.quoi === "discussion") return this.launchCard(p);
     const action = x.quoi === "action";
     const consigne = x.quoi === "consigne";
@@ -1237,6 +1239,8 @@ export class TaskWindow {
         field("Fichier", `${x.fichier || ""} · ${sizes}`, x.chemin),
         ofProject ? field("Compétences", x.ou) : field("Compte", x.compte),
         ofProject ? null : field("Vient de", x.projet ? `projet « ${x.projet} »` : ""),
+        x.groupe != null ? field("Groupe", x.nouvelle ? groupLabel(x.groupe) : `${groupLabel(x.groupe_avant)} → ${groupLabel(x.groupe)}`,
+          "Le rangement de la page Compétences ; Claude Code ne le voit pas") : null,
       ].filter(Boolean)),
       h("div", { class: "prop-note muted" }, ofProject
         ? "Claude Code lira ce texte dans ce projet dès que le sujet s'y prête. Relis-le : rien n'est écrit avant ton accord."
@@ -1249,6 +1253,33 @@ export class TaskWindow {
       h("details", { open: true }, h("summary", { class: "muted" }, "Différences"),
         h("div", { class: "prop-diff" }, diffTable(x.diff || { lines: [] }))),
     ]);
+    return el;
+  }
+
+  /** Claude proposes to arrange the skills in the groups of the page Compétences (tool retenir, action classer):
+   * only the list moves, the skills stay as they are. */
+  sortingCard(p) {
+    const x = p.input || {};
+    const msg = h("input", { type: "text", placeholder: "Message pour Claude (facultatif)" });
+    const el = h("div", { class: "appr proposal" });
+    const rows = x.lignes || [];
+    const fresh = x.nouveaux_groupes || [];
+    el.append(...[
+      this.apprHead("folder", "Rangement des compétences proposé", `${rows.length} compétence${rows.length > 1 ? "s" : ""} ${x.ou || ""}`),
+      h("div", { class: "appr-reason" }, x.raison || p.reason),
+      fresh.length ? h("div", { class: "prop-fields" },
+        h("div", { class: "prop-field" }, h("span", { class: "muted" }, "Nouveaux groupes"), h("span", {}, fresh.map(groupLabel).join(", ")))) : null,
+      h("div", { class: "prop-note muted" }, "Seule la liste de la page Compétences change : les compétences ne sont pas modifiées "
+        + "et Claude Code les charge comme avant. Rien ne bouge avant ton accord."),
+      h("div", { class: "appr-actions" }, msg,
+        h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
+        h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } }, "Ranger")),
+      h("details", { open: true }, h("summary", { class: "muted" }, "Changements"),
+        h("table", { class: "sk-sort" },
+          h("thead", {}, h("tr", {}, h("th", {}, "Compétence"), h("th", {}, "Avant"), h("th", {}, "Après"))),
+          h("tbody", {}, ...rows.map((r) => h("tr", {},
+            h("td", {}, r.competence), h("td", { class: "muted" }, groupLabel(r.avant)), h("td", {}, groupLabel(r.apres))))))),
+    ].filter(Boolean));
     return el;
   }
 

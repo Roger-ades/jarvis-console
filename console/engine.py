@@ -1840,13 +1840,10 @@ class Engine:
     @staticmethod
     def group_path(text: str) -> str:
         """« Métier / Incendie » → "Métier/Incendie": up to 4 levels of 40 characters."""
-        parts = [re.sub(r"\s+", " ", x).strip() for x in re.split(r"[/›>\\]", str(text or ""))]
-        parts = [x for x in parts if x]
-        if len(parts) > 4:
-            raise TaskError("Quatre niveaux de groupes au plus.")
-        if any(len(x) > 40 for x in parts):
-            raise TaskError("Nom de groupe trop long (40 caractères au plus).")
-        return "/".join(parts)
+        try:
+            return knowledge.group_path(text)
+        except knowledge.KnowledgeError as exc:
+            raise TaskError(str(exc)[:1].upper() + str(exc)[1:]) from None
 
     def classify_skill(self, name: str, group: str, folder: str = "", profile: str | None = None) -> dict:
         """Puts a skill in a group ("" = hors groupe)."""
@@ -2261,22 +2258,30 @@ class Engine:
             return prof, Path(shop["dossier"]) / ".claude", f"du projet « {proj.name if proj else shop['dossier']} »"
         return prof, base, f"du compte {prof.name}"
 
+    def _knowledge_groups_key(self, t: dict) -> str:
+        """The key of the groups of the skills retenir works on (_skill_groups), as the page Compétences uses it."""
+        prof, _ = self._knowledge_dir(t)
+        shop = t.get("atelier") or {}
+        return f"projet:{norm(shop['dossier'])}" if shop.get("cible") == "projet" and shop.get("dossier") \
+            else f"compte:{prof.id}"
+
     def knowledge_for_claude(self, tid: str, args) -> tuple[str, bool]:
-        """Tool "retenir", actions lister and lire: the skills of the discussion's account. (proposer waits for
-        the user's click, see _propose_knowledge.)"""
+        """Tool "retenir", actions lister and lire: the skills of the discussion's account. (proposer and classer
+        wait for the user's click, see _propose_knowledge.)"""
         args = args if isinstance(args, dict) else {}
-        _, base, where = self._knowledge_target(self._get(tid))
+        t = self._get(tid)
+        _, base, where = self._knowledge_target(t)
         action = str(args.get("action") or "").strip().lower()
         try:
             if action == "lister":
-                return knowledge.listing(base, where), False
+                return knowledge.listing(base, where, self._skill_groups(self._knowledge_groups_key(t))), False
             if action == "lire":
                 return knowledge.read(base, args.get("competence"), args.get("fichier"), where), False
         except knowledge.KnowledgeError as exc:
             return str(exc)[:1].upper() + str(exc)[1:], True
-        if action == "proposer":
+        if action in ("proposer", "classer"):
             return "Cette action passe par la fenêtre de la discussion.", True
-        return "« action » vaut lister, lire ou proposer.", True
+        return "« action » vaut lister, lire, proposer ou classer.", True
 
     def _propose_knowledge(self, tid: str, run: Run, rid: str, msg: dict):
         """Tool "retenir", action proposer: the differences on a card; the file is written only on the user's
@@ -2290,12 +2295,21 @@ class Engine:
         t = self._get(tid)
         prof, base, where = self._knowledge_target(t)
         args = (msg.get("params") or {}).get("arguments") or {}
+        args = args if isinstance(args, dict) else {}
+        key = self._knowledge_groups_key(t)
+        groups = self._skill_groups(key)
+        if str(args.get("action") or "").strip().lower() == "classer":
+            return self._propose_sorting(tid, run, rid, t, prof, base, where, key, groups, args, reply)
         try:
-            prop, after = knowledge.proposal(base, args if isinstance(args, dict) else {})
+            prop, after = knowledge.proposal(base, args)
+            group = knowledge.group_path(args["groupe"]) if args.get("groupe") is not None else None
         except knowledge.KnowledgeError as exc:
             return reply("Rien de proposé : " + str(exc), True)
         proj = self._project(t.get("workdir") or "")
         prop.update({"compte": prof.name, "projet": proj.name if proj else "", "ou": where})
+        if group is not None and group != groups["classement"].get(prop["competence"], ""):
+            prop.update({"groupe": group, "groupe_avant": groups["classement"].get(prop["competence"], ""),
+                         "groupes_cle": key})
         what = (f"de créer la compétence « {prop['competence']} »" if prop["nouvelle"]
                 else f"de {'modifier' if prop['mode'] == 'remplacer' else 'compléter'} {prop['fichier']} de la "
                      f"compétence « {prop['competence']} »")
@@ -2321,20 +2335,58 @@ class Engine:
         if knowledge.fingerprint(now) != prop["empreinte"]:
             raise TaskError(f"{prop['fichier']} a changé pendant la proposition : relis-le et propose de nouveau.")
         self._write_doc(path, after)
+        if "groupe" in prop:  # the group shown on the card, kept by JARVIS beside the skill
+            g = self._skill_groups(prop["groupes_cle"])
+            self._save_skill_groups(prop["groupes_cle"], {**g["classement"], prop["competence"]: prop["groupe"]},
+                                    g["groupes"])
         self._audit("savoir du compte", {"compte": prof.name, "où": prop.get("ou") or "", "compétence": prop["competence"],
                                          "fichier": str(path),
                                          "mode": "création" if prop["nouvelle"] else prop["mode"],
                                          "ajouts": prop["ajouts"], "retraits": prop["retraits"],
+                                         **({"groupe": prop["groupe"]} if "groupe" in prop else {}),
                                          "raison": prop.get("raison") or ""}, t)
         done = (f"Compétence « {prop['competence']} » créée" if prop["nouvelle"]
                 else f"{prop['fichier']} de la compétence « {prop['competence']} » "
                      + ("remplacé" if prop["mode"] == "remplacer" else "complété"))
+        if "groupe" in prop:
+            done += f", rangée {'dans le groupe ' + prop['groupe'] if prop['groupe'] else 'hors groupe'}"
         self.bus.publish("skills", {"competence": prop["competence"], "chemin": str(path)})
         if (prop.get("ou") or "du compte").startswith("du compte"):
             return (f"{done} ({path}). Claude Code la charge dans tous les projets du compte {prof.name} quand le "
                     "sujet s'y prête, à partir des prochaines discussions.")
         return (f"{done} ({path}). Claude Code la charge dans ce projet quand le sujet s'y prête, à partir des "
                 "prochaines discussions.")
+
+    def _propose_sorting(self, tid: str, run: Run, rid: str, t: dict, prof: Profile, base: Path, where: str,
+                         key: str, groups: dict, args: dict, reply):
+        """Tool "retenir", action classer: the skills that change group, on a card; nothing moves before the
+        click. Only the page's groups change, never the skills."""
+        try:
+            prop = knowledge.sorting(base, args, groups)
+        except knowledge.KnowledgeError as exc:
+            return reply("Rien de proposé : " + str(exc), True)
+        prop.update({"compte": prof.name, "ou": where})
+        n = len(prop["lignes"])
+        appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=KNOWLEDGE_TOOL, input=prop,
+                        reason=f"Claude propose de ranger {n} compétence{'s' if n > 1 else ''} {where}.")
+
+        def answer(a: Approval):
+            if a.decision != "allow":
+                return reply("L'utilisateur n'a pas retenu ce classement" + (f" : {a.message}" if a.message else ".")
+                             + " N'insiste pas.")
+            g = self._skill_groups(key)
+            known = {s["name"] for s in project_tools.skills(base)} if (base / "skills").is_dir() else set()
+            moved = {r["competence"]: r["apres"] for r in prop["lignes"] if r["competence"] in known}
+            self._save_skill_groups(key, {**{k: v for k, v in g["classement"].items() if k in known}, **moved},
+                                    g["groupes"])
+            self._audit("classement des compétences", {"compte": prof.name, "où": where, "compétences": len(moved),
+                                                       "raison": prop.get("raison") or ""}, t)
+            self.bus.publish("skills", {"competence": "", "chemin": ""})
+            gone = n - len(moved)
+            reply(f"{len(moved)} compétence{'s' if len(moved) > 1 else ''} rangée{'s' if len(moved) > 1 else ''}"
+                  + (f" ({gone} disparue{'s' if gone > 1 else ''} entre-temps)" if gone else "")
+                  + ". Seule la liste de la page Compétences change : Claude Code les charge comme avant.")
+        self._park(tid, run, appr, answer)
 
     def _project_name(self, t: dict) -> str:
         proj = self._project(t.get("workdir") or "")
@@ -3752,7 +3804,7 @@ class Engine:
                     if action == "executer":
                         return self._addon_execute(tid, run, rid, message)
                 if name == KNOWLEDGE_SPEC["name"] and str(((message.get("params") or {}).get("arguments") or {})
-                                                          .get("action") or "").strip().lower() == "proposer":
+                                                          .get("action") or "").strip().lower() in ("proposer", "classer"):
                     return self._propose_knowledge(tid, run, rid, message)
                 if name == LAUNCH_SPEC["name"]:
                     return self._launch_discussion(tid, run, rid, message)

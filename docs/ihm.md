@@ -136,7 +136,10 @@ validation ; rien ne dépasse le preset de la discussion.
    La liste est un arbre de groupes (« Métier/Incendie », quatre niveaux au plus) : classement et
    groupes vides sont gardés dans le store de JARVIS (clé `skill_groups`, par compte ou projet,
    routes `/api/skills/classement` et `/api/skills/groupes`), jamais dans les skills, que Claude
-   Code lit à plat.
+   Code lit à plat. L'outil `retenir` les connaît : `lister` donne le groupe de chaque compétence
+   et les groupes existants, `proposer` accepte un `groupe` (montré sur la carte, appliqué avec
+   l'écriture), et `classer` propose un rangement de plusieurs compétences sur une carte
+   « Rangement des compétences » (avant / après, nouveaux groupes), appliqué au clic.
    Une action peut demander un skill dans son texte ; une action qui porte le nom d'un skill est
    refusée.
    - Elles apparaissent dans l'onglet « Actions » de la page projet et dans Ctrl+K.

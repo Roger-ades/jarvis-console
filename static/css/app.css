@@ -1855,6 +1855,10 @@ tr.regard-pick > td, tr.regard-pick > th { background: color-mix(in srgb, var(--
 .pv-note > .i { display: inline-flex; vertical-align: -2px; margin-right: 6px; }
 .pv-note > .i svg { width: 13px; height: 13px; }
 .chg-diff { flex: 1; min-height: 0; }
+.sk-sort { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 12px; }
+.sk-sort th { text-align: left; font-weight: 500; color: var(--text-3); padding: 3px 8px; border-bottom: 1px solid var(--border); }
+.sk-sort td { padding: 3px 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.sk-sort td:first-child { font-family: var(--mono); font-size: 11.5px; }
 .prop-diff { margin-top: 6px; max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
 .chg-diff table { width: 100%; border-collapse: collapse; font: 12px/1.55 var(--mono); }
 .chg-diff td { padding: 0 8px; vertical-align: top; }
