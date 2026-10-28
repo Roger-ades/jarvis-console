@@ -1,5 +1,5 @@
-// Project actions: the commands (.claude/commands/*.md) and skills (.claude/skills/*/SKILL.md) of a
-// project folder, shown as buttons. Each one is read and validated by the user first, pinned by its
+// Project actions: the commands (.claude/commands/*.md) of a project folder, shown as buttons (its
+// skills are competences, listed read only in skills.js). Each one is read and validated by the user first, pinned by its
 // fingerprint: once changed (by Claude or anyone), it asks again. A launch is a normal discussion of
 // the project ("/nom arguments") with the project's account and preset, and the model and effort
 // chosen for the action (else the project's). Its launches are listed under it.
@@ -23,7 +23,7 @@ export function actionStamp(actions, routines, account) {
   const tail = account === undefined ? "" : account === null ? "\u0000" : account.map(one).join("\n");
   return [(actions || []).map(one).join("\n"), (routines || []).map(rout).join("\n"), tail].join("\f");
 }
-const KIND = { commande: "Commande", skill: "Skill" };
+const KIND = { commande: "Commande" };
 const EFFORT = { "": "Par défaut", low: "Faible", medium: "Moyen", high: "Élevé", xhigh: "Très élevé", max: "Max" };
 const ORIGIN = { action: "bouton", routine: "routine" };
 const opened = new Set(); // actions whose details are shown, kept across refreshes
@@ -115,13 +115,14 @@ export async function renderActions(body, ctx, ws, refresh) {
   if (!proj) {
     body.dataset.live = "noproj";
     body.append(h("p", { class: "pj-lead pad" }, "Les actions et les routines appartiennent à un projet. ",
-      "Donne d'abord un nom à ce dossier : ses commandes (.claude/commands) et ses skills (.claude/skills) deviendront des boutons."),
+      "Donne d'abord un nom à ce dossier : ses commandes (.claude/commands) deviendront des boutons."),
     h("div", { class: "row pad" }, h("button", { type: "button", class: "btn small primary",
       on: { click: async () => { if (await ctx.editProject(ws.folder, ws.profile)) refresh(); } } }, "En faire un projet")));
     return;
   }
-  body.append(h("p", { class: "pj-lead pad" }, "Les commandes et les skills du dossier, en boutons. Claude peut en proposer pendant une discussion : ",
-    "rien n'est ajouté ni lancé sans ton accord, et une action modifiée doit être relue avant de resservir."));
+  body.append(h("p", { class: "pj-lead pad" }, "Les commandes du dossier, en boutons. Claude peut en proposer pendant une discussion : ",
+    "rien n'est ajouté ni lancé sans ton accord, et une action modifiée doit être relue avant de resservir. ",
+    "Les skills n'en sont pas : ce sont des compétences (onglet Compétences), qu'une action peut demander dans son texte."));
   const list = h("div", { class: "drawer-list flat" }, h("div", { class: "empty-row" }, "Lecture des actions…"));
   const routines = h("div", { class: "drawer-list flat" });
   body.append(list, h("div", { class: "sec-title pad" }, "Routines du projet"), routines,

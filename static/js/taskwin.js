@@ -241,6 +241,18 @@ export class TaskWindow {
     this.renderPlan();
   }
 
+  /** Inside a page rather than in a window of its own (the page Compétences): no window manager, no
+   *  reduce, pin or close; the inspector stays closed. */
+  embed() {
+    this.embedded = true;
+    this.el.classList.add("embedded");
+    for (const b of [this.pinBtn, ...this.head.querySelectorAll(".win-actions .icon-btn")]) {
+      if (/^(Réduire|Fermer la fenêtre|Épingler)/.test(b.title || "")) b.hidden = true;
+    }
+    this.setInspector(false, false);
+    this.renderPlan();
+  }
+
   destroy() {
     clearInterval(this.timer);
     clearInterval(this.actTimer);
@@ -1214,18 +1226,22 @@ export class TaskWindow {
     const el = h("div", { class: "appr proposal" });
     const field = (k, v, title) => (v ? h("div", { class: "prop-field" }, h("span", { class: "muted" }, k), h("span", { title }, v)) : null);
     const replace = x.mode === "remplacer" && !x.nouveau_fichier;
-    const title = x.nouvelle ? "Nouvelle compétence proposée" : replace ? "Correction de compétence proposée" : "À retenir pour tous les projets";
+    const ofProject = String(x.ou || "").startsWith("du projet");  // the page Compétences, on a project's skills
+    const title = x.nouvelle ? "Nouvelle compétence proposée" : replace ? "Correction de compétence proposée"
+      : ofProject ? "À retenir dans ce projet" : "À retenir pour tous les projets";
     const sizes = `+${x.ajouts || 0}${x.retraits ? ` −${x.retraits}` : ""} lignes`;
     el.append(...[
       this.apprHead("brain", title, `Compétence « ${x.competence || ""} »`),
       h("div", { class: "appr-reason" }, x.raison || p.reason),
       h("div", { class: "prop-fields" }, ...[
         field("Fichier", `${x.fichier || ""} · ${sizes}`, x.chemin),
-        field("Compte", x.compte),
-        field("Vient de", x.projet ? `projet « ${x.projet} »` : ""),
+        ofProject ? field("Compétences", x.ou) : field("Compte", x.compte),
+        ofProject ? null : field("Vient de", x.projet ? `projet « ${x.projet} »` : ""),
       ].filter(Boolean)),
-      h("div", { class: "prop-note muted" }, "Claude Code lira ce texte dans tous les projets de ce compte dès que le sujet s'y prête. "
-        + "Relis-le : une règle fausse se retrouverait partout. Rien n'est écrit avant ton accord."),
+      h("div", { class: "prop-note muted" }, ofProject
+        ? "Claude Code lira ce texte dans ce projet dès que le sujet s'y prête. Relis-le : rien n'est écrit avant ton accord."
+        : "Claude Code lira ce texte dans tous les projets de ce compte dès que le sujet s'y prête. "
+          + "Relis-le : une règle fausse se retrouverait partout. Rien n'est écrit avant ton accord."),
       h("div", { class: "appr-actions" }, msg,
         h("button", { type: "button", class: "btn danger", on: { click: () => this.decide(p, "deny", msg.value, null, el) } }, "Refuser"),
         h("button", { type: "button", class: "btn ok", on: { click: () => this.decide(p, "allow", msg.value, null, el) } },

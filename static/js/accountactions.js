@@ -1,5 +1,5 @@
-// The account's actions (docs/boite-de-reception.md): the commands and skills of an account's configuration
-// folder (~/.claude-work/commands, …/skills), as buttons once the user turned them on for that account
+// The account's actions (docs/boite-de-reception.md): the commands of an account's configuration
+// folder (~/.claude-work/commands), as buttons once the user turned them on for that account
 // (Configuration → Profils). Same rules as a project's actions (actions.js): read and validated first,
 // pinned by fingerprint, asked again once changed. A launch is a normal discussion of the account, in the
 // folder chosen in the bar (a project brings its preset, model and effort).
@@ -89,7 +89,7 @@ const STATE = { ok: "validée", nouvelle: "à valider", modifiee: "modifiée dep
 /** The list of an account's actions (Configuration → Profils): read, validate, in the menu, launch. */
 export function accountActionRows(ctx, profile, actions, refresh) {
   if (!actions.length) {
-    return [h("div", { class: "empty-row" }, "Aucune commande ni skill dans le dossier de configuration du compte (commands/, skills/).")];
+    return [h("div", { class: "empty-row" }, "Aucune commande dans le dossier de configuration du compte (commands/).")];
   }
   return actions.map((a) => {
     const menu = h("input", { type: "checkbox", title: "Un bouton dans le menu JARVIS et sur l'accueil" });

@@ -137,15 +137,102 @@ def test_a_new_skill_is_created(engine):
     assert text.startswith("---\nname: desenfumage\n") and "amenées d'air" in text
 
 
-def test_a_validated_account_action_stays_validated(engine):
+def test_the_skills_of_the_account_are_not_its_actions(engine):
     prof = engine.cfg.profile("work")
     prof.account_actions = True
     skill(engine)
-    a = next(x for x in engine.account_actions(prof.id) if x["name"] == "incendie")
-    engine.approve_account_action(prof.id, "incendie", a["hash"])
-    t = call(engine, {"action": "proposer", "competence": "incendie", "fichier": "lecons.md", "texte": "- Une leçon."})
+    assert engine.account_actions(prof.id) == []
+    assert [s["name"] for s in engine.skills(profile=prof.id)["compte"]] == ["incendie"]
+
+
+# ------------------------------------------------------------ the page Compétences and its discussion
+def project(engine, tmp_path) -> Path:
+    folder = tmp_path / "work" / "work" / "Bourse"
+    folder.mkdir(parents=True)
+    engine.save_project({"folder": str(folder), "name": "Bourse", "profile": "work"})
+    return Path(engine._project(str(folder)).folder)
+
+
+def test_the_workshop_of_a_project_writes_its_skills(engine, tmp_path):
+    folder = project(engine, tmp_path)
+    args = {"action": "proposer", "competence": "cotations", "description": "Cotations de la bourse",
+            "texte": "# Méthode\n\n- Citer la source."}
+    t = engine.skills_workshop("RETENIR " + json.dumps(args, ensure_ascii=False), folder=str(folder),
+                               competence="cotations")
+    assert t["origin"] == "atelier" and t["title"] == "Compétence « cotations »"
+    assert t["atelier"] == {"cible": "projet", "dossier": str(folder), "competence": "cotations"}
     p = proposal(engine, t["id"])
+    assert "du projet « Bourse »" in p["reason"] and "tous les projets" not in p["reason"]
     engine.decide(t["id"], p["id"], "allow")
     settle(engine, t["id"])
-    a = next(x for x in engine.account_actions(prof.id) if x["name"] == "incendie")
-    assert a["status"] == "ok"
+    assert "dans ce projet" in engine.tasks[t["id"]]["result"]
+    assert (folder / ".claude" / "skills" / "cotations" / "SKILL.md").is_file()
+    assert not (base(engine) / "skills" / "cotations").exists()
+    assert [s["name"] for s in engine.skills(str(folder))["projet"]] == ["cotations"]
+
+
+def test_the_workshop_never_goes_to_haiku_by_itself(engine):
+    engine.cfg.general.auto_model = True
+    engine.cfg.profile("work").default_model = "opus"
+    short = "Relis la compétence et dis-moi ce que tu améliorerais."
+    assert engine.create_task(short, profile="work", preset="lecture")["model"] == "haiku"  # elsewhere, yes
+    t = engine.skills_workshop(short, profile="work")
+    assert t["model"] == "opus"
+    t = engine.skills_workshop(short, profile="work", model="sonnet")
+    assert t["model"] == "sonnet"
+    engine.cfg.profile("work").default_model = "default"
+    assert engine.skills_workshop(short, profile="work", model="auto")["model"] == "default"
+
+
+def test_the_workshop_of_the_account(engine):
+    skill(engine)
+    t = engine.skills_workshop("RETENIR " + json.dumps({"action": "lister"}), profile="work")
+    settle(engine, t["id"])
+    assert t["atelier"]["cible"] == "compte" and t["title"] == "Nouvelle compétence"
+    assert "Compétences du compte Travail" in engine.tasks[t["id"]]["result"] or \
+        "Compétences du compte" in engine.tasks[t["id"]]["result"]
+    block = knowledge.workshop("du compte Travail", base(engine), "incendie")
+    assert "« incendie »" in block and str(base(engine) / "skills") in block
+    with pytest.raises(Exception, match="Projet introuvable"):
+        engine.skills_workshop("x", folder=str(base(engine)))
+
+
+def test_a_file_of_a_skill_is_read_inside_it_only(engine):
+    skill(engine, {"normes.md": "# Normes\n"})
+    assert engine.skill_file("incendie", "normes.md", profile="work")["text"].strip() == "# Normes"
+    for bad in ("../incendie/SKILL.md/..", "../../settings.json", "absent.md"):
+        with pytest.raises(Exception, match="introuvable"):
+            engine.skill_file("incendie", bad, profile="work")
+    with pytest.raises(Exception, match="Compétence introuvable"):
+        engine.skill_file("autre", "SKILL.md", profile="work")
+    entry = engine.skills(profile="work")["compte"][0]
+    assert entry["folder"] == "incendie" and entry["modified"] > 0 and "normes.md" in entry["files"]
+
+
+# ------------------------------------------------------------ the groups of the page Compétences
+def test_skills_are_put_in_groups_without_touching_them(engine, tmp_path):
+    d = skill(engine)
+    before = (d / "SKILL.md").read_text(encoding="utf-8")
+    assert engine.group_path(" Métier /  Incendie › Normes\\x ") == "Métier/Incendie/Normes/x"
+    with pytest.raises(Exception, match="Quatre niveaux"):
+        engine.group_path("a/b/c/d/e")
+    g = engine.classify_skill("incendie", "Métier / Incendie", profile="work")
+    assert g["classement"] == {"incendie": "Métier/Incendie"} and g["groupes"] == ["Métier", "Métier/Incendie"]
+    sk = engine.skills(profile="work")
+    assert sk["compte"][0]["groupe"] == "Métier/Incendie" and sk["groupes"]["compte"] == ["Métier", "Métier/Incendie"]
+    assert (d / "SKILL.md").read_text(encoding="utf-8") == before and not (base(engine) / "skills" / "Métier").exists()
+    with pytest.raises(Exception, match="introuvable"):
+        engine.classify_skill("absente", "x", profile="work")
+    # an empty group is kept; a group moves with what it holds; dissolved, its content goes up one level
+    engine.edit_skill_group("creer", "Bureau", profile="work")
+    g = engine.edit_skill_group("renommer", "Métier", "Bureau/Métier", profile="work")
+    assert g["classement"]["incendie"] == "Bureau/Métier/Incendie" and "Métier" not in g["groupes"]
+    with pytest.raises(Exception, match="lui-même"):
+        engine.edit_skill_group("renommer", "Bureau", "Bureau/Sous", profile="work")
+    g = engine.edit_skill_group("dissoudre", "Bureau/Métier", profile="work")
+    assert g["classement"]["incendie"] == "Bureau/Incendie" and g["groupes"] == ["Bureau", "Bureau/Incendie"]
+    # the groups of a project are its own
+    folder = project(engine, tmp_path)
+    assert engine.skills(str(folder))["groupes"]["projet"] == []
+    g = engine.classify_skill("incendie", "", profile="work")
+    assert g["classement"] == {} and g["groupes"] == ["Bureau", "Bureau/Incendie"]

@@ -1,8 +1,10 @@
 """What a project adds to the console: its actions, and what Claude may propose to add (always validated).
 
-Actions are Claude Code's own project commands and skills, in the project folder:
-.claude/commands/<nom>.md and .claude/skills/<nom>/SKILL.md. The console shows them as buttons and
-launches one as a normal discussion of the project ("/nom arguments"), under the same policy.
+Actions are Claude Code's own project commands, in the project folder: .claude/commands/<nom>.md. The
+console shows them as buttons and launches one as a normal discussion of the project ("/nom
+arguments"), under the same policy. Skills (.claude/skills/<nom>/SKILL.md) are not actions: they are
+competences Claude loads by itself when a task calls for them; the console only lists them (`skills`).
+An action may ask for a skill in its text.
 
 An action is code that runs again and again: a trapped mail or page could push Claude to write or
 change one, and the injection would stay. So each action is pinned by a fingerprint of its files. A
@@ -22,6 +24,7 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 MAX_FILE = 200_000          # bytes of a command file or of a skill's file read for its fingerprint
 MAX_SKILL_FILES = 80
 MAX_ACTIONS = 40
+MAX_SKILLS = 300         # the page Compétences lists them all, with a search
 DAY_KEYS = {"lundi": 0, "mardi": 1, "mercredi": 2, "jeudi": 3, "vendredi": 4, "samedi": 5, "dimanche": 6}
 
 PROPOSE_SPEC = {
@@ -134,13 +137,13 @@ def _first_line(body: str) -> str:
 
 
 def scan(folder: str) -> list[dict]:
-    """The project's commands and skills (a user may hide a skill with `user-invocable: false`)."""
+    """The project's actions: its commands."""
     return scan_dir(Path(folder) / ".claude")
 
 
 def scan_dir(base: Path) -> list[dict]:
-    """The commands and skills under a Claude Code folder: a project's .claude, or an account's
-    configuration folder (its commands and skills apply to all its folders)."""
+    """The commands under a Claude Code folder: a project's .claude, or an account's configuration
+    folder (its commands apply to all its folders)."""
     out: list[dict] = []
     cmds = base / "commands"
     if cmds.is_dir():
@@ -151,24 +154,38 @@ def scan_dir(base: Path) -> list[dict]:
             text = _read(p)
             meta, body = frontmatter(text)
             out.append(_entry(name, "commande", p, meta, body, fingerprint([p], cmds), text))
-    skills = base / "skills"
-    if skills.is_dir():
-        for d in sorted(x for x in skills.iterdir() if x.is_dir()):
-            p = d / "SKILL.md"
-            if not p.is_file():
-                continue
-            text = _read(p)
-            meta, body = frontmatter(text)
-            name = (meta.get("name") or d.name).strip().lower()
-            if not NAME.match(name) or meta.get("user-invocable", "").lower() == "false":
-                continue
-            if any(a["name"] == name for a in out):
-                continue
-            files = [f for f in d.rglob("*") if f.is_file()][:MAX_SKILL_FILES]
-            out.append(_entry(name, "skill", p, meta, body, fingerprint(files, d), text,
-                              others=sorted(os.path.relpath(f, d) for f in files if f != p)))
-        # (a skill's scripts count in its fingerprint: changing one asks for the user again)
     return out[:MAX_ACTIONS]
+
+
+def skills(base: Path) -> list[dict]:
+    """The skills under a Claude Code folder (a project's .claude, or an account's configuration
+    folder): competences, read only, with their files."""
+    out: list[dict] = []
+    root = base / "skills"
+    if not root.is_dir():
+        return out
+    for d in sorted(x for x in root.iterdir() if x.is_dir()):
+        p = d / "SKILL.md"
+        if not p.is_file():
+            continue
+        text = _read(p)
+        meta, body = frontmatter(text)
+        name = (meta.get("name") or d.name).strip().lower()
+        if not NAME.match(name) or any(s["name"] == name for s in out):
+            continue
+        files = [f for f in d.rglob("*") if f.is_file()][:MAX_SKILL_FILES]
+        e = _entry(name, "skill", p, meta, body, fingerprint(files, d), text,
+                   others=sorted(os.path.relpath(f, d).replace("\\", "/") for f in files if f != p))
+        e["folder"], e["modified"] = d.name, max((_mtime(f) for f in files), default=0.0)
+        out.append(e)
+    return out[:MAX_SKILLS]
+
+
+def _mtime(p: Path) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _entry(name, kind, p: Path, meta: dict, body: str, fp: str, text: str, others: list[str] | None = None) -> dict:

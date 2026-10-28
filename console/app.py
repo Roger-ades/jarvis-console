@@ -825,7 +825,33 @@ def create_app(data_dir: Path, port: int, cli_command: list[str] | None = None,
                                  str(body.get("arguments") or ""), confirmed=bool(body.get("confirmed")),
                                  approve=str(body.get("approve") or ""), profile=body.get("profile") or None)
 
-    # -------------------------------------------------------- the account's actions (its commands and skills)
+    # -------------------------------------------------------- skills: competences of a folder and its account
+    @app.get("/api/skills")
+    def skills(folder: str = "", profile: str | None = None):
+        return engine.skills(folder, profile)
+
+    @app.get("/api/skills/file")
+    def skill_file(name: str, path: str = "SKILL.md", folder: str = "", profile: str | None = None):
+        return engine.skill_file(name, path, folder, profile)
+
+    @app.post("/api/skills/classement")
+    def skill_classify(body: dict = Body(...)):
+        return engine.classify_skill(str(body.get("competence") or ""), str(body.get("groupe") or ""),
+                                     str(body.get("folder") or ""), body.get("profile") or None)
+
+    @app.post("/api/skills/groupes")
+    def skill_group(body: dict = Body(...)):
+        return engine.edit_skill_group(str(body.get("action") or ""), str(body.get("groupe") or ""),
+                                       str(body.get("nouveau") or ""), str(body.get("folder") or ""),
+                                       body.get("profile") or None)
+
+    @app.post("/api/skills/atelier")
+    def skills_workshop(body: dict = Body(...)):
+        return engine.skills_workshop(str(body.get("prompt") or ""), str(body.get("folder") or ""),
+                                      body.get("profile") or None, str(body.get("competence") or ""),
+                                      body.get("model") or None)
+
+    # -------------------------------------------------------- the account's actions (its commands)
     @app.get("/api/accounts/{pid}/actions")
     def account_actions(pid: str, content: bool = False):
         return {"actions": engine.account_actions(pid, content=content)}

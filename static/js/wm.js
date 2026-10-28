@@ -590,7 +590,8 @@ export function nativePanels(els) {
 
 function openPanel(el, id) {
   const place = prefs().frames?.[id];
-  const f = openFrame(id, { width: place?.w || (el.classList.contains("wide") ? 640 : 500), height: place?.h || 800, place,
+  const f = openFrame(id, { width: place?.w || Math.min(+el.dataset.width, (window.screen.availWidth || 1e4) - 40) || (el.classList.contains("wide") ? 640 : 500),
+    height: place?.h || Math.min(+el.dataset.height, (window.screen.availHeight || 1e4) - 40) || 800, place,
     classes: ["panel-doc"], title: `${el.getAttribute("aria-label") || "JARVIS"} — JARVIS`, head: PANEL_HEAD });
   if (!f) return;
   f.remember = id;

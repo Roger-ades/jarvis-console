@@ -96,13 +96,14 @@ def fingerprint(text: str | None) -> str:
     return "" if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def listing(config_dir: Path) -> str:
+def listing(config_dir: Path, where: str = "du compte") -> str:
+    """where: whose skills these are, as the text says it ("du compte", "du projet « X »")."""
     base = skills_dir(config_dir)
-    skills = [a for a in project_tools.scan_dir(config_dir) if a["kind"] == "skill"] if base.is_dir() else []
+    skills = project_tools.skills(config_dir) if base.is_dir() else []
     if not skills:
-        return (f"Aucune compétence dans le compte ({base}). Pour en créer une : action proposer, avec competence, "
+        return (f"Aucune compétence {where} ({base}). Pour en créer une : action proposer, avec competence, "
                 "description et texte (le corps de son SKILL.md).")
-    lines = [f"Compétences du compte ({base}) :"]
+    lines = [f"Compétences {where} ({base}) :"]
     for a in skills[:MAX_LISTED]:
         files = ", ".join(["SKILL.md", *a["files"]][:15])
         lines.append(f"- {a['name']} : {a['description']} — fichiers : {files}")
@@ -110,11 +111,11 @@ def listing(config_dir: Path) -> str:
     return "\n".join(lines)
 
 
-def read(config_dir: Path, competence, fichier) -> str:
+def read(config_dir: Path, competence, fichier, where: str = "du compte") -> str:
     name, f = _name(competence), _file(fichier)
     d = skills_dir(config_dir) / name
     if not d.is_dir():
-        raise KnowledgeError(f"pas de compétence « {name} » dans le compte (action lister).")
+        raise KnowledgeError(f"pas de compétence « {name} » {where} (action lister).")
     text = _read(d / f)
     if text is None:
         others = sorted(x.name for x in d.glob("*.md"))
@@ -182,3 +183,33 @@ def proposal(config_dir: Path, args: dict) -> tuple[dict, str]:
             "nouvelle": new_skill, "nouveau_fichier": old is None, "raison": why,
             "diff": {"lines": rows, "truncated": cut}, "ajouts": added, "retraits": removed,
             "empreinte": fingerprint(old)}, after
+
+
+WORKSHOP = """## Atelier des compétences
+Cette discussion sert à écrire et améliorer les compétences (skills) de Claude Code {where}, dossier {base}.
+{subject}
+Une compétence est un dossier <nom>/SKILL.md, plus des fichiers annexes. Claude Code ne lit d'abord que la
+description de l'en-tête et ne charge le reste que si le sujet s'y prête. D'où les règles suivantes :
+- La description dit QUAND charger la compétence : les sujets, les mots-clés que l'utilisateur emploie, les types
+  de documents. Une phrase ou deux, concrètes. « Aide pour les dossiers » ne déclenche rien ; « Dossiers de
+  sécurité incendie : SSI, désenfumage, ERP, normes NF S 61-9xx » oui.
+- Le corps est court et à l'impératif : la méthode, les règles, les pièges, un exemple. Pas d'introduction ni
+  de généralités que Claude sait déjà.
+- Ce qui est long (référentiels, tableaux, modèles, leçons datées) va dans des fichiers annexes en .md, que le
+  SKILL.md cite (« voir normes.md ») : ils ne sont lus que lorsqu'il le faut.
+- Un nom en minuscules, chiffres et tirets, qui dit le métier (redaction-mails, securite-incendie).
+Méthode :
+1. Commence par lire (outil retenir, actions lister et lire) ce qui existe ; ne repars pas de zéro.
+2. Pose les questions qui manquent, peu à la fois : quand l'utilisateur veut-il que la compétence serve, ce qui
+   ne va pas aujourd'hui, un exemple de travail réussi ou raté.
+3. Propose ensuite, toujours par l'outil retenir (action proposer) : mode remplacer pour restructurer un fichier,
+   ajouter pour compléter. L'utilisateur voit les différences et valide d'un clic : n'écris jamais les fichiers
+   d'une autre façon. Une proposition à la fois, expliquée en une phrase.
+Ici, l'outil retenir travaille sur les compétences {where}."""
+
+
+def workshop(where: str, base: Path, competence: str = "") -> str:
+    """The block of the discussion opened from the page Compétences (engine.skills_workshop)."""
+    subject = (f"La compétence en cours est « {competence} »." if competence
+               else "Aucune compétence choisie : l'utilisateur veut en créer une, aide-le à la définir.")
+    return WORKSHOP.format(where=where, base=skills_dir(base), subject=subject)

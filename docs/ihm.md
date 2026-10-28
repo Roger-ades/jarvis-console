@@ -123,13 +123,27 @@ validation ; rien ne dépasse le preset de la discussion.
    en avoir plus. Une routine qui lance une action est bloquée si l'action a changé depuis sa
    validation. Les routines du projet se gèrent dans l'onglet « Actions » de la page projet.
 2. **Actions du projet en boutons** ([static/js/actions.js](../static/js/actions.js)). Ce sont
-   les commandes `.claude/commands/<nom>.md` et les skills `.claude/skills/<nom>/SKILL.md` du
-   dossier : on peut aussi les taper dans Claude Desktop ou la CLI.
+   les commandes `.claude/commands/<nom>.md` du dossier : on peut aussi les taper dans Claude
+   Desktop ou la CLI. Les skills `.claude/skills/<nom>/SKILL.md` n'en sont pas : ce sont des
+   compétences que Claude utilise de lui-même. L'onglet « Compétences » du projet
+   ([static/js/skills.js](../static/js/skills.js)) liste celles du dossier et mène à la page
+   Compétences ([static/js/competences.js](../static/js/competences.js)) : panneau plein écran
+   (menu JARVIS, Ctrl+K) avec la liste du compte ou du projet choisi, la fiche (SKILL.md, annexes,
+   conseils de qualité) et une discussion avec Claude (origine « atelier », montrée dans la page
+   par `TaskWindow.embed`). Claude n'écrit que par l'outil retenir, carte de différences à valider.
+   Le modèle se choisit au lancement de la discussion ; sans choix, `skills_workshop` nomme celui
+   du preset ou du compte, pour que le passage automatique à Haiku ne s'applique jamais ici.
+   La liste est un arbre de groupes (« Métier/Incendie », quatre niveaux au plus) : classement et
+   groupes vides sont gardés dans le store de JARVIS (clé `skill_groups`, par compte ou projet,
+   routes `/api/skills/classement` et `/api/skills/groupes`), jamais dans les skills, que Claude
+   Code lit à plat.
+   Une action peut demander un skill dans son texte ; une action qui porte le nom d'un skill est
+   refusée.
    - Elles apparaissent dans l'onglet « Actions » de la page projet et dans Ctrl+K.
    - Le champ `argument-hint` devient un formulaire de saisie.
    - Un lancement ouvre une discussion normale du projet (`/nom arguments`) : même compte,
      même preset, mêmes validations.
-   - Chaque action est épinglée par l'empreinte de ses fichiers, scripts d'une skill compris.
+   - Chaque action est épinglée par l'empreinte de son fichier.
      Une action nouvelle ou modifiée (« à valider », « modifiée ») montre son contenu avant de
      pouvoir être lancée. Tant qu'elle n'est pas validée, elle n'est pas non plus citée à Claude.
    - Claude peut proposer une action avec `proposer`. Si elle en remplace une, la carte montre

@@ -390,11 +390,13 @@ function accountActionsBox(p, i) {
   load();
   return h("div", { class: "subcard" },
     h("div", { class: "subcard-head" }, h("h4", {}, "Actions du compte en boutons")),
-    h("p", { class: "lead" }, "Les commandes (commands/) et les skills (skills/) du dossier de configuration du compte deviennent des boutons : "
+    h("p", { class: "lead" }, "Les commandes (commands/) du dossier de configuration du compte deviennent des boutons : "
       + "Ctrl+K, menu JARVIS, onglet Actions des projets, routines. Chacune est relue et validée avant de servir ; modifiée, elle redemande ta validation."),
     check("Activer pour ce compte", path, { help: "Désactivé par défaut : la console ne lit pas ces fichiers.", onChange: () => load() }),
     list);
 }
+
+/** Configuration → Profils → Compétences du compte: its skills, read only (Claude loads them by itself). */
 function tabPermissions() {
   const list = h("div", { class: "list" });
   const detail = h("div", { class: "detail" });

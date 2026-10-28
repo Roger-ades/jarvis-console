@@ -15,6 +15,7 @@ import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
 import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, addonsRetheme, initAddons, openAddon } from "./addons.js";
 import { openPalette } from "./palette.js";
 import { openHelp, toggleHelp } from "./help.js";
+import { openCompetences, skillsChanged, toggleCompetences } from "./competences.js";
 import { slashItem } from "./slash-fr.js";
 import { openSetup } from "./setup.js";
 import { openConfig, openConsumption, updateProbe } from "./config.js";
@@ -77,7 +78,7 @@ async function boot() {
   const { tasks } = await api("/api/tasks");
   for (const t of tasks.reverse()) {
     S.tasks.set(t.id, t);
-    if (!t.closed) openWindow(t, false);
+    if (!t.closed && !t.atelier) openWindow(t, false);  // (a discussion of the page Compétences opens there)
   }
   renderState();
   initLimits(await api("/api/limits").catch(() => ({})), () => { renderPills(); renderHome(); }, onLimitAlert);
@@ -98,6 +99,7 @@ async function boot() {
     reload: resync, routines: (p) => { S.routines = p.routines || S.routines; routinesChanged(p); projectActionsChanged(); }, limits: ({ profile: pid, limits: l }) => updateLimits(pid, l),
     projects: ({ projects: list }) => { setProjects(list); refreshProjectsUI(); projectActionsChanged(); },
     notes: notesChanged,
+    skills: skillsChanged,
     inbox: (d) => { inboxChanged(d); S.state.inbox = d.counts; renderState(); renderTaskbar(); },
     account_actions: () => loadAccountActions(profiles()),
     widgets: widgetsChanged,
@@ -417,6 +419,16 @@ wm.onDocument((doc) => doc.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("#opt-panel").hidden) { e.preventDefault(); e.stopPropagation(); toggleOptions(false); $("#opt-summary").focus(); }
 }, true));
 
+/** The models an account can be asked for: [value, label], "" first (its default, named). */
+function accountModels(p) {
+  const dm = p.default_model || "default";
+  const dres = (S.probes[p.id]?.models || []).find((m) => m.value === dm)?.resolved;
+  const models = new Map([["", `défaut du compte ${p.name} (${dres ? modelName(dres) : dm === "default" ? "celui de Claude Code" : dm})`]]);
+  for (const m of S.meta?.base_models || []) if (m !== "default") models.set(m, m);
+  for (const m of S.probes[p.id]?.models || []) if (m.value && m.value !== "default") models.set(m.value, m.label ? `${m.value} — ${m.label}` : m.value);
+  return [...models];
+}
+
 function selectProfile(id, remember = true) {
   const p = profile(id);
   if (!p) return;
@@ -433,12 +445,7 @@ function selectProfile(id, remember = true) {
   $("#commandbar").style.setProperty("--pc", p.color);
   input.style.setProperty("--pc", p.color);
 
-  const dm = p.default_model || "default";
-  const dres = (S.probes[p.id]?.models || []).find((m) => m.value === dm)?.resolved;
-  const models = new Map([["", `défaut du compte ${p.name} (${dres ? modelName(dres) : dm === "default" ? "celui de Claude Code" : dm})`]]);
-  for (const m of S.meta?.base_models || []) if (m !== "default") models.set(m, m);
-  for (const m of S.probes[p.id]?.models || []) if (m.value && m.value !== "default") models.set(m.value, m.label ? `${m.value} — ${m.label}` : m.value);
-  $("#opt-model").replaceChildren(...[...models].map(([v, l]) => option(v, l)));
+  $("#opt-model").replaceChildren(...accountModels(p).map(([v, l]) => option(v, l)));
 
   const presets = S.config.presets.filter((x) => x.enabled);
   $("#opt-preset").replaceChildren(...presets.map((x) => option(x.id, x.name)));
@@ -1065,20 +1072,58 @@ function openWindow(t, fresh) {
     w.mount(fresh);
     w.load();
   } else if (fresh) wm.restore(t.id);
-  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
+  emptyHint();
   return w;
 }
 
+/** "Rien d'ouvert": the windows on the desktop, not the discussion shown in the page Compétences. */
+function emptyHint() {
+  $("#empty-hint").hidden = [...S.windows.values()].some((w) => !w.embedded) && !wm.isNative();
+}
+
+/** The discussion of the page Compétences, inside the page: its window on the desktop (if any) closes. */
+function embedTask(id, box) {
+  const t = S.tasks.get(id);
+  if (!t) return false;
+  let w = S.windows.get(id);
+  if (w && !w.embedded) { closeWindow(id); w = null; }
+  if (!w) {
+    w = new TaskWindow(t, winCtx);
+    w.embed();
+    S.windows.set(id, w);
+    w.load();
+  }
+  box.replaceChildren(w.el);
+  emptyHint();
+  renderTaskbar();
+  return true;
+}
+function releaseTask(id) {
+  const w = S.windows.get(id);
+  if (!w?.embedded) return;
+  w.destroy();
+  w.el.remove();
+  S.windows.delete(id);
+  renderTaskbar();
+}
+/** An embedded discussion is seen only while its page is open. */
+const embeddedSeen = (w) => w.el.isConnected && !w.el.closest("[hidden]");
+
 function closeWindow(id) {
   const w = S.windows.get(id);
-  if (w) { w.destroy(); S.windows.delete(id); }
-  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
+  if (w) { w.destroy(); if (w.embedded) w.el.remove(); S.windows.delete(id); }
+  emptyHint();
   renderTaskbar();
 }
 
 function openTask(id) {
   const t = S.tasks.get(id);
   if (!t) return;
+  const w = S.windows.get(id);
+  if (w?.embedded) {
+    if (embeddedSeen(w)) return;
+    releaseTask(id);   // its page is closed: the discussion opens in a window
+  }
   if (t.closed) { t.closed = false; api(`/api/tasks/${id}`, { method: "PATCH", body: { closed: false } }).catch(() => {}); }
   openWindow(t, true);
   wm.restore(id);
@@ -1109,9 +1154,10 @@ function onTask(t, fresh = false) {
   if (prev && ACTIVE.has(prev.status) && !ACTIVE.has(t.status) && looking(t.id)) markTasksRead([t.id], true);
   if (!prev || prev.status !== t.status || prev.title !== t.title || prev.ended !== t.ended || !!t.archived !== !!prev.archived) homeChanged();
   const w = S.windows.get(t.id);
-  if (w) w.update(t);
+  if (w?.embedded && !embeddedSeen(w) && t.status === "awaiting" && prev?.status !== "awaiting") openTask(t.id);
+  else if (w) w.update(t);
   else if (t.status === "awaiting" && prev) openTask(t.id); // a validation always surfaces, even from a closed window
-  else if (!t.closed && (fresh || !prev)) openWindow(t, fresh || !prev);
+  else if (!t.closed && !t.atelier && (fresh || !prev)) openWindow(t, fresh || !prev);
   renderTaskbar();
   renderHistory();
   if (t.action && (!prev || prev.status !== t.status || prev.title !== t.title)) actionRunsChanged(); // its line in the project's Actions tab
@@ -1214,7 +1260,7 @@ function renderTaskbar() {
   $("#minis").replaceChildren(...floating);
   $("#brand").title = wm.visibleCount() ? "Réduire toutes les fenêtres"
     : wm.minimizedIds().length ? "Rétablir les fenêtres" : "Aucune fenêtre ouverte";
-  $("#empty-hint").hidden = S.windows.size > 0 && !wm.isNative();
+  emptyHint();
 }
 
 /** A minimized window (task or preview): click to restore, drag to move it, × to close it. */
@@ -1454,6 +1500,8 @@ function searchAnything() {
       { label: "Tout fermer (fenêtres et modales)", icon: "close", hint: "Ctrl+Alt+W", run: closeAll },
       { label: "Redémarrer la console", icon: "retry", keywords: "mise à jour", run: restartConsole },
       { label: "Rechercher une mise à jour", icon: "retry", keywords: "github version git pull", run: () => updateConsole() },
+      { label: "Compétences", icon: "sparkle", hint: profile()?.name || "", keywords: "skills savoir écrire améliorer retenir méthode",
+        run: () => openCompetences(panelCtx, { folder: projectFor(currentFolder())?.folder || "", profile: S.profile }) },
       { label: "Aide", icon: "help", hint: "F1", keywords: "aide documentation manuel tutoriel comment interface outils skills raccourcis",
         run: () => openHelp(panelCtx) },
       { label: "Assistant de démarrage", icon: "sparkle", keywords: "installation comptes lanceur bienvenue", run: startSetup },
@@ -1476,7 +1524,7 @@ function projectActions() {
     hint: `${proj.name} · /${a.name}${a.status === "ok" ? "" : " · à valider"}`, run: () => runAction(panelCtx, proj.folder, a) }));
 }
 
-const DRAWERS = ["inbox", "history", "sessions", "routines", "project", "notes", "help"];
+const DRAWERS = ["inbox", "history", "sessions", "routines", "project", "notes", "help", "skills"];
 function closeDrawers(except) {
   if (wm.isNative()) return;   // (desktop app: each panel is a window of its own, wm.nativePanels)
   for (const id of DRAWERS) if (id !== except) document.getElementById(id).hidden = true;
@@ -1500,8 +1548,11 @@ const panelCtx = {
     input.setSelectionRange(text.length, text.length);
   },
   models: () => [...$("#opt-model").options].map((o) => [o.value, o.value ? o.textContent : "défaut du profil"]),
+  modelsOf: (pid) => { const p = profiles().find((x) => x.id === pid); return p ? accountModels(p) : []; },
   tasks: () => [...S.tasks.values()],
   openTask: (id) => { closeDrawers(); openTask(id); },
+  embedTask, releaseTask,
+  openCompetences: (opts) => openCompetences(panelCtx, opts),
   archive: (ids, on) => archiveTasks(ids, on),
   addContext: (t) => addContext(t),
   fork: (t) => forkTask(t),
@@ -1629,6 +1680,7 @@ $("#btn-history").addEventListener("click", () => openDiscussions(panelCtx, "jar
 $("#btn-sessions").addEventListener("click", () => openDiscussions(panelCtx, "hors"));
 $("#btn-routines").addEventListener("click", () => toggleRoutines(panelCtx));
 $("#btn-help").addEventListener("click", () => toggleHelp(panelCtx));
+$("#btn-skills").addEventListener("click", () => toggleCompetences(panelCtx));
 $("#btn-claudeai").addEventListener("click", (e) => {
   e.stopPropagation();
   $("#menu-addons").hidden = true;

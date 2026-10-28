@@ -1,4 +1,4 @@
-"""What a project adds to the console: its actions (Claude Code commands and skills, pinned by fingerprint),
+"""What a project adds to the console: its actions (Claude Code commands, pinned by fingerprint), its skills (listed only),
 what Claude proposes to add (validated on a card), and the small applications of a display."""
 import json
 from pathlib import Path
@@ -39,7 +39,7 @@ def proposal(engine, tid):
 
 
 # -------------------------------------------------------- reading the actions of a project
-def test_commands_and_skills_of_the_project_are_its_actions(tmp_path):
+def test_commands_are_the_actions_and_skills_stay_competences(tmp_path):
     base = tmp_path / ".claude"
     (base / "commands").mkdir(parents=True)
     (base / "commands" / "maj.md").write_text(
@@ -55,14 +55,16 @@ def test_commands_and_skills_of_the_project_are_its_actions(tmp_path):
     hidden.mkdir()
     (hidden / "SKILL.md").write_text("---\nuser-invocable: false\n---\nx", encoding="utf-8")
     acts = {a["name"]: a for a in project_tools.scan(str(tmp_path))}
-    assert sorted(acts) == ["bilan", "maj", "rapport"]
+    assert sorted(acts) == ["bilan", "maj"]
     assert acts["maj"]["label"] == "Mise à jour" and acts["maj"]["hint"] == "[symbole]" and acts["maj"]["kind"] == "commande"
     assert acts["bilan"]["label"] == "Bilan" and acts["bilan"]["description"] == "Fais le bilan du mois"
-    assert acts["rapport"]["kind"] == "skill" and acts["rapport"]["files"] == [str(Path("scripts/gen.py"))]
-    # a skill's script is part of its fingerprint
-    before = acts["rapport"]["hash"]
+    # the skills are listed apart, the ones Claude alone uses too
+    sks = {s["name"]: s for s in project_tools.skills(base)}
+    assert sorted(sks) == ["interne", "rapport"]
+    assert sks["rapport"]["kind"] == "skill" and sks["rapport"]["files"] == ["scripts/gen.py"]
+    before = sks["rapport"]["hash"]
     (sk / "scripts" / "gen.py").write_text("print(2)", encoding="utf-8")
-    assert next(a for a in project_tools.scan(str(tmp_path)) if a["name"] == "rapport")["hash"] != before
+    assert next(s for s in project_tools.skills(base) if s["name"] == "rapport")["hash"] != before
 
 
 def test_schedules_and_prompts_of_proposed_routines():
@@ -268,11 +270,11 @@ def test_replacing_a_consigne_waits_for_the_click_and_drops_the_old_text(engine,
 def test_proposals_that_are_refused_at_once(engine, tmp_path):
     folder = project(engine, tmp_path, files={"skills/rapport/SKILL.md": "x"})
     cases = [({"quoi": "action", "nom": "Mauvais nom", "description": "d", "consigne": "c"}, "nom d'action invalide"),
-             ({"quoi": "action", "nom": "rapport", "description": "d", "consigne": "c"}, "déjà un skill"),
+             ({"quoi": "action", "nom": "rapport", "description": "d", "consigne": "c"}, "un skill s'appelle déjà"),
              ({"quoi": "routine", "nom": "R", "description": "d", "action": "absente"}, "pas d'action « /absente »"),
              ({"quoi": "routine", "nom": "R", "description": "d", "consigne": "x", "planification": {"jours": ["jamais"]}},
               "planification invalide"),
-             ({"quoi": "autre", "nom": "R", "description": "d"}, "action, routine, consigne ou odoo"),
+             ({"quoi": "autre", "nom": "R", "description": "d"}, "action, routine, consigne, odoo"),
              ({"quoi": "odoo", "description": "d", "projets_odoo": [{"nom": "Sans id"}]}, "au moins un projet Odoo")]
     for args, why in cases:
         t = engine.create_task(propose(args), profile="work", preset="lecture", workdir=folder)

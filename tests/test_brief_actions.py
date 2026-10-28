@@ -228,6 +228,43 @@ def test_same_name_in_the_project_and_the_account(engine, tmp_path):
     assert "Le compte Travail a aussi une action" in e.value.message
 
 
+def test_an_action_named_like_a_skill_is_refused(engine, tmp_path):
+    write_command(engine, "work", "rapport", "Fais le rapport.")
+    engine.cfg.profile("work").account_actions = True
+    sk = Path(engine.cfg.profile("work").config_dir) / "skills" / "rapport"
+    sk.mkdir(parents=True)
+    (sk / "SKILL.md").write_text("---\nname: rapport\ndescription: Rapport PDF\n---\nx\n", encoding="utf-8")
+    acc = engine.account_actions("work", content=True)[0]
+    engine.approve_account_action("work", "rapport", acc["hash"])
+    with pytest.raises(TaskError) as e:
+        engine.run_account_action("work", "rapport")
+    assert e.value.status == 409 and "a aussi un skill" in e.value.message
+    # a project's command named like a skill of the project
+    folder = tmp_path / "work" / "work" / "Proj"
+    (folder / ".claude" / "commands").mkdir(parents=True)
+    (folder / ".claude" / "commands" / "bilan.md").write_text("Bilan.\n", encoding="utf-8")
+    (folder / ".claude" / "skills" / "bilan").mkdir(parents=True)
+    (folder / ".claude" / "skills" / "bilan" / "SKILL.md").write_text("x", encoding="utf-8")
+    engine.save_project({"folder": str(folder), "name": "Proj", "profile": "work"})
+    pa = next(a for a in engine.project_actions(str(folder), content=True) if a["name"] == "bilan")
+    engine.approve_action(str(folder), "bilan", pa["hash"])
+    with pytest.raises(TaskError) as e:
+        engine.run_action(str(folder), "bilan", profile="work")
+    assert "Le projet a aussi un skill" in e.value.message
+    sk = engine.skills(str(folder))
+    assert [s["name"] for s in sk["projet"]] == ["bilan"] and [s["name"] for s in sk["compte"]] == ["rapport"]
+
+
+def test_skills_api(client):  # noqa: F811
+    hd = {"X-Console-Token": client.token}
+    eng = client.app.state.engine
+    sk = Path(eng.cfg.profile("work").config_dir) / "skills" / "rapport"
+    sk.mkdir(parents=True)
+    (sk / "SKILL.md").write_text("---\nname: rapport\ndescription: Rapport PDF\n---\nx\n", encoding="utf-8")
+    r = client.get("/api/skills?profile=work", headers=hd).json()
+    assert r["projet"] == [] and r["profile"] == "work" and [s["name"] for s in r["compte"]] == ["rapport"]
+
+
 def test_a_routine_does_not_run_an_account_action_changed_since(engine):
     write_command(engine, "work", "veille", "Fais la veille.")
     engine.cfg.profile("work").account_actions = True

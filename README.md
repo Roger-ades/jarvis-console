@@ -130,7 +130,7 @@ projets, discussions de la console (titre, demandes et réponses de Claude) et s
 Claude Code (Desktop, CLI), avec l'extrait trouvé ; flèches et Entrée pour ouvrir.
 
 **Aide** (`F1`, Plus → Aide, ou Ctrl+K → Aide) : rubrique dédiée à ce que sait faire JARVIS —
-interface, demandes, validations, projets, boîte, regard, outils MCP, skills et actions,
+interface, demandes, validations, projets, boîte, regard, outils MCP, compétences et actions,
 routines, modules, équipe, raccourcis et consommation.
 
 **Toujours pour ce projet** : dans une demande de validation, ce bouton approuve et
@@ -192,11 +192,17 @@ utilisateur Odoo** (**Chercher dans Odoo** le trouve), l'agenda du jour. Une tâ
 la console à partir de ces réglages ; rien n'est écrit ni envoyé.
 
 **Actions du compte en boutons** (Configuration → Profils, désactivé par défaut) : les commandes
-(`commands/`) et skills (`skills/`) du dossier de configuration du compte deviennent des boutons
+(`commands/`) du dossier de configuration du compte deviennent des boutons
 (Ctrl+K, **Actions** de l'accueil et du menu JARVIS pour celles cochées « Dans le menu », onglet
 Actions des projets), lancés dans le dossier choisi. Comme les actions de projet, chacune est relue
 et validée avant de servir et redemande ta validation si son fichier change ; si un projet a une
-action du même nom, les deux doivent être validées.
+action du même nom, les deux doivent être validées. Les skills (`skills/`) ne sont pas des actions :
+ce sont des compétences que Claude Code utilise de lui-même. La page **Compétences** (menu JARVIS,
+Ctrl+K) les montre pour un compte ou un projet choisi, avec une fiche par compétence et une
+discussion avec Claude pour les créer et les améliorer : chaque écriture passe par une carte de
+différences validée d'un clic. La liste se range en groupes imbriqués (glisser-déposer), gardés
+par JARVIS seulement : les skills restent à plat. Une action peut demander un skill dans son texte ; une action du
+même nom qu'un skill est refusée.
 
 Détails : [docs/boite-de-reception.md](docs/boite-de-reception.md).
 

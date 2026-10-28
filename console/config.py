@@ -264,7 +264,7 @@ class Profile(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     mcp: McpSettings = Field(default_factory=McpSettings)
     brief: Brief = Field(default_factory=Brief)
-    account_actions: bool = False   # the account's commands and skills as buttons (docs/boite-de-reception.md)
+    account_actions: bool = False   # the account's commands as buttons (docs/boite-de-reception.md)
 
     @field_validator("id")
     @classmethod

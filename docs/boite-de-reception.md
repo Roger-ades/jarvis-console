@@ -309,10 +309,19 @@ boîte elle-même : elle ne coûte rien et reste là même pour un compte sans b
 
 ## Actions du compte en boutons
 
-Aujourd'hui, seules les commandes et skills du dossier d'un projet deviennent des boutons
-(`project_tools.scan`, épinglés par empreinte). Celles du compte, dans son dossier de configuration
-(`commands/<nom>.md` et `skills/<nom>/SKILL.md` de `~/.claude-work` par exemple), ne se lancent qu'en
-les tapant après `/`.
+Les commandes du dossier d'un projet deviennent des boutons (`project_tools.scan`, épinglés par
+empreinte). Celles du compte, dans son dossier de configuration (`commands/<nom>.md` de
+`~/.claude-work` par exemple), ne se lancent qu'en les tapant après `/`, sauf si la case ci-dessous
+est cochée.
+
+Les skills (`skills/<nom>/SKILL.md`, du projet ou du compte) ne sont jamais des actions : ce sont des
+compétences que Claude Code charge de lui-même quand le travail s'y prête. La console les montre dans
+la page Compétences (`project_tools.skills`, `/api/skills`, `/api/skills/file`) pour un compte ou un
+projet choisi ; la discussion de cette page (`/api/skills/atelier`, `engine.skills_workshop`) écrit
+par l'outil retenir, dans `skills/` du compte ou `.claude/skills/` du projet, après validation de la
+carte de différences. Une action peut demander un skill dans son texte. Une action qui
+porte le nom d'un skill du projet ou du compte est refusée au lancement et à la proposition, pour
+éviter qu'un `/nom` parte vers l'un au lieu de l'autre.
 
 - **Pour chaque compte, quel que soit leur nombre, au choix de l'utilisateur** : Configuration →
   Profils → *compte* → **Actions du compte en boutons**, désactivé par défaut. Tant que la case n'est
@@ -330,7 +339,7 @@ les tapant après `/`.
   lancer une (bloquée si l'action a changé depuis sa validation, comme pour un projet).
 - **Même nom dans le projet et dans le compte** : on ne sait pas d'avance laquelle Claude Code
   exécutera. Le bouton ne part que si les deux sont validées, et la console signale le doublon.
-- **Hors champ** : les skills des plugins, gérées par Claude Code. `/` dans la barre reste comme
+- **Hors champ** : les skills des plugins, gérés par Claude Code. `/` dans la barre reste comme
   aujourd'hui (tout ce que propose Claude Code, sans épinglage : son fonctionnement normal).
 - `proposer` reste limité au projet : Claude ne propose pas d'action du compte, qui vaudrait pour tous
   ses dossiers.

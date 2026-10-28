@@ -173,6 +173,7 @@ LAUNCH_SPEC = {"_meta": ALWAYS_LOAD, **launch_mod.SPEC}
 CONSOLE_TOOLS = {SHOW_TOOL, RESULT_TOOL, PRESENT_TOOL, PROPOSE_TOOL, DOCS_TOOL, PROJECT_TOOL, NOTES_TOOL, MODULES_TOOL,
                  KNOWLEDGE_TOOL, LAUNCH_TOOL}
 DOCS_RESCAN = 15 * 60  # the document folders are walked again this often (only changed files are read)
+SKILL_FILE_MAX = 200_000  # characters of a skill's file shown on the page Compétences
 KEEP_CALLS = 60  # tool results kept in memory per task, for afficher_resultat
 
 
@@ -1796,7 +1797,167 @@ class Engine:
         return (f"Note {'ajoutée' if action == 'ajouter' else 'modifiée'} (id {note['id']}, {where(note)}{remind}). "
                 "Elle apparaît dans les notes de la console."), False
 
-    # -------------------------------------------------------- project actions (its commands and skills)
+    # -------------------------------------------------------- skills: competences, not actions
+    def skills(self, folder: str = "", profile: str | None = None) -> dict:
+        """The skills Claude Code may load in a folder, read only: the folder's own (.claude/skills) and
+        those of its account (skills/ of its configuration folder)."""
+        proj = self._project(folder) if folder else None
+        prof = self.cfg.profile((proj.profile if proj else "") or profile or self.cfg.general.default_profile)
+        here = project_tools.skills(Path(folder) / ".claude") if folder and os.path.isdir(folder) else []
+        base = self._account_dir(prof) if prof else None
+        there = project_tools.skills(base) if base and base.is_dir() else []
+        groups = {}
+        for scope, key, items in (("projet", f"projet:{norm(folder)}" if folder else "", here),
+                                  ("compte", f"compte:{prof.id}" if prof else "", there)):
+            g = self._skill_groups(key) if key else {"classement": {}, "groupes": []}
+            for s in items:
+                s["groupe"] = g["classement"].get(s["name"], "")
+            groups[scope] = g["groupes"]
+        return {"projet": here, "compte": there, "groupes": groups,
+                "profile": prof.id if prof else "", "profile_name": prof.name if prof else ""}
+
+    # The groups of the page Compétences: only how the list is shown. Kept by JARVIS (its store, per account or
+    # project), never in the skills: Claude Code reads skills/<nom>/SKILL.md flat, whatever the group.
+    def _skill_groups(self, key: str) -> dict:
+        g = (self.store.kv_get("skill_groups", {}) or {}).get(key) or {}
+        cls = {k: v for k, v in (g.get("classement") or {}).items() if v}
+        paths = set(g.get("groupes") or []) | set(cls.values())
+        for p in list(paths):  # a group implies its parents
+            parts = p.split("/")
+            paths.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        return {"classement": cls, "groupes": sorted(paths, key=str.lower)}
+
+    def _skill_groups_key(self, folder: str = "", profile: str | None = None) -> tuple[str, Path]:
+        prof, base, proj = self._skills_base(folder, profile)
+        return (f"projet:{norm(proj.folder)}" if proj else f"compte:{prof.id}"), base
+
+    def _save_skill_groups(self, key: str, cls: dict, paths) -> dict:
+        allg = self.store.kv_get("skill_groups", {}) or {}
+        allg[key] = {"classement": {k: v for k, v in cls.items() if v}, "groupes": sorted(set(p for p in paths if p))}
+        self.store.kv_set("skill_groups", allg)
+        return self._skill_groups(key)
+
+    @staticmethod
+    def group_path(text: str) -> str:
+        """« Métier / Incendie » → "Métier/Incendie": up to 4 levels of 40 characters."""
+        parts = [re.sub(r"\s+", " ", x).strip() for x in re.split(r"[/›>\\]", str(text or ""))]
+        parts = [x for x in parts if x]
+        if len(parts) > 4:
+            raise TaskError("Quatre niveaux de groupes au plus.")
+        if any(len(x) > 40 for x in parts):
+            raise TaskError("Nom de groupe trop long (40 caractères au plus).")
+        return "/".join(parts)
+
+    def classify_skill(self, name: str, group: str, folder: str = "", profile: str | None = None) -> dict:
+        """Puts a skill in a group ("" = hors groupe)."""
+        key, base = self._skill_groups_key(folder, profile)
+        name = (name or "").strip().lower()
+        known = {s["name"] for s in project_tools.skills(base)}
+        if name not in known:
+            raise TaskError("Compétence introuvable.", 404)
+        g = self._skill_groups(key)
+        cls = {k: v for k, v in g["classement"].items() if k in known}
+        cls[name] = self.group_path(group)
+        return self._save_skill_groups(key, cls, g["groupes"])
+
+    def edit_skill_group(self, action: str, group: str, new: str = "", folder: str = "",
+                         profile: str | None = None) -> dict:
+        """creer a group, renommer (or move) it with what it holds, or dissoudre it: its skills and
+        sub-groups go up one level."""
+        key, _ = self._skill_groups_key(folder, profile)
+        g = self._skill_groups(key)
+        old = self.group_path(group)
+        if action == "creer":
+            if not old:
+                raise TaskError("Donne un nom au groupe.")
+            return self._save_skill_groups(key, g["classement"], [*g["groupes"], old])
+        if not old or old not in g["groupes"]:
+            raise TaskError("Groupe introuvable.", 404)
+        if action == "renommer":
+            to = self.group_path(new)
+            if not to:
+                raise TaskError("Donne un nom au groupe.")
+            if to == old or to.startswith(old + "/"):
+                raise TaskError("Un groupe ne peut pas aller dans lui-même.")
+        elif action == "dissoudre":
+            to = old.rsplit("/", 1)[0] if "/" in old else ""
+        else:
+            raise TaskError("Action inconnue.")
+
+        def move(p: str) -> str:
+            if p != old and not p.startswith(old + "/"):
+                return p
+            return "/".join(x for x in (to, p[len(old):].lstrip("/")) if x)
+        return self._save_skill_groups(key, {k: move(v) for k, v in g["classement"].items()},
+                                       [move(p) for p in g["groupes"] if not (action == "dissoudre" and p == old)])
+
+    def _skill_clash(self, name: str, folder: str = "", profile: str | None = None) -> str | None:
+        """An action launches "/nom": a skill of the same name, in the folder or the account, would be the
+        one Claude Code follows."""
+        sk = self.skills(folder, profile)
+        if any(s["name"] == name for s in sk["projet"]):
+            return f"Le projet a aussi un skill « {name} » : Claude Code suivrait le skill. Renomme la commande."
+        if any(s["name"] == name for s in sk["compte"]):
+            return (f"Le compte {sk['profile_name']} a aussi un skill « {name} » : Claude Code suivrait le skill. "
+                    "Renomme la commande.")
+        return None
+
+    def _skills_base(self, folder: str = "", profile: str | None = None) -> tuple[Profile, Path, object]:
+        """The page Compétences works on an account (its configuration folder) or on a known project."""
+        if folder:
+            proj = self._project(folder)
+            if not proj:
+                raise TaskError("Projet introuvable.", 404)
+            prof = self.cfg.profile(proj.profile or self.cfg.general.default_profile)
+            if not prof:
+                raise TaskError("Aucun compte pour ce projet : choisis-le dans ses réglages.")
+            return prof, Path(proj.folder) / ".claude", proj
+        prof = self.cfg.profile(profile or self.cfg.general.default_profile)
+        if not prof:
+            raise TaskError("Compte inconnu.", 404)
+        return prof, self._account_dir(prof), None
+
+    def skill_file(self, name: str, path: str, folder: str = "", profile: str | None = None) -> dict:
+        """One file of a skill, for the page Compétences: read only, inside the skill's folder."""
+        _, base, _ = self._skills_base(folder, profile)
+        sk = next((s for s in project_tools.skills(base) if s["name"] == (name or "").strip().lower()), None)
+        if not sk:
+            raise TaskError("Compétence introuvable.", 404)
+        root = (base / "skills" / sk["folder"]).resolve()
+        f = (root / (path or "SKILL.md")).resolve()
+        if root not in f.parents or not f.is_file():
+            raise TaskError("Fichier introuvable dans cette compétence.", 404)
+        data = f.read_bytes()[:SKILL_FILE_MAX + 1]
+        if b"\0" in data[:4096]:
+            return {"path": path, "binary": True, "size": f.stat().st_size, "text": ""}
+        return {"path": path, "binary": False, "size": f.stat().st_size, "truncated": len(data) > SKILL_FILE_MAX,
+                "text": data[:SKILL_FILE_MAX].decode("utf-8", errors="replace")}
+
+    def skills_workshop(self, prompt: str, folder: str = "", profile: str | None = None, competence: str = "",
+                        model: str | None = None) -> dict:
+        """The discussion of the page Compétences: Claude reads the skills of the account or of the project and
+        proposes its changes with the tool retenir (a card each, nothing written without the user's click)."""
+        prof, base, proj = self._skills_base(folder, profile)
+        name = (competence or "").strip().lower()
+        if name and not project_tools.NAME.match(name):
+            raise TaskError("Nom de compétence invalide.")
+        pre = self.cfg.preset("lecture")
+        skills_dir = base / "skills"
+        # writing a skill is not a short question: named here, the model never goes to Haiku by itself
+        model = ((model or "").strip() if (model or "").strip() not in ("", "auto") else "") \
+            or (pre.model if pre and pre.enabled else "") or prof.default_model or "default"
+        t = self.create_task(prompt, profile=prof.id, model=model,
+                             preset=pre.id if pre and pre.enabled else None,
+                             workdir=proj.folder if proj else None, confirmed=True, origin="atelier",
+                             extra_dirs=[str(skills_dir)] if skills_dir.is_dir() else None,
+                             marks={"atelier": {"cible": "projet" if proj else "compte",
+                                                "dossier": proj.folder if proj else "", "competence": name},
+                                    "title": (f"Compétence « {name} »" if name else "Nouvelle compétence")})
+        self._audit("atelier des compétences", {"compte": prof.name, "projet": proj.name if proj else "",
+                                                "compétence": name}, t)
+        return t
+
+    # -------------------------------------------------------- project actions (its commands)
     def project_actions(self, folder: str, content: bool = False, profile: str | None = None) -> list[dict]:
         """The actions of a project folder, each one "ok" (validated as it is), "nouvelle" or "modifiee",
         with the model and effort chosen for it ("" = the project's). With `content`: also its files,
@@ -1917,6 +2078,9 @@ class Engine:
                                 need_approval=True, action=a)
             self.approve_action(proj.folder, name, approve)
         acc_pid = proj.profile or profile or self.cfg.general.default_profile
+        clash = self._skill_clash(name, proj.folder, acc_pid)
+        if clash:
+            raise TaskError(clash, 409)
         twin = next((x for x in self.account_actions(acc_pid) if x["name"] == name), None)
         if twin and twin["status"] != "ok":
             raise TaskError(f"Le compte {twin['profile_name']} a aussi une action « /{name} », pas validée : on ne sait pas "
@@ -1928,12 +2092,12 @@ class Engine:
                                 workdir=proj.folder, effort=pref.get("effort") or proj.effort or None,
                                 confirmed=confirmed, origin="action")
 
-    # -------------------------------------------------------- account actions (its commands and skills)
+    # -------------------------------------------------------- account actions (its commands)
     def _account_dir(self, prof: Profile) -> Path:
         return Path(expand_path(prof.config_dir) or str(Path.home() / ".claude"))
 
     def account_actions(self, pid: str, content: bool = False) -> list[dict]:
-        """The commands and skills of an account's configuration folder, as buttons once the user turned
+        """The commands of an account's configuration folder, as buttons once the user turned
         them on for that account (Configuration → Profils): pinned by fingerprint like a project's, "ok",
         "nouvelle" or "modifiee", with the model, effort and place in the menu chosen for each."""
         prof = self.cfg.profile(pid or "")
@@ -2011,6 +2175,9 @@ class Engine:
                                 need_approval=True, action=a)
             self.approve_account_action(pid, name, approve)
         proj = self._project(workdir) if workdir else None
+        clash = self._skill_clash(name, (proj.folder if proj else workdir) or "", pid)
+        if clash:
+            raise TaskError(clash, 409)
         if proj and os.path.isdir(proj.folder):
             twin = next((x for x in self.project_actions(proj.folder) if x["name"] == name), None)
             if twin and twin["status"] != "ok":
@@ -2084,17 +2251,27 @@ class Engine:
         prof = self.cfg.profile(t.get("profile") or "") or Profile.model_validate(t["spec"]["profile"])
         return prof, self._account_dir(prof)
 
+    def _knowledge_target(self, t: dict) -> tuple[Profile, Path, str]:
+        """Where the tool retenir reads and writes: the account's skills, or a project's when the discussion was
+        opened on that project from the page Compétences. The last item says it ("du compte X")."""
+        prof, base = self._knowledge_dir(t)
+        shop = t.get("atelier") or {}
+        if shop.get("cible") == "projet" and shop.get("dossier"):
+            proj = self._project(shop["dossier"])
+            return prof, Path(shop["dossier"]) / ".claude", f"du projet « {proj.name if proj else shop['dossier']} »"
+        return prof, base, f"du compte {prof.name}"
+
     def knowledge_for_claude(self, tid: str, args) -> tuple[str, bool]:
         """Tool "retenir", actions lister and lire: the skills of the discussion's account. (proposer waits for
         the user's click, see _propose_knowledge.)"""
         args = args if isinstance(args, dict) else {}
-        _, base = self._knowledge_dir(self._get(tid))
+        _, base, where = self._knowledge_target(self._get(tid))
         action = str(args.get("action") or "").strip().lower()
         try:
             if action == "lister":
-                return knowledge.listing(base), False
+                return knowledge.listing(base, where), False
             if action == "lire":
-                return knowledge.read(base, args.get("competence"), args.get("fichier")), False
+                return knowledge.read(base, args.get("competence"), args.get("fichier"), where), False
         except knowledge.KnowledgeError as exc:
             return str(exc)[:1].upper() + str(exc)[1:], True
         if action == "proposer":
@@ -2111,19 +2288,20 @@ class Engine:
                 "content": [{"type": "text", "text": text}], "isError": failed}}})
 
         t = self._get(tid)
-        prof, base = self._knowledge_dir(t)
+        prof, base, where = self._knowledge_target(t)
         args = (msg.get("params") or {}).get("arguments") or {}
         try:
             prop, after = knowledge.proposal(base, args if isinstance(args, dict) else {})
         except knowledge.KnowledgeError as exc:
             return reply("Rien de proposé : " + str(exc), True)
         proj = self._project(t.get("workdir") or "")
-        prop.update({"compte": prof.name, "projet": proj.name if proj else ""})
+        prop.update({"compte": prof.name, "projet": proj.name if proj else "", "ou": where})
         what = (f"de créer la compétence « {prop['competence']} »" if prop["nouvelle"]
                 else f"de {'modifier' if prop['mode'] == 'remplacer' else 'compléter'} {prop['fichier']} de la "
                      f"compétence « {prop['competence']} »")
         appr = Approval(id=secrets.token_hex(4), request_id=rid, kind="proposal", tool=KNOWLEDGE_TOOL, input=prop,
-                        reason=f"Claude propose {what}, pour tous les projets du compte {prof.name}.")
+                        reason=f"Claude propose {what}, " + (f"pour tous les projets du compte {prof.name}."
+                                                              if where.startswith("du compte") else f"{where}."))
 
         def answer(a: Approval):
             if a.decision != "allow":
@@ -2142,25 +2320,21 @@ class Engine:
         now = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
         if knowledge.fingerprint(now) != prop["empreinte"]:
             raise TaskError(f"{prop['fichier']} a changé pendant la proposition : relis-le et propose de nouveau.")
-        # A skill validated as a button stays validated: the user has just seen the only change.
-        before = next((a for a in self.account_actions(prof.id) if a["name"] == prop["competence"]), None)
         self._write_doc(path, after)
-        if before and before["status"] == "ok":
-            a = next((x for x in self.account_actions(prof.id) if x["name"] == prop["competence"]), None)
-            if a:
-                pins = self.store.kv_get("action_pins", {}) or {}
-                pins.setdefault(f"compte:{prof.id}", {})[a["name"]] = a["hash"]
-                self.store.kv_set("action_pins", pins)
-        self._audit("savoir du compte", {"compte": prof.name, "compétence": prop["competence"], "fichier": str(path),
+        self._audit("savoir du compte", {"compte": prof.name, "où": prop.get("ou") or "", "compétence": prop["competence"],
+                                         "fichier": str(path),
                                          "mode": "création" if prop["nouvelle"] else prop["mode"],
                                          "ajouts": prop["ajouts"], "retraits": prop["retraits"],
                                          "raison": prop.get("raison") or ""}, t)
-        self.bus.publish("account_actions", {"profile": prof.id})
         done = (f"Compétence « {prop['competence']} » créée" if prop["nouvelle"]
                 else f"{prop['fichier']} de la compétence « {prop['competence']} » "
                      + ("remplacé" if prop["mode"] == "remplacer" else "complété"))
-        return (f"{done} ({path}). Claude Code la charge dans tous les projets du compte {prof.name} quand le sujet "
-                "s'y prête, à partir des prochaines discussions.")
+        self.bus.publish("skills", {"competence": prop["competence"], "chemin": str(path)})
+        if (prop.get("ou") or "du compte").startswith("du compte"):
+            return (f"{done} ({path}). Claude Code la charge dans tous les projets du compte {prof.name} quand le "
+                    "sujet s'y prête, à partir des prochaines discussions.")
+        return (f"{done} ({path}). Claude Code la charge dans ce projet quand le sujet s'y prête, à partir des "
+                "prochaines discussions.")
 
     def _project_name(self, t: dict) -> str:
         proj = self._project(t.get("workdir") or "")
@@ -2475,9 +2649,8 @@ class Engine:
             name = text("nom", 40, True).lower()
             if not project_tools.NAME.match(name):
                 raise TaskError("nom d'action invalide : minuscules, chiffres et tirets, 40 caractères au plus.")
-            existing = {a["name"]: a for a in self.project_actions(proj.folder, content=True)}
-            if existing.get(name, {}).get("kind") == "skill":
-                raise TaskError(f"le projet a déjà un skill « {name} » : choisis un autre nom.")
+            if self._skill_clash(name, proj.folder, proj.profile or t.get("profile")):
+                raise TaskError(f"un skill s'appelle déjà « {name} » (projet ou compte) : choisis un autre nom.")
             path = Path(proj.folder) / ".claude" / "commands" / f"{name}.md"
             label, hint = text("libelle", 60), text("parametre", 200)
             body = text("consigne", 20000, True)
@@ -2868,8 +3041,12 @@ class Engine:
                                 documents=self.cfg.documents.enabled,
                                 projects=project_nav.prompt_line(self._account_projects(prof.id)),
                                 addons=str(self.addons_dir) if self.addons_dir.is_dir() else "")
-        system = "\n\n".join(x for x in (where, spec.get("security_instructions", ""), prof.instructions, team.get("prompt", ""))
-                             if x and x.strip())
+        shop = ""
+        if t.get("atelier"):
+            _, kbase, kwhere = self._knowledge_target(t)
+            shop = knowledge.workshop(kwhere, kbase, (t["atelier"].get("competence") or ""))
+        system = "\n\n".join(x for x in (where, shop, spec.get("security_instructions", ""), prof.instructions,
+                                    team.get("prompt", "")) if x and x.strip())
         if team.get("agents"):
             f = self.runtime / f"{t['id']}-{secrets.token_hex(3)}.agents.json"
             f.write_text(json.dumps(team["agents"], ensure_ascii=False), encoding="utf-8")
@@ -4380,7 +4557,7 @@ class Engine:
         return {"available": True, **a}
 
     # Internal discussions keep the name the console gave them.
-    NO_AUTO_TITLE = ("widget", "routine", "addon", "reglage")
+    NO_AUTO_TITLE = ("widget", "routine", "addon", "reglage", "atelier")
 
     def _auto_title(self, t: dict):
         """After the first answer, Claude titles the discussion, once, in the background. Not when the

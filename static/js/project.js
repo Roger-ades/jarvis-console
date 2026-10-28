@@ -2,6 +2,7 @@
 // (CLAUDE.md of the folder and of the account), what Claude remembers there, its files and
 // its discussions. The panel follows the folder chosen in the request bar.
 import { actionStamp, renderActions } from "./actions.js";
+import { renderSkills } from "./skills.js";
 import { api } from "./api.js";
 import { fmtSize } from "./attach.js";
 import { pickFolder } from "./folderpicker.js";
@@ -18,11 +19,11 @@ import * as wm from "./wm.js";
 
 const GROUPS = [
   { id: "cours", label: "En cours", screens: [["tasks", "Discussions"], ["files", "Fichiers"], ["suivi", "Suivi"]] },
-  { id: "reglages", label: "Réglages", screens: [["retenu", "Consignes"], ["actions", "Actions"], ["notes", "Notes"]] },
+  { id: "reglages", label: "Réglages", screens: [["retenu", "Consignes"], ["actions", "Actions"], ["competences", "Compétences"], ["notes", "Notes"]] },
   { id: "equipe", label: "Équipe", screens: [["fil", "Fil"], ["partage", "Conversations"], ["equipe", "Membres"]] },
 ];
 const RETENU = new Set(["instructions", "memory", "rules", "retenu"]);
-const REGLAGES = new Set([...RETENU, "actions", "notes", "reglages"]);
+const REGLAGES = new Set([...RETENU, "actions", "competences", "notes", "reglages"]);
 const EQUIPE = new Set(["equipe", "partage", "fil"]);
 const groupOf = (id) => (id === "tasks" || id === "files" || id === "suivi" ? "cours"
   : REGLAGES.has(id) ? "reglages" : EQUIPE.has(id) ? "equipe" : id);
@@ -492,6 +493,7 @@ function render() {
   const screen = (tab === "retenu" || RETENU.has(tab)) ? "retenu" : tab;
   ({ retenu: renderRetenu, files: renderFiles, tasks: renderTasks,
     actions: (b) => renderActions(b, ctx, ws, () => { if (tab === "actions") render(); }), notes: renderNotes,
+    competences: (b) => renderSkills(b, ctx, ws),
     suivi: renderSuivi, equipe: (b) => renderEquipe(b, ws, ctx),
     partage: (b) => renderPartage(b, ws, ctx), fil: (b) => renderFil(b, ws, ctx) })[screen]?.(body);
   if (focusSection) {
