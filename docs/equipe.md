@@ -242,7 +242,9 @@ le serveur refuse, rien ne change. Garder GitHub à jour tant que tous les poste
 basculé, puis l'archiver.
 
 Les transcriptions partagées restent des fichiers :
-`/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. La présence vit en mémoire seulement.
+`/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. Les modules partagés aussi, un zip par contenu
+(`/var/lib/jarvis-hub/modules/<sha256>.zip`), effacé dès que plus personne ne l'attend. La présence vit
+en mémoire seulement.
 Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
 
 - **Réseau** : le hub écoute en local (`127.0.0.1:8770`). nginx le publie en HTTPS
@@ -278,6 +280,8 @@ conversations  id, project_id, author_id, title, session_id, rev, parent_id,
                created, updated, size, stats (outils utilisés, nombre de tours), mode
 messages       id, project_id, author_id, ts, text, refs (conversation, fichier, extrait),
                edited, deleted
+modules        id, sender_id, recipient_id, addon_id, name, version, description, permissions,
+               blob (sha256), size, created, removed, outcome (installé | ignoré | remplacé)
 audit          id, ts, user_id, kind, detail
 ```
 
@@ -309,6 +313,10 @@ DELETE /api/v1/conversations/{c}            retirer (auteur ou admin)
 GET    /api/v1/projects/{p}/messages?before=
 POST   /api/v1/projects/{p}/messages
 PATCH  /api/v1/messages/{m}                 modifier ou effacer le sien
+POST   /api/v1/modules?to=a,b               partager un module (zip avec partage.json, 25 Mo au plus)
+GET    /api/v1/modules                      modules qui m'attendent
+GET    /api/v1/modules/{m}/archive          télécharger pour installer (destinataire seulement)
+DELETE /api/v1/modules/{m}?outcome=         installé ou ignoré : il quitte ma boîte
 GET    /api/v1/audit                        (admin)
 ```
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 import getpass
 import json
 import re
+import shutil
+import tempfile
 import threading
 import time
 import unicodedata
@@ -12,7 +14,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import Body, FastAPI
 
-from . import share, syncbox
+from . import addon_share, share, syncbox
 from .config import ConfigStore, expand_path
 from .engine import TaskError
 from .equipe_boite import TeamFeed
@@ -57,8 +59,8 @@ def _sync_phone(client: HubClient, hub, engine) -> None:
 def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     client = HubClient(data_dir)
     app.state.hub = client
-    # Invitations, Fil et conversations partagées dans la boîte de réception (console/equipe_boite.py).
-    feed = TeamFeed(store, engine._inbox_changed)
+    # Invitations, Fil, conversations partagées et modules reçus dans la boîte de réception (console/equipe_boite.py).
+    feed = TeamFeed(store, engine._inbox_changed, engine._installed)
     engine.inbox_sources.append(feed)
     app.state.team_feed = feed
     feed_lock = threading.Lock()
@@ -190,6 +192,76 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         refresh_feed()
         errors = res.get("sync_errors") or []
         return {"ok": True, **({"warning": "Syncthing : " + "; ".join(errors)} if errors else {})}
+
+    # ------------------------------------------------------------ modules partagés (sans Claude)
+    @app.post("/api/hub/modules/send")
+    def send_module(body: dict = Body(...)):
+        """Bouton Partager de la fenêtre d'un module : son zip part par le hub vers les collègues choisis."""
+        to = sorted({str(u).strip() for u in body.get("to") or [] if str(u).strip()})
+        if not to:
+            return fail(HubError("Choisis au moins un collègue.", 422))
+        try:
+            a = engine._addon(str(body.get("id") or ""))
+        except TaskError as exc:
+            return fail(HubError(str(exc), 404))
+        if a["problemes"]:
+            return fail(HubError("Ce module ne s'ouvre pas : corrige-le avant de le partager.", 422))
+        hub = cfg().hub
+        work = Path(tempfile.mkdtemp(prefix="module-", dir=data_dir))
+        try:
+            me = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/me").get("user") or {}
+            path = addon_share.export(a, work, me.get("name") or me.get("id") or "")
+            sent = client.call(hub.url, hub.fingerprint, "POST", "/api/v1/modules", content=path.read_bytes(),
+                               content_type="application/zip", query=urlencode({"to": ",".join(to)}))
+        except HubError as exc:
+            return fail(exc)
+        except OSError as exc:
+            return fail(HubError(f"Export impossible : {exc}", 500))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        store.audit("module partagé", {"module": a["id"], "version": a["version"], "avec": to})
+        return {"ok": True, "sent": len(sent.get("modules") or [])}
+
+    @app.post("/api/hub/modules/{mod_id}/install")
+    def install_module(mod_id: str):
+        """Installer, dans la boîte de réception : le zip vient du hub, l'ancien module est gardé dans .anciens.
+        Les permissions s'accordent à la première ouverture, dans sa fenêtre, comme pour tout module."""
+        hub = cfg().hub
+        work = Path(tempfile.mkdtemp(prefix="module-", dir=data_dir))
+        try:
+            blob = client.call(hub.url, hub.fingerprint, "GET", f"/api/v1/modules/{_q(mod_id)}/archive", raw=True)
+            path = work / "module.zip"
+            path.write_bytes(blob)
+            done = addon_share.install(path, engine.addons_dir)
+        except HubError as exc:
+            return fail(exc)
+        except (addon_share.ShareError, OSError) as exc:
+            return fail(HubError(f"Installation impossible : {exc}", 422))
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        a = done["module"]
+        try:
+            client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/modules/{_q(mod_id)}",
+                        query=urlencode({"outcome": "installé"}))
+        except HubError:
+            pass    # installé quand même ; le hub le reproposera, et l'entrée dira « cette version est déjà installée »
+        feed.forget(mod_id)
+        store.audit("module installé", {"module": a["id"], "version": a["version"], "de": done.get("de") or ""})
+        engine.bus.publish("addons", {"changed": a["id"]})
+        return {"ok": True, "id": a["id"], "nom": a["nom"], "ancien": done.get("ancien") or "",
+                "problemes": bool(a["problemes"])}
+
+    @app.post("/api/hub/modules/{mod_id}/dismiss")
+    def dismiss_module(mod_id: str):
+        hub = cfg().hub
+        try:
+            client.call(hub.url, hub.fingerprint, "DELETE", f"/api/v1/modules/{_q(mod_id)}",
+                        query=urlencode({"outcome": "ignoré"}))
+        except HubError as exc:
+            if exc.status != 404:
+                return fail(exc)
+        feed.forget(mod_id)
+        return {"ok": True}
 
     @app.get("/api/hub/projects")
     def projects():

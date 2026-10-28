@@ -12,7 +12,7 @@ import { projectMention } from "./mention.js";
 import { allNotes, editNote, initNotes, notesChanged, notesRecolor, toggleNotes } from "./notes.js";
 import { checkVersion, restartConsole, updateConsole } from "./system.js";
 import { initWidgets, pinDisplay, widgetsChanged } from "./widgets.js";
-import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, addonsRetheme, initAddons } from "./addons.js";
+import { addonAnswered, addonItems, addonOpened, addonRunChanged, addonsChanged, addonsRetheme, initAddons, openAddon } from "./addons.js";
 import { openPalette } from "./palette.js";
 import { openHelp, toggleHelp } from "./help.js";
 import { slashItem } from "./slash-fr.js";
@@ -1593,6 +1593,7 @@ const inboxCtx = {
   // the team's entries: its project panel (on the Fil, the conversations, the members), an invitation to join
   openProject: (folder, tab) => { if (projectFor(folder)) showProject(panelCtx, { folder, tab }); },
   joinTeam: (id) => joinTeamProject(panelCtx, { start: currentFolder(), select: id }),
+  openAddon: (id) => { closeDrawers(); openAddon(id); },
 };
 // the browser: a page hidden more than 15 minutes is an absence (the desktop app says when the session locks)
 let hiddenAt = 0;

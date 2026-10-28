@@ -6,7 +6,7 @@
 // tasks (console/addon_tasks.py: run by the console, without a model, once the user granted its code).
 import { api } from "./api.js";
 import { colorOf, paint } from "./tint.js";
-import { $, confirmDialog, h, toast } from "./util.js";
+import { $, confirmDialog, dialog, h, toast } from "./util.js";
 import { pinButton } from "./viewer.js";
 import * as wm from "./wm.js";
 
@@ -60,6 +60,37 @@ function askClaude(m = null) {
     : "Développe un module JARVIS qui ");
 }
 
+/** Partager: the module goes through the team's hub to the colleagues ticked here; it waits in their inbox, where
+ * one click installs it. No Claude in this. */
+async function share(m) {
+  let me = "", people = [];
+  try {
+    const st = await api("/api/hub/status");
+    if (!st.enabled || !st.user) {
+      toast("Partager un module passe par le hub de l'équipe : inscris ce poste d'abord (Configuration › Équipe).", "warn");
+      return;
+    }
+    me = st.user.id;
+    people = ((await api("/api/hub/users")).users || []).filter((u) => u.id !== me);
+  } catch (e) { toast(e.message, "err"); return; }
+  if (!people.length) { toast("Personne d'autre n'est inscrit sur le hub de l'équipe.", "warn"); return; }
+  const boxes = people.map((u) => h("input", { type: "checkbox", value: u.id }));
+  const body = h("div", { class: "ad-share" },
+    h("p", {}, `« ${m.nom} »${m.version ? ` v${m.version}` : ""} arrivera dans leur boîte de réception : un clic l'installe `
+      + "(ses permissions se valident à la première ouverture). Son code et ses fichiers partent, pas ses données."),
+    h("div", { class: "ad-share-list" }, ...people.map((u, i) => h("label", { class: "check" }, boxes[i], ` ${u.name || u.id}`))));
+  const ok = await dialog({ title: "Partager le module", body,
+    buttons: [{ label: "Annuler", value: false }, { label: "Envoyer", value: true, cls: "primary" }] });
+  const to = boxes.filter((b) => b.checked).map((b) => b.value);
+  if (!ok) return;
+  if (!to.length) { toast("Aucun collègue coché : rien n'est parti.", "warn"); return; }
+  try {
+    await api("/api/hub/modules/send", { method: "POST", body: { id: m.id, to } });
+    const names = people.filter((u) => to.includes(u.id)).map((u) => u.name || u.id);
+    toast(`« ${m.nom} » envoyé à ${names.join(", ")}.`, "ok");
+  } catch (e) { toast(e.message, "err"); }
+}
+
 function reveal(aid = "") {
   api("/api/addons/reveal", { method: "POST", body: { id: aid } }).catch((e) => toast(e.message, "err"));
 }
@@ -102,6 +133,7 @@ export async function openAddon(aid, { reload = false } = {}) {
     h("div", { class: "pv-actions" },
       act("retry", "Recharger le module", () => load_(w)),
       act("edit", "Demander une amélioration à Claude", () => askClaude(w.mod)),
+      act("team", "Partager avec un collègue (par le hub de l'équipe)", () => share(w.mod)),
       act("folder", "Afficher le dossier du module", () => reveal(aid))),
     h("div", { class: "win-actions" },
       pinButton(id),

@@ -152,6 +152,7 @@ export async function back() {
     say(n(["team_share"]), "conversation partagée", "conversations partagées"),
     say(n(["team_removed"]), "retrait d'un projet d'équipe", "retraits de projets d'équipe"),
     say(n(["team_signup"]), "inscription au hub", "inscriptions au hub"),
+    say(n(["team_module"]), "module reçu", "modules reçus"),
     say(n(["reminder"]), "rappel", "rappels")].filter(Boolean);
   if (!parts.length) return;
   const close = () => { awayBar?.remove(); awayBar = null; };
@@ -319,11 +320,12 @@ const LABELS = {
   error: "En erreur", interrupted: "Interrompue", done: "Terminée", routine: "Routine", run: "Routine",
   reminder: "Rappel", team_invite: "Invitation · projet d'équipe", team_message: "Fil d'équipe",
   team_mention: "On te mentionne", team_share: "Conversation partagée", team_removed: "Retiré d'un projet d'équipe",
-  team_signup: "Inscription au hub",
+  team_signup: "Inscription au hub", team_module: "Module reçu",
 };
 const ICON = { question: "help", plan: "list", proposal: "bolt", expired: "clock", choice: "sparkle", error: "error",
   interrupted: "alert", done: "check", routine: "clock", run: "clock", reminder: "bell",
-  team_invite: "team", team_message: "team", team_mention: "team", team_share: "team", team_removed: "team", team_signup: "team" };
+  team_invite: "team", team_message: "team", team_mention: "team", team_share: "team", team_removed: "team", team_signup: "team",
+  team_module: "puzzle" };
 
 function row(e, inGroup = false) {
   const actions = h("div", { class: "ib-actions" });
@@ -431,6 +433,19 @@ function row(e, inGroup = false) {
       main = () => mark({ ids: [e.id] });
       actions.append(btn("Révoquer…", () => revoke(e), "ghost"), btn("Vu", main, "primary"));
       break;
+    case "team_module": {
+      lines.push(h("div", { class: "ib-text" }, e.summary));
+      if (e.description) lines.push(h("div", { class: "ib-excerpt" }, e.description));
+      const perms = { claude: "questions à Claude", python: "scripts Python sur ce PC", odoo: "lecture d'Odoo" };
+      if (e.permissions?.length) {
+        lines.push(h("div", { class: "appr-reason" },
+          `Demandera, à sa première ouverture : ${e.permissions.map((p) => perms[p] || p).join(", ")}.`));
+      }
+      if (e.state) meta.unshift(e.state);
+      main = () => installModule(e);
+      actions.append(btn("Ignorer", () => ignoreModule(e), "ghost"), btn("Installer", main, "primary"));
+      break;
+    }
     default:
       main = () => e.task_id && ctx.openTask(e.task_id);
   }
@@ -522,6 +537,19 @@ async function revoke(e) {
     const res = await api("/api/hub/revoke", { method: "POST", body: { user: e.user } });
     toast(res.warning ? `Compte révoqué. ${res.warning}` : `Le compte de ${e.title} est révoqué.`, res.warning ? "warn" : "ok");
   });
+}
+
+/** A module a colleague sent through the hub: installed in one click, then opened (Claude takes no part). */
+function installModule(e) {
+  return call(e, async () => {
+    const res = await api(`/api/hub/modules/${encodeURIComponent(e.module_id)}/install`, { method: "POST" });
+    toast(`Module « ${res.nom} » installé${res.ancien ? " (l'ancienne version est gardée dans .anciens)" : ""}.`, "ok");
+    if (!res.problemes) ctx.openAddon?.(res.id);
+  });
+}
+
+function ignoreModule(e) {
+  return call(e, () => api(`/api/hub/modules/${encodeURIComponent(e.module_id)}/dismiss`, { method: "POST" }));
 }
 
 function dismiss(e) { return call(e, () => api("/api/inbox/dismiss", { method: "POST", body: { ids: [e.id] } })); }

@@ -228,13 +228,16 @@ def python_files(a: dict) -> list[str]:
 BRIDGE = """<script>(function(){
 for (const k of ["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCSessionDescription",
                  "RTCIceCandidate","RTCRtpSender","RTCRtpReceiver"]) { try { delete window[k]; } catch (e) {} }
-let seq = 0;
+let seq = 0, busy = 0;
+// a task or a question to Claude under way: <html data-jarvis-occupe> (the running light at the top)
+const occupe = (n) => { busy += n; try { document.documentElement.toggleAttribute("data-jarvis-occupe", busy > 0); } catch (e) {} };
 const QUICK = 20000;  // ms: storage, bar, notification (a question to Claude or a confirmation may take longer)
 const call = (type, data, ms, onProgress) => new Promise((resolve, reject) => {
-  const id = ++seq;
+  const id = ++seq, lourd = type === "executer" || type === "demander";
   const ch = new MessageChannel();
   let timer = 0;
-  const done = () => { clearTimeout(timer); ch.port1.onmessage = null; ch.port1.close(); };
+  const done = () => { clearTimeout(timer); ch.port1.onmessage = null; ch.port1.close(); if (lourd) occupe(-1); };
+  if (lourd) occupe(1);
   ch.port1.onmessage = (ev) => {
     const d = ev.data;
     if (!d || d.jarvisAddon !== 1 || d.id !== id) return;
@@ -296,6 +299,10 @@ _LIGHT = ("--bg:#eef1f5;--bg-2:#f6f8fa;--surface:#fff;--surface-2:#f6f8fa;--surf
           "--ok:#0c8a5b;--warn:#b36b00;--err:#c9304a;--info:#4652c9;--violet:#6f4fd6;"
           "--ok-soft:rgba(12,138,91,.08);--warn-soft:rgba(179,107,0,.08);--err-soft:rgba(201,48,74,.07);"
           "--code-bg:#f3f6f9;--hi:rgba(255,255,255,.85);--sh:15,27,39;--k:.4;color-scheme:light")
+# The motion of the modules (addon_kit.css, addon_kit.js): what appears comes in, figures count up, charts draw.
+_KIT_CSS = Path(__file__).with_name("addon_kit.css").read_text("utf-8")
+_KIT_JS = Path(__file__).with_name("addon_kit.js").read_text("utf-8")
+assert "</" not in _KIT_CSS + _KIT_JS
 STYLE = (
     "<style>@layer jarvis{"
     f":root{{{_DARK};--pc:var(--accent);"
@@ -339,7 +346,7 @@ STYLE = (
     "::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-track{background:transparent}"
     "::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:9px;border:2px solid transparent;background-clip:padding-box}"
     "::-webkit-scrollbar-thumb:hover{background:var(--border-3);border:2px solid transparent;background-clip:padding-box}"
-    "}</style>")
+    + _KIT_CSS + "}</style><script>" + _KIT_JS + "</script>")
 THEMES = {"sombre", "clair", "systeme"}
 _DOCTYPE = re.compile(r"^\s*(?:﻿)?\s*<!doctype\b[^>]*>", re.I)
 _REFRESH = re.compile(r"<meta\b[^>]*\bhttp-equiv\s*=\s*['\"]?\s*refresh\b[^>]*>", re.I)
@@ -363,6 +370,11 @@ def policy(base: str, ancestors: str) -> str:
 
 
 # ---------------------------------------------------------------- the tool "modules" (jarvis server)
+# modules partager / recus / importer (d'avant le hub) : ce que Claude répond
+SHARE_BY_HUB = ("Le partage des modules ne passe plus par toi. Pour en envoyer un à un collègue, l'utilisateur ouvre le "
+                "module et clique sur Partager (en haut de sa fenêtre) : il passe par le hub de l'équipe. Un module reçu "
+                "arrive dans sa boîte de réception, où un clic l'installe. Dis-le-lui en une phrase.")
+
 SPEC = {
     "name": "modules",
     "description": (
@@ -380,11 +392,8 @@ SPEC = {
         "vérification. action = donnees (id) : lit son stockage, pour déboguer. action = executer (id, tache, params) : "
         "lance une tâche Python du module et attend sa fin (son résultat et ses dernières lignes de sortie te "
         "reviennent) ; l'utilisateur valide sur une carte si son code n'est pas encore autorisé. "
-        "action = partager (id, dossier facultatif) : quand l'utilisateur veut envoyer un module à un collègue, le zippe "
-        "dans son OneDrive (dossier « JARVIS - Modules partagés ») et te rend le lien, pour un brouillon de mail. "
-        "action = recus : les modules reçus (zips *.jarvis.zip de son OneDrive, ses Téléchargements, son Bureau). "
-        "action = importer (fichier ou id facultatifs) : installe un module reçu, après validation de l'utilisateur sur une "
-        "carte (un module déjà là est gardé dans .anciens). "
+        "Le partage d'un module avec un collègue ne passe pas par toi : bouton Partager de sa fenêtre, par le hub, et le "
+        "collègue l'installe d'un clic depuis sa boîte de réception. "
         "action = proposer (id, nom, description, "
         "raison) : quand l'utilisateur n'a rien demandé mais qu'un module l'aiderait (un besoin qui revient, un suivi à "
         "garder, un calcul refait à la main), propose-le-lui sur une carte ; son clic vaut demande, et tu l'écris alors "
@@ -394,15 +403,10 @@ SPEC = {
         "type": "object",
         "required": ["action"],
         "properties": {
-            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "executer", "partager",
-                                                         "recus", "importer", "proposer"]},
-            "fichier": {"type": "string", "description": "importer : le chemin du zip reçu (donné par recus) ; sans lui, "
-                                                         "le plus récent reçu (de ce module si id est donné)."},
-            "dossier": {"type": "string", "description": "partager : un autre dossier où déposer le zip (par défaut "
-                                                         "« JARVIS - Modules partagés » du OneDrive)."},
+            "action": {"type": "string", "enum": ["lister", "verifier", "ouvrir", "donnees", "executer", "proposer"]},
             "tache": {"type": "string", "description": "executer : le nom de la tâche dans les « taches » de addon.json."},
             "params": {"type": "object", "description": "executer : les paramètres de la tâche (jarvis.params)."},
-            "id": {"type": "string", "description": "verifier, ouvrir, donnees, executer, partager, importer : le nom du "
+            "id": {"type": "string", "description": "verifier, ouvrir, donnees, executer : le nom du "
                                                     "dossier du module. proposer : "
                                                     "celui du module à créer (minuscules, chiffres, tirets), ou d'un "
                                                     "module existant à améliorer."},

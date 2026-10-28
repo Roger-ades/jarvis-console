@@ -23,7 +23,7 @@ RUN_STATUSES = ("non lancée", "manquée", "reportée")
 
 # todo: what expires first, then what was refused for lack of an answer, the displays, the failures
 _RANK = {"hook": 0, "permission": 0, "question": 1, "plan": 1, "proposal": 1, "expired": 2, "choice": 3,
-         "team_invite": 3, "team_mention": 3, "error": 4, "interrupted": 4, "team_removed": 4}
+         "team_invite": 3, "team_mention": 3, "team_module": 3, "error": 4, "interrupted": 4, "team_removed": 4}
 
 
 def plain(text: str, limit: int = EXCERPT) -> str:

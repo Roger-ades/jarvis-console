@@ -299,7 +299,8 @@ def test_a_new_poste_registers_on_the_built_in_hub(data_dir, monkeypatch):
     assert taken.status_code == 409 and "« pris »" in taken.json()["detail"] and hub.token() == ""
     made = client.post("/api/hub/signup", json={"id": "paul", "name": " Paul   Martin ", "color": "#7DFFB3"})
     assert made.json()["user"]["id"] == "paul"
-    assert sent[-1] == (HUB_URL, "POST", "/api/v1/register", "", HUB_FINGERPRINT,
+    # (the inbox polls the hub right after, in a thread: its calls may come after)
+    assert [c for c in sent if c[2] == "/api/v1/register"][-1] == (HUB_URL, "POST", "/api/v1/register", "", HUB_FINGERPRINT,
                         {"key": REGISTER_KEY, "id": "paul", "name": "Paul Martin", "color": "#7dffb3"})
     assert hub.token() == "T" * 43
     cfg = ConfigStore(data_dir).config.hub

@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS devices (
     created REAL NOT NULL,
     PRIMARY KEY (project_id, user_id, device_id)
 );
+CREATE TABLE IF NOT EXISTS modules (
+    id TEXT PRIMARY KEY,
+    sender_id TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    addon_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    description TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    blob TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created REAL NOT NULL,
+    removed REAL,
+    outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS modules_recipient ON modules(recipient_id, removed);
 """
 
 COLORS = ("#40dcff", "#7dffb3", "#ffb020", "#ff7ad9", "#c9a6ff", "#ff8f6b")
@@ -597,6 +613,95 @@ class HubDB:
             return out
 
         return self._write(go)
+
+    # ---------------------------------------------------------------- modules envoyés d'un JARVIS à l'autre
+    def send_module(self, sender: str, recipients: list[str], info: dict, blob: bytes) -> list[dict]:
+        """Un envoi par destinataire ; le zip n'est gardé qu'une fois. Le même module encore en attente chez
+        un destinataire est remplacé par le nouveau : sa boîte ne montre que le dernier."""
+        digest = hashlib.sha256(blob).hexdigest()
+        folder = self.files / "modules"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{digest}.zip"
+
+        def go():
+            if not path.is_file():   # (sous le verrou : _drop_unused_blobs ne l'enlève pas entre-temps)
+                tmp = folder / f".{digest}.{secrets.token_hex(3)}.tmp"
+                tmp.write_bytes(blob)
+                tmp.replace(path)
+            now, ids = time.time(), []
+            for to in recipients:
+                row = self.db.execute("SELECT revoked FROM users WHERE id=?", (to,)).fetchone()
+                if row is None or row["revoked"] is not None:
+                    raise KeyError(to)
+                self.db.execute(
+                    "UPDATE modules SET removed=?, outcome='remplacé' WHERE recipient_id=? AND addon_id=? "
+                    "AND removed IS NULL", (now, to, info["id"]))
+                mod_id = secrets.token_hex(8)
+                self.db.execute(
+                    "INSERT INTO modules(id, sender_id, recipient_id, addon_id, name, version, description, "
+                    "permissions, blob, size, created) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (mod_id, sender, to, info["id"], info["nom"], info["version"], info["description"],
+                     json.dumps(info["permissions"]), digest, len(blob), now))
+                ids.append(mod_id)
+            self._audit(sender, "module.send", {"module": info["id"], "version": info["version"], "to": recipients})
+            return [_module_row(self.db.execute("SELECT * FROM modules WHERE id=?", (i,)).fetchone()) for i in ids]
+
+        try:
+            return self._write(go)
+        finally:
+            self._drop_unused_blobs()
+
+    def modules_for(self, user_id: str) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute(
+                "SELECT * FROM modules WHERE recipient_id=? AND removed IS NULL ORDER BY created DESC", (user_id,)
+            ).fetchall()
+        return [_module_row(r) for r in rows]
+
+    def module_zip(self, user_id: str, mod_id: str) -> Path | None:
+        with self._lock:
+            row = self.db.execute(
+                "SELECT blob FROM modules WHERE id=? AND recipient_id=? AND removed IS NULL", (mod_id, user_id)
+            ).fetchone()
+        path = self.files / "modules" / f"{row['blob']}.zip" if row else None
+        return path if path and path.is_file() else None
+
+    def close_module(self, user_id: str, mod_id: str, outcome: str) -> dict:
+        """Le destinataire l'a installé ou l'a ignoré : il quitte sa boîte ; le zip part quand plus personne
+        ne l'attend."""
+        def go():
+            row = self.db.execute(
+                "SELECT * FROM modules WHERE id=? AND recipient_id=? AND removed IS NULL", (mod_id, user_id)
+            ).fetchone()
+            if row is None:
+                raise KeyError(mod_id)
+            self.db.execute("UPDATE modules SET removed=?, outcome=? WHERE id=?", (time.time(), outcome, mod_id))
+            self._audit(user_id, "module." + ("install" if outcome == "installé" else "ignore"),
+                        {"module": row["addon_id"], "version": row["version"], "from": row["sender_id"]})
+            return _module_row(row)
+
+        try:
+            return self._write(go)
+        finally:
+            self._drop_unused_blobs()
+
+    def _drop_unused_blobs(self):
+        folder = self.files / "modules"
+        if not folder.is_dir():
+            return
+        with self._lock:
+            kept = {r["blob"] for r in self.db.execute("SELECT DISTINCT blob FROM modules WHERE removed IS NULL")}
+            for f in folder.glob("*.zip"):
+                if f.stem not in kept:
+                    f.unlink(missing_ok=True)
+
+
+def _module_row(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"], "from": row["sender_id"], "to": row["recipient_id"], "addon": row["addon_id"],
+        "name": row["name"], "version": row["version"], "description": row["description"],
+        "permissions": json.loads(row["permissions"] or "[]"), "size": row["size"], "created": row["created"],
+    }
 
 
 def _user(row: sqlite3.Row) -> dict:

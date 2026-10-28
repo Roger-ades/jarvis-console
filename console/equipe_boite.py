@@ -4,7 +4,8 @@ The console asks the hub every 30 s (equipe.loop) and keeps only what the inbox 
 - an invitation: a team project this account was added to and that has no folder on this computer;
 - the Fil and the shared conversations of a linked project: what the others wrote or shared since the user looked;
 - a project the account lost (removed from its members): the folder can be detached;
-- for a hub administrator, a colleague who registered from their JARVIS (the account can be revoked from there).
+- for a hub administrator, a colleague who registered from their JARVIS (the account can be revoked from there);
+- a module a colleague sent through the hub: one click installs it (equipe.py), Claude takes no part.
 Each one is signalled once: "Lu" moves the mark to the latest message, "Ignorer" forgets the invitation.
 Nothing from the hub reaches Claude: these entries are the console's, like the rest of the inbox.
 """
@@ -17,15 +18,16 @@ import time
 from . import inbox as inbox_mod
 
 KEY = "team_inbox"
-KINDS = ("team_invite", "team_message", "team_mention", "team_share", "team_removed", "team_signup")
+KINDS = ("team_invite", "team_message", "team_mention", "team_share", "team_removed", "team_signup", "team_module")
 
 
 class TeamFeed:
     KINDS = KINDS
 
-    def __init__(self, store, changed=lambda: None):
+    def __init__(self, store, changed=lambda: None, installed=lambda info: ""):
         self.store = store
         self.changed = changed            # the engine publishes the inbox again
+        self.installed = installed        # what installing a received module does (engine._installed)
         self._lock = threading.Lock()
         state = store.kv_get(KEY, {}) or {}
         # seen: team -> {"msg": ts, "conv": ts} (what the user has read); dismissed: invitations put away
@@ -46,6 +48,7 @@ class TeamFeed:
         self.gone: dict[str, str] = {}    # team linked here that the hub no longer lists -> folder
         self.names: dict[str, str] = {}   # local names of the linked projects
         self.colors: dict[str, str] = {}
+        self.modules: list[dict] = []     # modules sent to this account, waiting on the hub
 
     # ------------------------------------------------------------ reading the hub
     def poll(self, call, me: dict, linked: dict[str, dict]) -> None:
@@ -62,6 +65,10 @@ class TeamFeed:
                 signups = [e for e in call("GET", "/api/v1/audit").get("entries", []) if e.get("kind") == "user.register"]
             except Exception:  # noqa: BLE001 - the last ones then
                 signups = None
+        try:
+            modules = call("GET", "/api/v1/modules").get("modules", [])
+        except Exception:  # noqa: BLE001 - an older hub, or out of reach: the last ones then
+            modules = self.modules
         listed = {p["id"] for p in projects}
         messages, conversations = {}, {}
         for team in linked:
@@ -82,6 +89,7 @@ class TeamFeed:
             self.names = {t: v.get("name") or "" for t, v in linked.items()}
             self.colors = {t: v.get("color") or "" for t, v in linked.items()}
             self.messages, self.conversations = messages, conversations
+            self.modules = modules
             self.gone = {t: v["folder"] for t, v in linked.items() if t not in listed}
             for team in messages:
                 if team not in self.seen:
@@ -172,6 +180,23 @@ class TeamFeed:
                            "que personne ne l'y ajoute (Projet → Équipe → Membres).",
                 "actions": ["read", "revoke"],
             })
+        for m in self.modules:
+            who = self._who(m.get("from"))
+            version = f" v{m['version']}" if m.get("version") else ""
+            try:
+                state = "" if light or not m.get("addon") else self.installed({"id": m["addon"], "version": m.get("version") or ""})
+            except Exception:  # noqa: BLE001 - the module folder unreadable: say nothing of it
+                state = ""
+            out.append({
+                "id": f"equipe-module:{m['id']}", "section": "todo", "kind": "team_module", "ts": m.get("created") or 0,
+                "module_id": m["id"], "addon": m.get("addon") or "", "version": m.get("version") or "",
+                "title": m.get("name") or m.get("addon") or "", "folder": "", "color": "", "profile": "",
+                "profile_name": "", "from": who, "description": m.get("description") or "",
+                "permissions": m.get("permissions") or [], "size": m.get("size") or 0,
+                "state": "" if state == "pas encore installé" else state,
+                "summary": f"{who} t'envoie le module « {m.get('name') or m.get('addon')} »{version}.",
+                "actions": ["install", "dismiss"],
+            })
         for team, folder in self.gone.items():
             if team in self.gone_dismissed:
                 continue
@@ -228,6 +253,12 @@ class TeamFeed:
             if conv is not None:
                 seen["conv"] = max(seen.get("conv") or 0, conv)
             self._save()
+        self.changed()
+
+    def forget(self, mod_id: str) -> None:
+        """A module installed or put away: the hub no longer lists it, the inbox drops it now."""
+        with self._lock:
+            self.modules = [m for m in self.modules if m.get("id") != mod_id]
         self.changed()
 
     def pending_invitations(self) -> int:

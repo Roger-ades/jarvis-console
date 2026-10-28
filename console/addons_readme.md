@@ -68,6 +68,41 @@ Un module est une page web **isolée** : origine opaque, sans réseau, sans acc�
   `--elev-3` (ombres portées) et `--sink` (creux d'un champ), les polices `--font` et `--mono`. Un bouton
   `class="primary"` (ou `primaire`, ou `type="submit"`) prend la couleur d'accent.
 
+### Animations (automatiques)
+
+Le module reçoit aussi le mouvement de JARVIS, sans rien écrire : ce qui apparaît (cartes, `.chiffre`, lignes de
+tableau, éléments de liste, panneaux qui perdent `hidden`) entre en fondu décalé ; les nombres d'un `.chiffre b`,
+`.kpi b`, `.kpi-valeur` ou `[data-compteur]` défilent jusqu'à leur valeur (même format) ; les graphiques SVG se
+dessinent (barres qui poussent, courbes qui se tracent : une `<polyline>` ou un `<path fill="none">` avec `stroke`) ;
+une `dialog`, un `#tiroir`, un `#toast`, un menu `details` s'ouvrent en douceur ; pendant `jarvis.executer` ou
+`jarvis.demander`, un trait lumineux court en haut (`<html data-jarvis-occupe>`). Un contenu redessiné à l'identique
+ou pendant la saisie ne rejoue rien, et tout s'éteint si le système demande moins d'animations.
+
+- `class="jv-fixe"` sur un bloc : rien n'y bouge (tableau rafraîchi en continu, par exemple) ;
+  `data-compteur="non"` : ce nombre ne défile pas.
+- À utiliser : `jv-chargement` (bloc d'attente lumineux), `<span class="jv-roue">` (roue), `<div class="jv-barre"><i></i></div>`
+  (progression, `style="--v:40%"` sinon va-et-vient), `<span class="jv-vivant">` (point « en direct »), `jv-halo`
+  (lueur qui suit le pointeur, comme sur `.chiffre`). Un `.chiffre` avec `alerte`, `attention`, `ok` ou `info` prend
+  une teinte de cette couleur.
+
+### Tableaux, listes et filtres (automatiques)
+
+Ne pas redonner de style aux `table`, `th`, `td`, `.puce`, champs de recherche ou `select` : le style du module
+passe devant celui de JARVIS (un simple `color: inherit` sur `button` éteint les puces). Garder seulement la
+disposition (largeur, hauteur max, défilement, `white-space`).
+
+- Tableau dans `.tableau` ou `div.table` : cadre, en-tête vitré collant, lignes alternées, survol avec trait, total
+  `tfoot` collant. JARVIS repère seul les cellules chiffrées (alignées, en rouge si négatives, grisées si vides ou
+  « — »), la colonne triée (en-tête finissant par ▲▼↑↓ ou `aria-sort`) qu'il teinte et garnit de barres de grandeur,
+  et les lignes de groupe (une seule cellule `colspan`, ou `tr.groupe`) qui restent collées sous l'en-tête.
+  `data-barres` sur la table : barres dans toutes les colonnes chiffrées. `class="n"` ou `num` : aligné à droite.
+- Recherche : un `input type=search` (ou un champ dans `.filtres`, `.pfiltres`, `.puces`, `.recherche`) a sa loupe,
+  s'élargit au focus, et ses mots sont surlignés dans `tbody`, `.alerte-liste` et tout bloc `data-jv-cherche`.
+  La touche `/` y place le curseur.
+- Barres `.filtres` / `.pfiltres` / `.puces` : posées en barre d'outils. Un filtre utilisé (`select` dont la première
+  option vaut `""`, recherche remplie) s'allume ; `.puce.actif` / `.pfiltre.actif` aussi, avec un point lumineux ;
+  `.discret` ou `.pnb` dans une puce en fait un compteur. `.menu` dans un `details` devient un panneau vitré.
+
 ### window.jarvis
 
 Toutes les fonctions renvoient une promesse ; un refus la rejette avec une `Error` dont le message s'affiche tel quel.
@@ -201,16 +236,13 @@ améliorer un module existant, donne son `id` : la carte le dit.
 
 ## Partager un module avec un collègue
 
-Le partage passe par le OneDrive de l'entreprise, jamais par toi : tu ne recopies pas les fichiers d'un module dans un
-mail ou un chat.
+Le partage ne passe pas par toi : JARVIS le fait seul, par le hub de l'équipe. Tu ne recopies pas les fichiers d'un
+module dans un mail ou un chat, et tu n'as aucune action pour envoyer ou installer un module.
 
-- **Envoyer** (« partage avec Stéphane le module X via mon drive ») : `modules` → `partager` (id). La console zippe le
-  module (`<id>-v<version>.jarvis.zip`, son code et ses fichiers, sans son stockage) dans le dossier
-  « JARVIS - Modules partagés » du OneDrive et te rend le lien web du fichier. Prépare alors un **brouillon** de mail
-  au destinataire (connecteur Office 365) avec ce lien ; l'utilisateur le relit et l'envoie lui-même. Le lien ne
-  s'ouvre chez le destinataire que si ce dossier est partagé avec lui (une fois, depuis OneDrive : Partager).
-- **Recevoir** (« Roger m'a envoyé un module dans mon drive, importe-le ») : `modules` → `recus` liste les zips
-  `*.jarvis.zip` trouvés dans le OneDrive synchronisé, les Téléchargements et le Bureau ; `modules` → `importer`
-  (fichier, ou id, ou rien pour le seul reçu) montre une carte à l'utilisateur, et installe le module à son clic. Un
-  module du même nom déjà installé est gardé dans `.anciens/`. Puis `ouvrir` : ses permissions (claude, python, odoo)
-  sont demandées dans sa fenêtre, comme pour un module écrit ici.
+- **Envoyer** : l'utilisateur ouvre le module et clique sur Partager (en haut de sa fenêtre), puis coche les
+  collègues. La console zippe le module (son code et ses fichiers, sans son stockage) et le dépose sur le hub.
+- **Recevoir** : le module arrive dans la boîte de réception du collègue (« Module reçu »). Un clic sur Installer le
+  pose dans `addons/` et l'ouvre ; un module du même nom déjà installé est gardé dans `.anciens/`. Ses permissions
+  (claude, python, odoo) sont demandées dans sa fenêtre, comme pour un module écrit ici.
+
+Si l'utilisateur te demande de partager ou d'importer un module, dis-lui simplement où cliquer.

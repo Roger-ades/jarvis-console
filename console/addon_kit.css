@@ -1,0 +1,212 @@
+/* The motion and look of the modules and applications, after the console's base style (same layer: any rule of
+   the module wins). It uses only properties the modules seldom set (animation, transition, pseudo-elements,
+   halo shadows) so that it reaches modules already written. The script next to it (addon_kit.js) adds the
+   classes: jv-in (what appears), jv-trace (a curve drawing itself), jv-barres-h (horizontal bars). */
+:root{--ease:cubic-bezier(.2,.8,.2,1);--ease-out:cubic-bezier(.16,1,.3,1);--ease-ressort:cubic-bezier(.34,1.45,.64,1);
+--halo:color-mix(in srgb,var(--pc) 32%,transparent);--trame:color-mix(in srgb,var(--text) 5%,transparent)}
+
+/* ambience: a light from above in the module's color and a fine grid fading out, under everything */
+html::before,html::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none}
+html::before{background:radial-gradient(90% 55% at 50% -12%,color-mix(in srgb,var(--pc) 10%,transparent),transparent 70%)}
+html::after{background:radial-gradient(circle at 1px 1px,var(--trame) 1px,transparent 1.6px) 0 0/22px 22px;
+-webkit-mask-image:linear-gradient(180deg,#000,transparent 55%);mask-image:linear-gradient(180deg,#000,transparent 55%)}
+
+/* the module's top bar: a hairline of its color */
+body>header{position:relative}
+body>header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;pointer-events:none;
+background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--pc) 70%,transparent) 30%,color-mix(in srgb,var(--pc) 70%,transparent) 70%,transparent);opacity:.55}
+
+/* busy (a task or a question to Claude under way): the console's running light at the top */
+html[data-jarvis-occupe]{cursor:progress}
+html[data-jarvis-occupe] body::before{content:"";position:fixed;top:0;left:0;right:0;height:2px;z-index:2147483647;pointer-events:none;
+background:linear-gradient(90deg,transparent,var(--pc),color-mix(in srgb,var(--pc) 40%,#fff),var(--pc),transparent) no-repeat;
+background-size:34% 100%;animation:jv-run 1.6s cubic-bezier(.45,.05,.55,.95) infinite;
+filter:drop-shadow(0 0 4px var(--halo))}
+:is(#attente,.attente):not([hidden]){overflow:hidden}
+:is(#attente,.attente):not([hidden])::after{content:"";position:absolute;inset:0;pointer-events:none;
+background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.22) 50%,transparent 70%) no-repeat;background-size:40% 100%;
+animation:jv-run 1.8s linear infinite}
+:is(#attente,.attente){position:relative}
+
+/* what appears comes in (jv-in, put by the script, with --jv-i its rank among its brothers) */
+.jv-in{animation:jv-in .46s var(--ease-out) both;animation-delay:calc(var(--jv-i,0)*34ms)}
+tr.jv-in,li.jv-in,.alerte-liste>div.jv-in{animation-name:jv-in-ligne;animation-duration:.34s;animation-delay:calc(var(--jv-i,0)*18ms)}
+
+/* charts draw themselves: bars grow, curves trace, points and slices come in */
+svg.jv-in{animation:none}
+svg.jv-in rect{transform-box:fill-box;transform-origin:50% 100%;animation:jv-pousse .62s var(--ease-out) both}
+svg.jv-in.jv-barres-h rect{transform-origin:0 50%;animation-name:jv-pousse-h}
+svg.jv-in .jv-trace{stroke-dasharray:1;stroke-dashoffset:1;animation:jv-trace 1s var(--ease-out) .2s forwards}
+svg.jv-in circle{transform-box:fill-box;transform-origin:center;animation:jv-point .4s var(--ease-ressort) .55s both}
+svg.jv-in path:not(.jv-trace,[fill=none]){transform-box:view-box;transform-origin:center;animation:jv-tranche .55s var(--ease-out) both}
+svg.jv-in text{animation:jv-fond .5s ease .25s both}
+@supports (animation-delay:calc(sibling-index()*1ms)){
+svg.jv-in rect{animation-delay:calc(min(sibling-index(),60)*7ms)}
+svg.jv-in path:not(.jv-trace,[fill=none]){animation-delay:calc(min(sibling-index(),24)*40ms)}}
+svg rect,svg path,svg circle{transition:filter .18s,opacity .18s}
+svg rect:hover,svg path:not(.jv-trace):hover{filter:brightness(1.15) saturate(1.1)}
+svg circle:hover{filter:drop-shadow(0 0 4px currentColor)}
+
+/* cards and key figures: light relief, a halo following the pointer, the status color washing in from the edge */
+.carte,.card{transition:border-color .25s,box-shadow .25s,translate .25s var(--ease)}
+:is(.carte,.card):is(.clic,[onclick],a):hover{translate:0 -2px;box-shadow:var(--elev-2),0 0 0 1px var(--halo)}
+.chiffre,.kpi,.jv-halo{position:relative;isolation:isolate;overflow:hidden;
+transition:border-color .25s,box-shadow .25s,translate .25s var(--ease)}
+.chiffre::before,.kpi::before,.jv-halo::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:0;transition:opacity .3s;
+background:radial-gradient(220px circle at var(--mx,50%) var(--my,-30%),color-mix(in srgb,var(--pc) 15%,transparent),transparent 70%)}
+.chiffre:hover::before,.kpi:hover::before,.jv-halo:hover::before{opacity:1}
+.chiffre::after,.kpi::after{content:"";position:absolute;inset:0 auto 0 0;width:60%;z-index:-1;pointer-events:none;
+background:linear-gradient(90deg,color-mix(in srgb,var(--jv-c,transparent) 13%,transparent),transparent)}
+:is(.chiffre,.kpi).alerte{--jv-c:var(--err)}:is(.chiffre,.kpi).attention{--jv-c:var(--warn)}
+:is(.chiffre,.kpi).ok{--jv-c:var(--ok)}:is(.chiffre,.kpi).info{--jv-c:var(--info)}
+:is(.chiffre,.kpi) b{font-family:var(--font-display);letter-spacing:-.01em}
+:is(.chiffre,.kpi):is(.clic,[onclick]):hover{translate:0 -2px;box-shadow:var(--elev-2),0 0 0 1px var(--halo)}
+:is(.chiffre,.kpi):is(.clic,[onclick]):active{translate:0;transition-duration:.08s}
+
+/* buttons: answer the hand; the main one has a sheen passing over and a halo */
+button,.bouton,.puce,nav a{transition:background-color .18s,border-color .18s,color .18s,box-shadow .22s,scale .12s}
+button:not(:disabled):active,.bouton:not(:disabled):active,.puce:active{scale:.97}
+:is(button.primary,button.primaire,button[type=submit],.bouton.principal){position:relative;overflow:hidden}
+:is(button.primary,button.primaire,button[type=submit],.bouton.principal)::after{content:"";position:absolute;inset:0;pointer-events:none;
+background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.3) 50%,transparent 65%);translate:-120% 0;transition:translate .7s var(--ease)}
+:is(button.primary,button.primaire,button[type=submit],.bouton.principal):not(:disabled):hover::after{translate:120% 0}
+:is(button.primary,button.primaire,button[type=submit],.bouton.principal):not(:disabled):hover{
+box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent),0 6px 18px -6px color-mix(in srgb,var(--accent) 65%,transparent)}
+:is(nav button,[role=tab]):is(.actif,.active,[aria-selected=true]){
+box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent),0 4px 14px -6px color-mix(in srgb,var(--accent) 80%,transparent)}
+.pastille{animation:jv-point .45s var(--ease-ressort) .2s both}
+
+/* fields: a halo when focused */
+input,select,textarea{transition:border-color .18s,box-shadow .2s}
+:is(input:not([type=checkbox],[type=radio],[type=range],[type=color]),select,textarea):focus{
+box-shadow:var(--sink),0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent);outline:none}
+
+/* tables made to be read at length. The frame (.tableau, div.table) holds a header of frosted glass that stays,
+   a total line that stays at the bottom, and the open group's line under the header. Rows alternate faintly, the
+   row under the pointer takes the module's color. The script marks the cells: jv-num (a figure: aligned digits),
+   jv-neg (below zero), jv-nul (zero or a dash: dimmed), the sorted column (jv-trie on its title, jv-col on its
+   cells, with a bar of each value's size: jv-mesure, --jv-p), and jv-groupe (a line of one cell across). */
+:is(.tableau,div.table){border:1px solid var(--border-2);border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--elev-1)}
+:is(.tableau,div.table) table{border-collapse:separate;border-spacing:0;width:100%}
+:is(.tableau,div.table) :is(th,td){padding:6px 10px}
+:is(.tableau,div.table) thead th{position:sticky;top:0;z-index:2;border-bottom:0;
+background:color-mix(in srgb,var(--surface-2) 80%,transparent);-webkit-backdrop-filter:blur(10px) saturate(1.3);backdrop-filter:blur(10px) saturate(1.3);
+box-shadow:inset 0 -1px 0 var(--border-2)}
+thead th{color:var(--text-3);font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;white-space:nowrap;transition:color .15s,box-shadow .2s}
+thead th.jv-trie{color:var(--pc);box-shadow:inset 0 -2px 0 var(--pc)}
+tbody td{border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent);transition:background-color .15s}
+tbody>tr:nth-child(even):not(.groupe,.jv-groupe)>td{background-color:color-mix(in srgb,var(--text) 2.6%,transparent)}
+tbody>tr:hover>td,tbody>tr:hover:nth-child(even)>td{background-color:color-mix(in srgb,var(--pc) 9%,transparent)}
+tbody tr:hover>td:first-child{box-shadow:inset 2px 0 0 var(--pc)}
+:is(td,th).jv-num,td.n,th.n,td.num,th.num{font-variant-numeric:tabular-nums}
+td.n,th.n,td.num,th.num{text-align:right}
+td.jv-neg{color:color-mix(in srgb,var(--err) 85%,var(--text))}
+td.jv-nul{color:var(--text-4)}
+td.jv-col{background-color:color-mix(in srgb,var(--pc) 4.5%,transparent)}
+td.jv-mesure{background-image:linear-gradient(270deg,color-mix(in srgb,var(--pc) 17%,transparent),color-mix(in srgb,var(--pc) 4%,transparent));
+background-repeat:no-repeat;background-position:right 2px center;background-size:calc(var(--jv-p,0%) - 4px) calc(100% - 12px);
+transition:background-color .15s,background-size .5s var(--ease-out)}
+td.jv-mesure:not(.n,.num,.jv-droite){background-image:linear-gradient(90deg,color-mix(in srgb,var(--pc) 17%,transparent),color-mix(in srgb,var(--pc) 4%,transparent));background-position:left 2px center}
+td.jv-mesure.jv-neg{background-image:linear-gradient(270deg,color-mix(in srgb,var(--err) 20%,transparent),color-mix(in srgb,var(--err) 6%,transparent))}
+/* a group: a section title with the module's mark, which stays under the header while its rows go by */
+:is(tr.groupe,tr.jv-groupe)>td{font-weight:600;background-color:color-mix(in srgb,var(--pc) 7%,var(--surface));border-bottom-color:var(--border-2)}
+:is(tr.groupe,tr.jv-groupe)>td:first-child{box-shadow:inset 3px 0 0 var(--pc)}
+tr.groupe.niv1>td{font-weight:500;background-color:color-mix(in srgb,var(--pc) 3%,var(--surface))}
+tr.groupe.niv1>td:first-child{box-shadow:inset 2px 0 0 color-mix(in srgb,var(--pc) 55%,transparent)}
+:is(tr.groupe,tr.jv-groupe):hover>td{background-color:color-mix(in srgb,var(--pc) 13%,var(--surface))}
+:is(.tableau,div.table) :is(tr.groupe:not(.niv1),tr.jv-groupe)>td{position:sticky;top:var(--jv-th,30px);z-index:1}
+:is(.tableau,div.table) tfoot td{position:sticky;bottom:0;z-index:2;font-weight:600;border:0;
+background:color-mix(in srgb,var(--surface-2) 86%,transparent);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+box-shadow:inset 0 1px 0 color-mix(in srgb,var(--pc) 45%,var(--border-2))}
+/* what a search finds lights up where it is, in the rows and lists (the script, by the CSS highlights) */
+::-webkit-scrollbar-corner{background:transparent}
+::highlight(jv-trouve){background-color:color-mix(in srgb,var(--pc) 38%,transparent);color:var(--text)}
+
+/* lists of alerts or items: airy lines, the one under the pointer lit */
+.alerte-liste>div{padding:7px 10px;border-radius:var(--r);border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent);transition:background-color .15s}
+.alerte-liste>div:last-child{border-bottom:0}
+.alerte-liste>div:hover{background-color:color-mix(in srgb,var(--pc) 6%,transparent)}
+
+/* filter bars: a panel of tools rather than loose controls. The search field carries its magnifier and the "/"
+   key that reaches it; a filter that narrows what is shown (jv-actif, put by the script on a search with text, a
+   date, a list away from its first "all" choice) takes the module's color, so what filters the view is seen. */
+:root{
+--jv-loupe:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b95a7' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='4.6'/%3E%3Cpath d='m10.5 10.5 3.2 3.2'/%3E%3C/svg%3E");
+--jv-touche:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18' fill='none' stroke='%238b95a7' stroke-width='1.2' stroke-linecap='round'%3E%3Crect x='.75' y='.75' width='16.5' height='16.5' rx='4' stroke-opacity='.5'/%3E%3Cpath d='m10.6 5.2-3.2 7.6'/%3E%3C/svg%3E");
+--jv-chevron:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='m2 3.8 3 3 3-3' fill='none' stroke='%238b95a7' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+--jv-croix:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7' fill='%238b95a7' fill-opacity='.8'/%3E%3Cpath d='m5.6 5.6 4.8 4.8m0-4.8-4.8 4.8' stroke='%23fff' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")}
+:is(.filtres,.pfiltres){display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px;margin-bottom:10px;
+border:1px solid var(--border-2);border-radius:var(--r-lg);box-shadow:inset 0 1px 0 var(--hi),var(--elev-1);
+background:linear-gradient(180deg,var(--surface-2),color-mix(in srgb,var(--surface-2) 55%,var(--surface)))}
+.puces{display:flex;flex-wrap:wrap;gap:6px;padding:5px;border:1px solid var(--border);border-radius:var(--r-lg);background:color-mix(in srgb,var(--surface-2) 60%,transparent)}
+input[type=search]{min-width:240px;padding-left:30px;padding-right:30px;background-image:var(--jv-loupe),var(--jv-touche);background-repeat:no-repeat;
+background-position:10px 50%,right 8px center;background-size:14px,16px;transition:border-color .18s,box-shadow .2s,min-width .3s var(--ease),background-color .2s}
+input[type=search]:is(:focus,.jv-actif){background-image:var(--jv-loupe);padding-right:9px}
+:is(.filtres,.pfiltres,.puces) input[type=search]:focus{min-width:min(340px,100%)}
+input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;width:15px;height:15px;margin-left:6px;cursor:pointer;
+background:var(--jv-croix) center/15px no-repeat;opacity:.75;transition:opacity .15s}
+input[type=search]::-webkit-search-cancel-button:hover{opacity:1}
+select:not([multiple],[size]){-webkit-appearance:none;appearance:none;padding-right:26px;
+background-image:var(--jv-chevron);background-repeat:no-repeat;background-position:right 9px center;background-size:10px}
+:is(input,select).jv-actif{border-color:color-mix(in srgb,var(--pc) 65%,transparent);
+background-color:color-mix(in srgb,var(--pc) 9%,var(--bg-2));box-shadow:var(--sink),0 0 0 1px color-mix(in srgb,var(--pc) 22%,transparent)}
+/* chips: the chosen one lit with a point of light rather than filled */
+:is(.puce,.pfiltre){display:inline-flex;align-items:center;gap:6px;padding:4px 11px;border-radius:999px;border:1px solid var(--border-2);
+background:var(--surface);color:var(--text-2);font-size:12.5px;line-height:1.35;cursor:pointer;white-space:nowrap;user-select:none;list-style:none;
+box-shadow:inset 0 1px 0 var(--hi)}
+.puce::-webkit-details-marker{display:none}
+:is(.puce,.pfiltre):hover{border-color:color-mix(in srgb,var(--pc) 55%,var(--border-2));color:var(--text);background:var(--surface-2)}
+:is(.puce,.pfiltre).actif,details[open]>summary.puce{color:var(--text);font-weight:600;border-color:color-mix(in srgb,var(--pc) 65%,transparent);
+background:color-mix(in srgb,var(--pc) 15%,var(--surface));box-shadow:inset 0 1px 0 var(--hi),0 0 0 1px color-mix(in srgb,var(--pc) 22%,transparent),0 4px 14px -6px color-mix(in srgb,var(--pc) 70%,transparent)}
+:is(.puce,.pfiltre).actif::before{content:"";width:6px;height:6px;margin-left:-3px;border-radius:50%;background:var(--pc);box-shadow:0 0 6px var(--pc);
+animation:jv-point .35s var(--ease-ressort) both}
+:is(.puce,.pfiltre) :is(.discret,.pnb){min-width:20px;padding:0 6px;border-radius:9px;font-size:11px;font-weight:600;text-align:center;opacity:1;
+color:var(--text-3);background:color-mix(in srgb,var(--text) 8%,transparent)}
+:is(.puce,.pfiltre).actif :is(.discret,.pnb){color:var(--text);background:color-mix(in srgb,var(--pc) 25%,transparent)}
+/* menus that drop from a filter: frosted glass, the choice under the pointer lit */
+:is(details.menu-filtre,.filtres) .menu{background:color-mix(in srgb,var(--surface) 86%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
+border:1px solid var(--border-2);border-radius:var(--r-lg);box-shadow:var(--elev-3),inset 0 1px 0 var(--hi)}
+.menu label.opt{padding:3px 8px;border-radius:6px;transition:background-color .12s}
+.menu label.opt:hover{background-color:color-mix(in srgb,var(--pc) 10%,transparent)}
+
+/* what opens: dialogs, side panels, menus, notices */
+dialog[open]{animation:jv-fenetre .3s var(--ease-out)}
+dialog[open]::backdrop{animation:jv-fond .25s ease}
+:is(#tiroir,.tiroir):not([hidden]){animation:jv-tiroir .34s var(--ease-out)}
+details[open]>summary~*{animation:jv-menu .2s var(--ease-out)}
+:is(#toast,.toast):not([hidden]){animation:jv-toast .38s var(--ease-ressort)}
+.vide,.empty{animation:jv-fond .4s ease both}
+
+/* ready-made pieces for new modules: loading placeholder, wheel, progress line */
+.jv-chargement,.chargement{display:block;min-height:14px;border-radius:var(--r);color:transparent!important;
+background:linear-gradient(100deg,var(--surface-2) 30%,color-mix(in srgb,var(--pc) 14%,var(--surface-3)) 50%,var(--surface-2) 70%) 0 0/250% 100%;
+animation:jv-lueur 1.4s linear infinite}
+.jv-roue{display:inline-block;width:14px;height:14px;border-radius:50%;vertical-align:-2px;
+border:2px solid color-mix(in srgb,var(--pc) 25%,transparent);border-top-color:var(--pc);animation:jv-tour .8s linear infinite}
+.jv-barre{position:relative;height:4px;border-radius:4px;overflow:hidden;background:var(--surface-3)}
+.jv-barre>i{position:absolute;inset:0 auto 0 0;width:var(--v,0%);border-radius:inherit;transition:width .5s var(--ease);
+background:linear-gradient(90deg,var(--accent-2),var(--pc));box-shadow:0 0 8px var(--halo)}
+.jv-barre:not([style*="--v"])>i{width:34%;animation:jv-va-vient 1.3s var(--ease) infinite alternate}
+.jv-vivant{position:relative;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);vertical-align:1px}
+.jv-vivant::after{content:"";position:absolute;inset:0;border-radius:inherit;background:inherit;animation:jv-onde 1.8s ease-out infinite}
+
+@keyframes jv-run{from{background-position:-50% 0}to{background-position:150% 0}}
+@keyframes jv-in{from{opacity:0;translate:0 10px}}
+@keyframes jv-in-ligne{from{opacity:0;translate:-8px 0}}
+@keyframes jv-pousse{from{scale:1 0}}
+@keyframes jv-pousse-h{from{scale:0 1}}
+@keyframes jv-trace{to{stroke-dashoffset:0}}
+@keyframes jv-point{from{opacity:0;scale:.2}}
+@keyframes jv-tranche{from{opacity:0;scale:.86}}
+@keyframes jv-fond{from{opacity:0}}
+@keyframes jv-fenetre{from{opacity:0;translate:0 12px;scale:.97}}
+@keyframes jv-tiroir{from{opacity:0;translate:28px 0}}
+@keyframes jv-menu{from{opacity:0;translate:0 -4px}}
+@keyframes jv-toast{from{opacity:0;translate:0 14px}}
+@keyframes jv-lueur{to{background-position:-150% 0}}
+@keyframes jv-tour{to{rotate:1turn}}
+@keyframes jv-va-vient{from{left:-34%}to{left:100%}}
+@keyframes jv-onde{to{scale:2.6;opacity:0}}
+
+@media (prefers-reduced-motion:reduce){
+*,::before,::after{animation-duration:1ms!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:1ms!important}}

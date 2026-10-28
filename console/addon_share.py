@@ -1,12 +1,10 @@
-"""Sharing a module between two JARVIS: a zip through the OneDrive of the company.
+"""Sending a module from one JARVIS to another through the team hub (hub/app.py, /api/v1/modules).
 
-The sender's console writes `<id>-v<version>.jarvis.zip` into a folder of his OneDrive, synchronised by the
-OneDrive client ("JARVIS - Modules partagés" by default), and gives Claude the file's web address (computed
-from the synchronised libraries the client registers) for a mail draft. Shared once with the team, the folder
-shows up in the colleagues' OneDrive. The recipient's console looks for such zips in the synchronised folders,
-Downloads and the Desktop, and installs one in addons/ after the user's click; a module already there is kept
-in addons/.anciens/. The zip holds the module's folder and partage.json (who, when, which version), no storage.
-A zip is data from someone else: every name is checked before anything is written, nothing leaves the module.
+The sender's console zips the module (its folder and partage.json: who, when, which version; never its storage)
+and gives it to the hub for the colleagues picked in the module's window. The zip waits in the recipient's inbox
+(console/equipe_boite.py), where one click installs it in addons/; a module already there is kept in
+addons/.anciens/. Claude takes no part in it. A zip is data from someone else: every name is checked before
+anything is written, nothing leaves the module.
 """
 from __future__ import annotations
 
@@ -19,94 +17,16 @@ import stat
 import time
 import zipfile
 from pathlib import Path
-from urllib.parse import quote
 
 from . import addons
 
-SHARE_FOLDER = "JARVIS - Modules partagés"
 SUFFIX = ".jarvis.zip"
 INFO = "partage.json"
 OLD = ".anciens"
-_NAME = re.compile(r"\.jarvis(?:\s*\(\d+\))?\.zip$", re.I)   # a browser's "x.jarvis (1).zip" too
-WALK_DIRS = 4000         # folders looked at, at most, when looking for received modules
-FOUND = 20
 
 
 class ShareError(Exception):
     pass
-
-
-# ---------------------------------------------------------------- where the drive is
-def drive_roots() -> list[dict]:
-    """The folders the OneDrive client synchronises, with their web address: [{"path", "url", "personal"}]."""
-    out: list[dict] = []
-    seen: set[str] = set()
-
-    def add(path: str, url: str = "", personal: bool = False):
-        key = os.path.normcase(os.path.normpath(path or ""))
-        if not path or key in seen or not os.path.isdir(path):
-            return
-        seen.add(key)
-        out.append({"path": os.path.normpath(path), "url": url, "personal": personal})
-
-    if os.name == "nt":
-        try:
-            import winreg
-            base = r"Software\SyncEngines\Providers\OneDrive"
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as k:
-                i = 0
-                while True:
-                    try:
-                        name = winreg.EnumKey(k, i)
-                    except OSError:
-                        break
-                    i += 1
-                    try:
-                        with winreg.OpenKey(k, name) as sub:
-                            vals = {}
-                            for v in ("MountPoint", "UrlNamespace", "LibraryType"):
-                                try:
-                                    vals[v] = str(winreg.QueryValueEx(sub, v)[0] or "")
-                                except OSError:
-                                    vals[v] = ""
-                    except OSError:
-                        continue
-                    add(vals["MountPoint"], vals["UrlNamespace"], vals["LibraryType"] in ("personal", "mysite"))
-        except (ImportError, OSError):
-            pass
-    for var in ("OneDriveCommercial", "OneDrive", "OneDriveConsumer"):
-        add(os.environ.get(var, ""), "", True)
-    # the personal OneDrive first: it is where a module is shared from
-    return sorted(out, key=lambda r: not r["personal"])
-
-
-def account() -> str:
-    """Who shares: the address of the work OneDrive account, else the Windows user."""
-    if os.name == "nt":
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\OneDrive\Accounts\Business1") as k:
-                mail = str(winreg.QueryValueEx(k, "UserEmail")[0] or "")
-                if mail:
-                    return mail
-        except (ImportError, OSError):
-            pass
-    return os.environ.get("USERNAME") or os.environ.get("USER") or ""
-
-
-def default_dir(roots: list[dict]) -> Path | None:
-    return Path(roots[0]["path"]) / SHARE_FOLDER if roots else None
-
-
-def web_url(path: Path, roots: list[dict]) -> str:
-    """The SharePoint/OneDrive address of a synchronised file or folder, "" when it is not in one."""
-    p = os.path.normcase(os.path.normpath(str(path)))
-    for r in sorted(roots, key=lambda r: -len(r["path"])):
-        root = os.path.normcase(r["path"])
-        if r["url"] and (p == root or p.startswith(root.rstrip("\\/") + os.sep)):
-            rel = os.path.relpath(str(path), r["path"]).replace("\\", "/")
-            return r["url"].rstrip("/") + "/" + ("" if rel == "." else quote(rel))
-    return ""
 
 
 # ---------------------------------------------------------------- export
@@ -214,51 +134,3 @@ def install(path: Path, root: Path) -> dict:
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
     return {**info, "ancien": str(kept) if kept else "", "module": addons.read(final)}
-
-
-# ---------------------------------------------------------------- what was received
-def places(roots: list[dict]) -> list[tuple[Path, int]]:
-    """Where a received module is looked for, with how deep: the synchronised folders, Downloads, the Desktop."""
-    home = Path.home()
-    out = [(Path(r["path"]), 4) for r in roots]
-    out += [(home / "Downloads", 1), (home / "Téléchargements", 1), (home / "Desktop", 1), (home / "Bureau", 1)]
-    seen, kept = set(), []
-    for p, depth in out:
-        key = os.path.normcase(str(p))
-        if key not in seen and p.is_dir():
-            seen.add(key)
-            kept.append((p, depth))
-    return kept
-
-
-def find(where: list[tuple[Path, int]], limit: int = FOUND) -> list[Path]:
-    """The module zips (name *.jarvis.zip) of these folders, most recent first. Only names are read: a file
-    kept online by OneDrive is not downloaded for that."""
-    found, budget = [], WALK_DIRS
-    for base, depth in where:
-        stack = [(base, 0)]
-        while stack and budget > 0:
-            d, lvl = stack.pop()
-            budget -= 1
-            try:
-                with os.scandir(d) as it:
-                    for e in it:
-                        if e.name.startswith((".", "$")) or e.name in addons.SKIP:
-                            continue
-                        try:
-                            if e.is_dir(follow_symlinks=False):
-                                if lvl < depth and e.name.lower() not in ("node_modules", "appdata"):
-                                    stack.append((Path(e.path), lvl + 1))
-                            elif _NAME.search(e.name):
-                                found.append(Path(e.path))
-                        except OSError:
-                            continue
-            except OSError:
-                continue
-
-    def mtime(p: Path) -> float:
-        try:
-            return p.stat().st_mtime
-        except OSError:
-            return 0.0
-    return sorted(found, key=mtime, reverse=True)[:limit]

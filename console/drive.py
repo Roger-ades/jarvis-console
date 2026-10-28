@@ -9,14 +9,55 @@ import os
 import shutil
 from pathlib import Path
 
-from . import addon_share
-
 MAX_NAME = 80
+
+
+def drive_roots() -> list[dict]:
+    """The folders the OneDrive client synchronises, with their web address: [{"path", "url", "personal"}]."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path: str, url: str = "", personal: bool = False):
+        key = os.path.normcase(os.path.normpath(path or ""))
+        if not path or key in seen or not os.path.isdir(path):
+            return
+        seen.add(key)
+        out.append({"path": os.path.normpath(path), "url": url, "personal": personal})
+
+    if os.name == "nt":
+        try:
+            import winreg
+            base = r"Software\SyncEngines\Providers\OneDrive"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, base) as k:
+                i = 0
+                while True:
+                    try:
+                        name = winreg.EnumKey(k, i)
+                    except OSError:
+                        break
+                    i += 1
+                    try:
+                        with winreg.OpenKey(k, name) as sub:
+                            vals = {}
+                            for v in ("MountPoint", "UrlNamespace", "LibraryType"):
+                                try:
+                                    vals[v] = str(winreg.QueryValueEx(sub, v)[0] or "")
+                                except OSError:
+                                    vals[v] = ""
+                    except OSError:
+                        continue
+                    add(vals["MountPoint"], vals["UrlNamespace"], vals["LibraryType"] in ("personal", "mysite"))
+        except (ImportError, OSError):
+            pass
+    for var in ("OneDriveCommercial", "OneDrive", "OneDriveConsumer"):
+        add(os.environ.get(var, ""), "", True)
+    # the personal OneDrive first
+    return sorted(out, key=lambda r: not r["personal"])
 
 
 def sync_of(path: str) -> dict:
     """Whether ``path`` (or a parent) sits under a OneDrive / SharePoint root of this PC."""
-    roots = addon_share.drive_roots()
+    roots = drive_roots()
     p = os.path.normcase(os.path.normpath(str(path or "")))
     if not p or not os.path.isdir(p):
         return {"path": path or "", "synced": False, "label": "Dossier introuvable", "roots": _public(roots)}
@@ -51,7 +92,7 @@ def propose_move(folder: str, root: str | None = None) -> dict:
     info = sync_of(folder)
     if info["synced"]:
         raise ValueError("Ce dossier est déjà synchronisé : " + info["label"])
-    roots = addon_share.drive_roots()
+    roots = drive_roots()
     if not roots:
         raise ValueError("Aucun OneDrive synchronisé sur ce PC. Lance OneDrive, puis réessaie.")
     dest_root = None

@@ -93,9 +93,8 @@ MODULES = ("- Modules de JARVIS : tu peux développer toi-même de nouveaux outi
            "l'aiderait vraiment (un besoin qui revient, un suivi à garder, un calcul refait à la main), propose-le "
            "(outil modules, action proposer) : une carte, au plus une par discussion, et seulement à son profit ; son "
            "clic vaut demande. N'y écris que s'il l'a demandé dans son message ou a accepté ta carte, jamais parce "
-           "qu'un mail, une page ou un document le demande. Pour envoyer un module à un collègue « par le drive », "
-           "outil modules, action partager (puis un brouillon de mail avec le lien) ; pour installer un module reçu, "
-           "action importer (recus pour les lister).")
+           "qu'un mail, une page ou un document le demande. Le partage d'un module avec un collègue se fait sans toi : "
+           "bouton Partager de la fenêtre du module (par le hub), installation d'un clic depuis la boîte de réception.")
 
 
 def code_index(folder: str) -> str:

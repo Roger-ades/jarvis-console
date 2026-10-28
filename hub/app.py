@@ -22,6 +22,7 @@ from .db import HubDB
 from .live import Live
 
 MAX_ARCHIVE = 50 * 1024 * 1024
+MAX_MODULE = 25 * 1024 * 1024    # un module fait 20 Mo au plus une fois dézippé (console/addons.py)
 
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -389,7 +390,67 @@ def create_app(db: HubDB) -> FastAPI:
             raise HTTPException(422, {"error": str(exc)}) from exc
         return {"api": API, "message": message}
 
+    # Un module envoyé d'un JARVIS à l'autre : le zip attend dans la boîte du destinataire, qui l'installe d'un clic.
+    @app.post("/api/v1/modules", status_code=201)
+    async def send_module(request: Request, user: dict = Depends(current_user)):
+        blob = await request.body()
+        if len(blob) > MAX_MODULE:
+            raise HTTPException(413, {"error": "module trop lourd"})
+        to = sorted({t.strip() for t in (request.query_params.get("to") or "").split(",") if t.strip()} - {user["id"]})
+        if not to or len(to) > 50:
+            raise HTTPException(400, {"error": "destinataires requis"})
+        info = _module_info(blob)
+        if info is None:
+            raise HTTPException(422, {"error": "ce n'est pas un module JARVIS"})
+        try:
+            sent = db.send_module(user["id"], to, info, blob)
+        except KeyError as exc:
+            raise HTTPException(404, {"error": f"compte inconnu : {exc.args[0]}"}) from None
+        return {"api": API, "modules": sent}
+
+    @app.get("/api/v1/modules")
+    def received_modules(user: dict = Depends(current_user)):
+        return {"api": API, "modules": db.modules_for(user["id"])}
+
+    @app.get("/api/v1/modules/{mod_id}/archive")
+    def module_archive(mod_id: str, user: dict = Depends(current_user)):
+        path = db.module_zip(user["id"], mod_id)
+        if path is None:
+            raise HTTPException(404, {"error": "introuvable"})
+        return Response(path.read_bytes(), media_type="application/zip")
+
+    @app.delete("/api/v1/modules/{mod_id}")
+    def close_module(mod_id: str, user: dict = Depends(current_user), outcome: str = "ignoré"):
+        if outcome not in ("installé", "ignoré"):
+            raise HTTPException(400, {"error": "installé ou ignoré"})
+        try:
+            db.close_module(user["id"], mod_id, outcome)
+        except KeyError:
+            raise HTTPException(404, {"error": "introuvable"}) from None
+        return {"api": API, "ok": True}
+
     return app
+
+
+def _module_info(blob: bytes) -> dict | None:
+    """Ce que la boîte du destinataire affiche, lu dans partage.json du zip (console/addon_share.py). La console
+    qui l'installe revérifie tout le zip : le hub ne fait que le garder."""
+    import io
+    import json
+    import zipfile
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            info = json.loads(z.read("partage.json").decode("utf-8-sig"))
+    except (zipfile.BadZipFile, KeyError, ValueError, OSError):
+        return None
+    if not isinstance(info, dict) or not _ID.match(str(info.get("id") or "")):
+        return None
+    perms = info.get("permissions") if isinstance(info.get("permissions"), list) else []
+
+    def text(key, limit):
+        return " ".join(str(info.get(key) or "").split())[:limit]
+    return {"id": info["id"], "nom": text("nom", 80) or info["id"], "version": text("version", 20),
+            "description": text("description", 400), "permissions": sorted({str(x)[:20] for x in perms})[:10]}
 
 
 def current_user(request: Request) -> dict:
