@@ -13,27 +13,30 @@ dans [boite-de-reception.md](boite-de-reception.md), celui du travail en équipe
 Statuts : **Fait** (en place et utilisé), **En cours**, **Partiel** (une partie existe, le reste est
 décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision à prendre avant).
 
-## Point au 5 octobre 2026
+## Point au 29 octobre 2026
 
 | Chantier | Statut |
 |---|---|
 | « Ce que je regarde », différences et annulation des fichiers | Fait |
-| JARVIS intégré au bureau (Electron), sites connectés, notifications | Fait |
+| JARVIS intégré au bureau (Electron), sites connectés, notifications | Fait (barre JARVIS sous macOS en panneau, comme Spotlight, le 28 octobre) |
 | Boîte de réception, brief du matin, actions du compte en boutons | Fait (à essayer encore sous Windows) |
-| Aperçu Office, index des documents | Fait |
+| Aperçu Office, éditeur intégré, index des documents | Fait |
 | Bloc `formulaire`, cartes du rapport | Fait |
 | Widgets du bureau (fenêtres natives en mode intégré) | Fait |
+| Rubrique Aide (F1), menu « / » en français | Fait |
+| Modules écrits par Claude, et leur partage entre collègues par le hub | Fait |
+| **Compétences** : page dédiée, groupes imbriqués, rangement proposé par Claude, partage par le hub | Fait (28 octobre) |
 | Brief de projet | En cours (cartes et BRIEF.md en place ; clôturer dans Odoo ou Office 365 sans repasser par Claude reste à faire, voir [ihm.md](ihm.md)) |
 | **Office 365 dans le quotidien** (tâches, brouillons, relances) | En cours (onglet Suivi du projet : lecture commencée ; le fil du compte, hors projet, reste à faire) |
-| **La conversation pilote JARVIS** (projet, activité, Odoo, OneDrive) : axe 0 | En cours (Odoo relié au projet : fait) |
-| **Regard partout** | Partiel |
-| **Archivage des discussions** | Fait (reste à trancher : la purge des archives) |
+| **La conversation pilote JARVIS** (projet, activité, Odoo, OneDrive) : axe 0 | En cours (projet, activité et Odoo : faits ; restent Regard partout et la synchro SharePoint) |
+| **Regard partout** | Partiel (Ctrl+Shift+V joint le texte copié depuis un cadre illisible) |
+| **Archivage des discussions** | Fait (purge réglable : toutes les terminées, les archives seulement, ou jamais) |
 | **Reprise d'une discussion inactive** (cache, compactage) | Partiel (« Garder au chaud » existe, à la main) |
 | Déclencheurs (dossier surveillé, enchaînement) | À faire |
 | Validations depuis le téléphone | Partiel (hub `/m` + synchro console ; VPN/LAN) |
-| `lancer_discussion`, outils-scripts | Partiel (`lancer_discussion` fait ; outils via `proposer` quoi=outil) |
+| `lancer_discussion`, outils-scripts | Fait (`lancer_discussion` ; outils proposés par `proposer` quoi=outil) |
 | Vue « Consommation » | À faire |
-| Hub d'équipe | Partiel (Debian en service ; création, membres, partage, reprise, fil et synchro Windows/macOS dans JARVIS, essai réel avec un poste — détail au 23 octobre dans [equipe.md](equipe.md)) |
+| Hub d'équipe | Partiel (Debian en service ; création, membres, partage, reprise, fil et synchro Windows/macOS dans JARVIS, essai réel avec un poste ; tout compte inscrit partage ses projets ; paquet d'installation d'un nouveau poste, GitHub n'est plus utilisé — détail dans [equipe.md](equipe.md)) |
 
 ## Ce qui fait encore sortir de Jarvis (ou faire à la main)
 
@@ -42,17 +45,17 @@ décrit), **À faire** (conçu, pas commencé), **À trancher** (une décision �
 | Travailler à côté des autres applications | Fenêtres natives, barre JARVIS | [electron.md](electron.md) | Fait |
 | Ouvrir Odoo, SharePoint, Outlook web connectés | Sites connectés de l'application | [electron.md](electron.md) | Fait |
 | Lire ou modifier un Word, un Excel | Aperçu du texte ; la modification passe par « Ouvrir avec l'application » | `static/js/viewer.js` | Partiel |
-| Retoucher un fichier écrit par Claude, revenir en arrière | Différences et annulation ; pas d'éditeur | `console/changes.py` | Partiel |
+| Retoucher un fichier écrit par Claude, revenir en arrière | Différences et annulation ; éditeur intégré dans l'aperçu (texte, Markdown, CSV…) | `console/changes.py`, `static/js/viewer.js` | Fait |
 | Dire « on travaille dans le projet Network » | Reconnu dans la barre avant l'envoi (puce « Projet : Network »), panneau du projet ouvert à côté ; en cours de discussion, Claude propose de rattacher sur une carte (outil `projet`) | `static/js/mention.js`, `console/project_nav.py` | Fait |
-| Demander « sur quel fichier on a travaillé en dernier » | Claude n'a pas accès à l'activité du projet (discussions, fichiers modifiés) : il fouille le dossier | — | À faire |
+| Demander « sur quel fichier on a travaillé en dernier » | Outil `projet`, action `activite` : dernières discussions, fichiers modifiés ou montrés, recherche dans les discussions du projet | `console/project_nav.py` | Fait |
 | Lier un projet Odoo, ses tâches et sous-tâches | Onglet « Suivi » du panneau Projet (lier, tâches en arbre, Ouvrir dans Odoo), ou demandé à Claude et validé sur une carte | `console/odoo_link.py`, `static/js/odoo.js` | Fait |
 | Voir les tâches Office 365, les brouillons et les relances d'un projet | Onglet « Suivi » : lecture seule par le connecteur du compte. Un brouillon n'est jamais envoyé | `console/office_link.py`, `static/js/office.js` | En cours |
 | Le même fil Office 365 pour le compte, hors d'un projet | Pas encore de vue | — | À faire |
 | Synchroniser un dossier du projet avec OneDrive / SharePoint | Statut sync dans le panneau Projet ; déplacement proposé (`proposer` quoi=lien) via le client OneDrive | `console/drive.py` | Partiel |
-| Montrer à Claude un passage d'un PDF, d'une page, d'un panneau | Le texte sélectionné dans un PDF, une page web ou un mail HTML (cadres), dans les panneaux, Ctrl+K, les widgets et les fenêtres de dialogue n'est pas lu | `static/js/regard.js` | Partiel |
+| Montrer à Claude un passage d'un PDF, d'une page, d'un panneau | Le texte sélectionné dans un PDF, une page web ou un mail HTML (cadres), dans les panneaux, Ctrl+K, les widgets et les fenêtres de dialogue n'est pas lu ; en attendant, Ctrl+Shift+V joint le texte copié | `static/js/regard.js` | Partiel |
 | S'y retrouver dans des centaines de discussions | Archivage à la main ou après N jours d'inactivité ; les archivées restent dans l'historique et Ctrl+K | `Engine.archive_tasks`, `Engine.auto_archive` | Fait |
 | Reprendre une discussion après 2 ou 3 heures | Le cache a expiré : tout le contexte est réécrit en cache, sauf « Garder au chaud » activé à la main | `Engine.keep_warm` | Partiel |
-| Être loin du PC | La console n'écoute que `127.0.0.1` ; une validation demandée par une routine attend le retour de l'utilisateur. Le hub d'équipe, lui, est joignable en LAN et VPN | `console/__main__.py`, `console/presence.py` | À faire |
+| Être loin du PC | La console n'écoute que `127.0.0.1` ; les validations en attente passent par le hub (page `/m` du téléphone), au bureau ou par le VPN, jamais par Internet | `hub/phone.py`, `console/presence.py` | Partiel |
 | Travailler sur les mêmes dossiers que les collègues | Hub sur la Debian, projets d'équipe créés et membres gérés depuis JARVIS, Syncthing lancé par JARVIS (Windows et macOS), partage et reprise d'une discussion, fil du projet. Pas encore le téléphone, ni l'avertissement quand deux personnes touchent le même fichier | [equipe.md](equipe.md) | Partiel |
 | Réagir à un événement (mail reçu, fichier déposé) | Les routines ne partent qu'à heure fixe ou à intervalle | `console/routines.py` | À faire |
 | Retrouver ce qu'une routine a produit | Boîte de réception | [boite-de-reception.md](boite-de-reception.md) | Fait |
@@ -102,7 +105,9 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
   le même principe (courte discussion en lecture seule du connecteur du compte, rien n'est envoyé).
   Le même fil au niveau du compte, hors projet, reste à faire. Créer ou clôturer une tâche sans
   repasser par Claude vient ensuite.
-- **Un dossier du projet synchronisé avec OneDrive / SharePoint.** *À faire.* La synchronisation
+- **Un dossier du projet synchronisé avec OneDrive / SharePoint.** *Partiel : le statut de synchro
+  est dans le panneau Projet et le déplacement dans OneDrive se propose sur une carte
+  (`console/drive.py`) ; la bibliothèque SharePoint, à faire.* La synchronisation
   reste celle du client OneDrive de Windows (fiable, hors ligne, conflits gérés) : JARVIS ne recopie
   jamais de fichiers lui-même. Il montre si un dossier du projet est synchronisé, et sur demande
   (« synchronise le dossier Devis avec le Drive ») propose sur une carte : déplacer le dossier dans
@@ -120,7 +125,15 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
   permission `claude` du manifeste). Sans demande, Claude peut aussi **proposer** un module utile
   (`modules` → `proposer`) : une carte dans la discussion, au plus une par discussion ;
   le clic vaut demande et il l'écrit dans le même tour. Le dossier `addons/` n'est pas
-  versionné (`.gitignore`).
+  versionné (`.gitignore`). Un module se **partage** entre collègues par le hub (bouton Partager de
+  sa fenêtre, installation d'un clic depuis la boîte de réception) ; les modules reçoivent le style
+  et le mouvement de JARVIS (`addon_kit`).
+- **Les compétences rangées et partagées.** *Fait.* Une page Compétences (menu JARVIS, Ctrl+K),
+  séparée des actions : liste filtrable, fiche en lecture, discussion avec Claude qui écrit par une
+  carte « retenir ». Les compétences se classent en groupes imbriqués (glisser-déposer, sans toucher
+  aux fichiers) ; Claude connaît les groupes et propose sur demande de ranger toute la liste. Une
+  compétence, plusieurs ou des groupes entiers se partagent par le hub ; à l'installation, l'ancienne
+  version est gardée dans `skills-anciennes`.
 
 ### 1. Donner plus de moyens à Claude dans la console
 
@@ -135,14 +148,15 @@ Le serveur MCP intégré `jarvis` offre `afficher`, `afficher_resultat`, `presen
   ([ihm.md](ihm.md#regard-partout)).
 - **Bloc `formulaire`** de `presenter` : Claude pré-remplit un devis ou un mail, l'utilisateur
   corrige et valide. *Fait ([ihm.md](ihm.md)).*
-- **Outil `projet`** : ouvrir, rattacher, activité (axe 0). *À faire.* Un seul outil polyvalent
+- **Outil `projet`** : ouvrir, rattacher, activité (axe 0). *Fait.* Un seul outil polyvalent
   plutôt que trois.
 - **`lancer_discussion`** (coordination entre discussions) : une discussion en ouvre d'autres, dans
   leurs propres fenêtres et après validation, et récupère leur résultat. C'est ce qui multiplie le
   plus la puissance : Jarvis devient un chef d'orchestre visible, au lieu de sous-agents invisibles.
-  *À faire.*
-- **Outils-scripts** : des fonctions déterministes propres au projet. *À faire (conception dans
-  [ihm.md](ihm.md)).*
+  *Fait.*
+- **Outils-scripts** : des fonctions déterministes propres au projet. *Fait : Claude les propose
+  (`proposer` quoi=outil, `console/outils.py`), le clic les enregistre ; conception dans
+  [ihm.md](ihm.md).*
 - **`proposer`** étendu aux consignes (`CLAUDE.md`) et à la mémoire du projet, montré en différences.
   *Partiel : les consignes du brief se proposent déjà ; `CLAUDE.md` et la mémoire, à faire.* Il
   s'étend aussi aux liens du projet (Odoo, dossier OneDrive) de l'axe 0.
@@ -200,12 +214,13 @@ Détail dans [electron.md](electron.md). *Fait : `build-app.bat` installe l'appl
 
 ### 6. Jarvis loin du bureau
 
-*À faire.*
+*Partiel.*
 
 - Validations et rappels sur le téléphone, avec Approuver et Refuser, par le serveur Debian et le VPN
-  prévus dans [equipe.md](equipe.md), jamais par Internet.
+  prévus dans [equipe.md](equipe.md), jamais par Internet. *Fait pour les validations : page `/m` du
+  hub, synchronisée avec la console.*
 - Dictée vocale avec une transcription locale (Whisper), plutôt que la reconnaissance vocale de
-  Chrome qui envoie l'audio à Google.
+  Chrome qui envoie l'audio à Google. *À faire.*
 
 ### 7. Mémoire et connaissance
 
@@ -228,7 +243,7 @@ Détail dans [electron.md](electron.md). *Fait : `build-app.bat` installe l'appl
 
 ### 9. Des discussions qui ne s'entassent pas
 
-*Fait, sauf la purge (à trancher). Détail dans [ihm.md](ihm.md#archivage-des-discussions).*
+*Fait. Détail dans [ihm.md](ihm.md#archivage-des-discussions).*
 
 - **Archiver** une discussion (menu ⋯ de la fenêtre, historique avec sélection multiple, onglet
   Discussions du projet, « Archiver les terminées ») : elle quitte les listes courantes, l'écran
@@ -239,10 +254,9 @@ Détail dans [electron.md](electron.md). *Fait : `build-app.bat` installe l'appl
   N jours » (0 = jamais, par défaut), au démarrage puis toutes les heures. Jamais une discussion en
   cours, en attente d'une validation ou d'un clic, gardée au chaud, épinglée, programmée ou affichée
   par un widget. *Fait.*
-- **À trancher** : la purge (`history.retention_days`, 90 jours) supprime toujours les discussions
-  terminées, archivées comprises. Avec l'archivage, elle pourrait ne plus toucher que les archives, et
-  seulement si l'utilisateur l'a demandé (« Supprimer les archives de plus de N jours », désactivé par
-  défaut).
+- **Purge réglable** : Configuration → Historique, `history.purge_mode` : toutes les discussions
+  terminées de plus de `history.retention_days` (90 jours, par défaut), les archives seulement, ou
+  jamais (le bouton de purge à la main reste). *Fait.*
 
 ## Reprise d'une discussion inactive : faut-il compacter avant l'expiration du cache ?
 
@@ -300,20 +314,22 @@ Un bouton « Compacter et mettre en pause » couvre le cas où l'on sait qu'on r
 6. **La conversation pilote JARVIS (axe 0)**, dans cet ordre : *en cours.*
    1. le projet suit la conversation (reconnaissance dans la barre, ouverture de la fenêtre du
       projet, outil `projet` : ouvrir et rattacher) : *fait* ;
-   2. l'activité du projet (outil `projet` : activité) ;
-   3. Regard partout ;
+   2. l'activité du projet (outil `projet` : activité) : *fait* ;
+   3. Regard partout : *partiel* (Ctrl+Shift+V pour le texte copié ; la sélection dans les cadres,
+      panneaux, Ctrl+K, widgets et dialogues reste à faire) ;
    4. Odoo relié au projet (lien proposé, onglet « Suivi ») : *fait* ;
-   5. dossier synchronisé avec OneDrive / SharePoint.
-7. **Archivage des discussions** et archivage automatique. *Fait* (reste à trancher : la purge des
-   archives).
+   5. dossier synchronisé avec OneDrive / SharePoint : *partiel* (statut et déplacement dans
+      OneDrive ; la bibliothèque SharePoint reste à faire).
+7. **Archivage des discussions** et archivage automatique. *Fait*, purge réglable comprise.
 8. **Reprise des discussions inactives** (garder au chaud ou compacter automatiquement) avec la vue
    « Consommation » pour en mesurer l'effet. *À faire.*
 9. Déclencheurs : dossier surveillé, enchaînement. *À faire.* Côté serveur : peut avancer en
    parallèle.
 10. Validations depuis le téléphone : les notifications d'Electron couvrent le PC ; sans le téléphone,
-    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne. *À faire.*
-11. `lancer_discussion`, puis les outils-scripts. *À faire.*
-12. Hub d'équipe ([equipe.md](equipe.md)). *Partiel, 23 octobre 2026.* La Debian est en
+    routines et déclencheurs restent bloqués dès que l'utilisateur s'en éloigne. *Fait par le hub
+    (`/m`, au bureau ou par le VPN) ; la dictée vocale locale reste à faire.*
+11. `lancer_discussion`, puis les outils-scripts. *Fait.*
+12. Hub d'équipe ([equipe.md](equipe.md)). *Partiel, 29 octobre 2026.* La Debian est en
     service : dépôt git (plus GitHub), Syncthing, pare-feu, nginx sur le port 8443,
     hub et sauvegarde de nuit. Dans JARVIS : Configuration → Équipe, création d'un
     projet d'équipe et gestion de ses membres, Rejoindre (le projet JARVIS se crée au
@@ -322,7 +338,9 @@ Un bouton « Compacter et mettre en pause » couvre le cas où l'on sait qu'on r
     hub crée le dossier versionné du projet sur le serveur, la synchro reprend au
     démarrage. Un push de main met le hub à jour sans commande sur la Debian. Essai réel
     le 23 octobre avec un poste (projet `essai-equipe`, fichier reçu par le serveur).
-    Restent l'essai à deux postes, renommer ou supprimer un projet, la lecture sans
+    Depuis : tout compte inscrit partage ses projets, modules et compétences se partagent
+    par le hub, et un nouveau poste s'installe depuis le paquet fait sur un poste qui a
+    JARVIS (`paquet-installation.bat`, `.command` sur Mac). Restent l'essai à deux postes, renommer ou supprimer un projet, la lecture sans
     reprise, les non-lus, les conflits de fichiers et les validations depuis le
     téléphone.
 
