@@ -234,12 +234,15 @@ rien à installer. Côté poste, `console/updater.py` passe le jeton et le certi
 (`console/hub.crt`, OpenSSL sous Windows) à chaque commande, sans les écrire dans
 `.git/config`.
 
-Bascule des postes clonés depuis GitHub : la version qui contient ce code doit être poussée
-**aussi sur GitHub** (`git push github main`). Ces postes la prennent par leur mise à jour
-habituelle ; à la recherche suivante, s'ils ont un jeton du hub, `origin` devient le dépôt
-du serveur et l'ancienne origine reste sous `github`. Sans jeton (pas encore inscrit) ou si
-le serveur refuse, rien ne change. Garder GitHub à jour tant que tous les postes n'ont pas
-basculé, puis l'archiver.
+**Nouveaux postes.** Sans jeton, le dépôt n'est pas servi : le premier exemplaire part d'un
+poste qui a JARVIS. `paquet-installation.bat` (`.command` sur Mac) en fait un zip sur le
+Bureau : clone propre du dossier, remis à `origin/main` (la version du hub), `origin` réglée
+sur le dépôt du hub. Après l'inscription du nouveau poste, sa mise à jour en un clic passe par
+le hub. Rien ne vient plus de GitHub.
+
+Anciens postes clonés depuis GitHub : à la recherche de mise à jour qui suit l'inscription,
+`origin` devient le dépôt du serveur et l'ancienne origine reste sous `github`
+(`migrate` dans `console/updater.py`). Sans jeton ou si le serveur refuse, rien ne change.
 
 Les transcriptions partagées restent des fichiers :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. Les modules partagés aussi, un zip par contenu

@@ -40,6 +40,9 @@ Claude Code. La CLI fournie avec les apps Claude Desktop est détectée
 automatiquement (`%APPDATA%\Claude*\claude-code\<version>\claude.exe`) ; sinon installe
 Claude Code ou indique son chemin dans Configuration → Général.
 
+Pour un nouveau poste, le code vient d'un paquet d'installation préparé sur un poste qui a
+déjà JARVIS : voir [Installer sur un autre poste](#installer-sur-un-autre-poste).
+
 **Double-clique `start.bat`.** Au premier lancement il crée l'environnement Python
 `.venv`, installe les dépendances, démarre le serveur sur `127.0.0.1:8788` et ouvre le
 navigateur avec un lien d'accès à usage unique. Pour rouvrir la console plus tard,
@@ -567,20 +570,38 @@ Réglages de démarrage facultatifs : copie `.env.example` en `.env`
 
 ## Installer sur un autre poste
 
-Copie le projet **sans** `data/` ni `.venv/` (un dépôt Git les exclut d'office) : le
-nouveau poste démarre avec une configuration vierge, ses propres comptes, sans tes
-routines, ton historique ni ton jeton. Au premier lancement, un **assistant** guide la mise
-en route : Claude Code trouvé, connexion de chaque compte (Se connecter / Tester), dossiers
-de travail et premier projet, lanceur et démarrage avec la session. Il se rouvre depuis
-Configuration → Général → Assistant de démarrage, ou Ctrl+K. Le plus simple : `git clone`
-du dépôt, pour profiter ensuite des mises à jour en un clic.
+Le hub ne sert le dépôt qu'aux postes déjà inscrits, et on s'inscrit depuis JARVIS : le
+premier exemplaire d'un nouveau poste part donc d'un poste qui a JARVIS.
+
+1. **Sur un poste qui a JARVIS** : double-clic sur **`paquet-installation.bat`**
+   (`paquet-installation.command` sur Mac). Il crée `JARVIS-installation.zip` sur le Bureau :
+   un dépôt Git propre, à la dernière version poussée sur le hub, dont l'origine est le dépôt
+   du hub. Ni `data/` ni `.venv/` : le nouveau poste démarre avec une configuration vierge,
+   ses propres comptes, sans tes routines, ton historique ni ton jeton. Les modifications et
+   les commits pas encore poussés de ce poste n'y sont pas (le script le signale).
+2. **Sur le nouveau poste** : installer Claude Desktop, **Git** (https://git-scm.com, pour les
+   mises à jour) et Node.js 22.12 ou plus (pour l'application de bureau). Python s'installe
+   tout seul s'il manque.
+3. Décompresser le zip (par exemple dans Documents), puis double-clic sur **`build-app.bat`**
+   (application de bureau) ou `start.bat` (console seule).
+4. Au premier lancement, un **assistant** guide la mise en route : Claude Code trouvé,
+   connexion de chaque compte (Se connecter / Tester), dossiers de travail et premier projet,
+   lanceur et démarrage avec la session. Il se rouvre depuis Configuration → Général →
+   Assistant de démarrage, ou Ctrl+K.
+5. Au bureau ou par le VPN, la fenêtre **« Rejoindre l'équipe »** s'ouvre d'elle-même : nom,
+   pseudo, couleur, M'inscrire. L'administrateur du hub voit l'inscription dans sa boîte de
+   réception et ajoute la personne à ses projets ([docs/equipe.md](docs/equipe.md)). Dès lors,
+   les mises à jour arrivent en un clic depuis le hub.
+
+Pour quelqu'un qui a déjà un compte sur le hub : copier son `data/hub-token`, ou le coller dans
+Configuration → Équipe, au lieu de s'inscrire à nouveau.
 
 ## Mises à jour
 
 Le code et les données sont séparés : `data/` (configuration, historique, routines,
 jeton, journal) et `.venv/` ne sont jamais remplacés par une mise à jour.
 
-**En un clic** (installation faite avec `git clone`) : la console regarde sur le dépôt au
+**En un clic** (installation faite avec le paquet d'installation, ou `git clone`) : la console regarde sur le dépôt au
 démarrage puis toutes les 6 h ; un bandeau **« Nouvelle version disponible »** propose
 **Mettre à jour** (aussi dans Configuration → Général → Rechercher une mise à jour) : elle
 récupère la version (`git pull`), réinstalle les dépendances si `requirements.txt` a
@@ -589,11 +610,11 @@ poste (rien n'est écrasé).
 
 Le dépôt est sur le serveur de l'équipe : le hub le sert en lecture seule
 (`https://10.20.10.249:8443/git/jarvis-console.git`) aux postes inscrits, avec leur jeton
-(`data/hub-token`) et le certificat du hub (`console/hub.crt`), au bureau ou par le VPN. Une
-copie clonée depuis GitHub y passe d'elle-même à la première recherche de mise à jour après
-l'inscription au hub : l'ancienne origine reste sous le nom `github`, et si le serveur refuse,
-la copie reste sur GitHub. Le jeton n'est pas écrit dans `.git/config` : un `git pull` à la
-main vers le serveur ne passe pas, la mise à jour en un clic oui.
+(`data/hub-token`) et le certificat du hub (`console/hub.crt`), au bureau ou par le VPN. GitHub
+n'est plus utilisé ; une ancienne copie clonée depuis GitHub passe d'elle-même sur le hub à la
+première recherche de mise à jour après l'inscription (l'ancienne origine reste sous le nom
+`github`). Le jeton n'est pas écrit dans `.git/config` : un `git pull` à la main vers le
+serveur ne passe pas, la mise à jour en un clic oui.
 
 À la main :
 
