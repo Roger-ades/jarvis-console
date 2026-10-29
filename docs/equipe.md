@@ -247,7 +247,10 @@ Anciens postes clonés depuis GitHub : à la recherche de mise à jour qui suit 
 Les transcriptions partagées restent des fichiers :
 `/var/lib/jarvis-hub/conversations/<id>/<rev>.zip`. Les modules partagés aussi, un zip par contenu
 (`/var/lib/jarvis-hub/modules/<sha256>.zip`), effacé dès que plus personne ne l'attend ; de même les
-compétences partagées (`/var/lib/jarvis-hub/competences/<sha256>.zip`). La présence vit
+envois de compétences des anciennes versions (`/var/lib/jarvis-hub/competences/<sha256>.zip`). La
+bibliothèque de compétences partagées tient une ligne par compétence dans la base (révision, groupe,
+auteur, retrait) et un zip par contenu (`/var/lib/jarvis-hub/bibliotheque/<sha256>.zip`) ; tout
+compte inscrit la lit et l'écrit, une écriture sur une révision dépassée est refusée (409). La présence vit
 en mémoire seulement.
 Le hub ne lit pas `/var/lib/jarvis/projets` : Syncthing seul y écrit.
 
@@ -323,7 +326,13 @@ POST   /api/v1/modules?to=a,b               partager un module (zip avec partage
 GET    /api/v1/modules                      modules qui m'attendent
 GET    /api/v1/modules/{m}/archive          télécharger pour installer (destinataire seulement)
 DELETE /api/v1/modules/{m}?outcome=         installé ou ignoré : il quitte ma boîte
-POST   /api/v1/competences?to=a,b           partager des compétences avec leurs groupes (zip avec partage.json)
+GET    /api/v1/bibliotheque                 compétences partagées de l'équipe (révisions, groupes)
+GET    /api/v1/bibliotheque/{nom}/archive   télécharger une compétence partagée
+PUT    /api/v1/bibliotheque/{nom}?base=N    partager (base=0) ou mettre à jour ; 409 si N est dépassée
+POST   /api/v1/bibliotheque/{nom}/groupe    la ranger dans un autre groupe partagé
+DELETE /api/v1/bibliotheque/{nom}           ne plus la partager (elle quitte tous les postes)
+POST   /api/v1/bibliotheque-groupes         créer, renommer, dissoudre un groupe partagé
+POST   /api/v1/competences?to=a,b           (anciennes versions) envoyer des compétences à des collègues
 GET    /api/v1/competences                  compétences qui m'attendent
 GET    /api/v1/competences/{p}/archive      télécharger pour installer (destinataire seulement)
 DELETE /api/v1/competences/{p}?outcome=     installées ou ignorées : elles quittent ma boîte

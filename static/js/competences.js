@@ -2,6 +2,8 @@
 // Claude to write and improve them. Claude only proposes (tool retenir): nothing is written without a click on
 // the differences. The discussion is a normal one (Discussions), shown inside the page (TaskWindow.embed).
 // The list is a tree of groups ("Métier/Incendie"), kept by JARVIS: only how it is shown, the skills stay flat.
+// It has two parts: the personal skills, and those shared with the whole team through the hub (console/
+// skill_library.py), the same in every account; a skill dragged from one part to the other is shared or taken back.
 import { api } from "./api.js";
 import { mdElement } from "./md.js";
 import { projects } from "./projects.js";
@@ -10,9 +12,9 @@ import { $, dialog, fmtDate, h, iconBtn, store, toast } from "./util.js";
 
 const el = () => $("#skills");
 const TARGET_KEY = "jarvis.skills.target", TALKS_KEY = "jarvis.skills.talks", CLOSED_KEY = "jarvis.skills.closed";
-const DRAG = "text/x-jarvis-skill", MODEL_KEY = "jarvis.skills.model";
+const DRAG = "text/x-jarvis-skill", MODEL_KEY = "jarvis.skills.model", FOLDED_KEY = "jarvis.skills.folded";
 const S = {
-  ctx: null, target: null, list: [], groups: [], editing: null, loading: false, error: "", q: "", sort: store.get("jarvis.skills.sort", "nom"),
+  ctx: null, target: null, list: [], groups: [], lib: { actif: false }, editing: null, loading: false, error: "", q: "", sort: store.get("jarvis.skills.sort", "nom"),
   selected: null, file: "SKILL.md", fileData: null, fileError: "", embedded: null, fresh: false,
 };
 
@@ -93,6 +95,7 @@ async function load(written = "") {
     if (key !== targetKey()) return;
     S.list = (S.target.kind === "projet" ? r.projet : r.compte) || [];
     S.groups = r.groupes?.[S.target.kind] || [];
+    S.lib = r.bibliotheque || { actif: false };
     S.error = "";
   } catch (e) { S.error = e.message; S.list = []; }
   finally { S.loading = false; }
@@ -104,10 +107,10 @@ async function load(written = "") {
     S.selected = written;
     S.file = "SKILL.md";
   }
-  if (S.selected && !S.list.some((s) => s.name === S.selected)) S.selected = null;
+  if (S.selected && !current()) S.selected = null;
   renderList();
   renderSheet();
-  if (S.selected && (!written || written === S.selected)) readFile();
+  if (S.selected && !current()?.pending && (!written || written === S.selected)) readFile();
   renderTalk();
 }
 
@@ -161,16 +164,48 @@ function renderList(full = false) {
     const sort = h("select", { "aria-label": "Trier", on: { change: (e) => { S.sort = e.target.value; store.set("jarvis.skills.sort", S.sort); fillRows(); } } },
       h("option", { value: "nom" }, "Par nom"), h("option", { value: "date" }, "Par modification"));
     sort.value = S.sort;
-    S.rows = h("div", { class: "drawer-list flat sk-rows" });
     S.listNote = h("p", { class: "sk-note" });
+    S.secs = {};
+    // each part folds on its own (a click on its title), remembered on this browser; a folded part still takes a drop
+    const part = (sec, title, tip, extra = []) => {
+      const s = S.secs[sec] = { count: h("span", { class: "sk-count" }), info: h("div", { class: "sk-sec-info" }),
+        rows: h("div", { class: "drawer-list flat sk-rows", "aria-label": title }) };
+      const shut = folded().has(sec);
+      const box = h("section", { class: `sk-part ${sec}${shut ? " shut" : ""}` });
+      const fold = () => {
+        const set = folded(), now = !set.has(sec);
+        if (now) set.add(sec); else set.delete(sec);
+        store.set(FOLDED_KEY, [...set]);
+        box.classList.toggle("shut", now);
+        head.setAttribute("aria-expanded", String(!now));
+      };
+      const head = h("header", { class: "sk-sec-head", title: tip, tabindex: "0", role: "button", "aria-expanded": String(!shut),
+        on: {
+          click: (e) => { if (!e.target.closest(".sk-sec-tools")) fold(); },
+          keydown: (e) => { if (e.target === head && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); fold(); } },
+          dragover: (e) => { if (dragged(e)) { e.preventDefault(); head.classList.add("drop"); } },
+          dragleave: () => head.classList.remove("drop"),
+          drop: (e) => { head.classList.remove("drop"); drop(e, sec, ""); },
+        } },
+        h("span", { class: "sk-chev", svg: "chev" }),
+        h("span", { class: "i", svg: sec === "equipe" ? "team" : "user" }), h("h4", {}, title), s.count,
+        h("span", { class: "sk-sec-tools" }, ...extra,
+          iconBtn("folder", "Nouveau groupe : glisse ensuite les compétences dessus", () => {
+            if (sec === "equipe" && !S.lib.actif) { toast(HUB_FIRST, "warn"); return; }
+            if (box.classList.contains("shut")) fold();
+            S.editing = { sec, path: "", parent: "" };
+            fillRows();
+          })));
+      box.append(head, s.info, s.rows);
+      return box;
+    };
     col.replaceChildren(sel, S.listNote, h("div", { class: "sk-tools" }, search, sort),
       h("div", { class: "sk-new" },
-        h("button", { type: "button", class: "btn small", on: { click: () => select(null) } }, "Nouvelle compétence"),
-        h("button", { type: "button", class: "btn small ghost", title: "Un groupe pour ranger la liste : glisse ensuite les compétences dessus",
-          on: { click: () => { S.editing = { path: "", parent: "" }; fillRows(); } } }, "Nouveau groupe"),
-        h("button", { type: "button", class: "btn small ghost", title: "Envoyer des compétences, ou des groupes entiers, à des collègues du hub",
-          on: { click: () => share() } }, "Partager…")),
-      S.rows);
+        h("button", { type: "button", class: "btn small", on: { click: () => select(null) } }, "Nouvelle compétence")),
+      h("div", { class: "sk-parts" },
+        part("perso", "Personnelles", "Les tiennes seulement. Glisse-en une vers « Partagées » pour la donner à toute l'équipe."),
+        part("equipe", "Partagées avec l'équipe", "Les mêmes pour tous les comptes du hub : qui en modifie une l'envoie aux autres.",
+          [iconBtn("retry", "Synchroniser maintenant", () => syncLibrary())])));
   }
   S.listNote.textContent = S.target?.kind === "projet"
     ? "Chargées seulement quand Claude travaille dans ce dossier (.claude/skills)."
@@ -178,75 +213,127 @@ function renderList(full = false) {
   fillRows();
 }
 
+// ------------------------------------------------------------ the two parts: personal, and shared with the team
+const HUB_FIRST = "Les compétences partagées passent par le hub de l'équipe : inscris ce poste d'abord (Configuration › Équipe).";
+const NOT_HERE = "Ce compte ne reçoit pas les compétences partagées : fais-le depuis le compte Travail, ou coche « Compétences partagées dans tous les comptes » (Configuration › Équipe).";
+const notHere = () => S.lib.actif && S.lib.ici === false;
+const personal = () => S.list.filter((s) => !s.partagee);
+/** The team's library (console/skill_library.py), with this account's copies: their files, their dates. In a
+ * project, they are the account's: a click opens them there. Not arrived yet: shown, marked « à venir » ; in an
+ * account that does not receive them (only the work one, unless the configuration says all): « pas ici ». */
+function shared() {
+  const here = new Map(S.list.filter((s) => s.partagee).map((s) => [s.name, s]));
+  return (S.lib.competences || []).map((c) => {
+    const s = S.target?.kind === "compte" && here.get(c.nom);
+    const base = { name: c.nom, description: c.description, groupe: c.groupe || "", partagee: true, par: c.par, rev: c.rev };
+    if (s) return { ...s, ...base, description: s.description };
+    return { ...base, modified: c.updated, pending: S.target?.kind === "compte", absent: S.target?.kind === "compte" && notHere(),
+      elsewhere: S.target?.kind === "projet" };
+  });
+}
+const secGroups = (sec) => (sec === "equipe" ? S.lib.groupes || [] : S.groups);
+const closedKey = (sec, path) => (sec === "equipe" ? `equipe|${path}` : `${targetKey()}|${path}`);
+
 function fillRows() {
-  if (!S.rows) return;
-  if (S.error) { S.rows.replaceChildren(h("div", { class: "line err" }, S.error)); return; }
-  if (S.loading && !S.list.length) { S.rows.replaceChildren(h("div", { class: "empty-row" }, "Lecture des compétences…")); return; }
+  if (!S.secs) return;
+  fillPart("perso", personal());
+  fillPart("equipe", shared());
+}
+
+function fillPart(sec, all) {
+  const { rows, count: badge, info } = S.secs[sec];
+  const lib = sec === "equipe";
+  badge.textContent = all.length ? String(all.length) : "";
+  info.replaceChildren(...(lib ? libraryInfo() : []));
+  rows.ondragover = rows.ondragleave = rows.ondrop = null;
+  if (lib && !S.lib.actif) { rows.replaceChildren(); return; }
+  if (S.error) { rows.replaceChildren(h("div", { class: "line err" }, S.error)); return; }
+  if (S.loading && !S.list.length && !all.length) { rows.replaceChildren(h("div", { class: "empty-row" }, "Lecture des compétences…")); return; }
+  // dropped on the part itself (not on a group): out of any group
+  rows.ondragover = (e) => { if (dragged(e)) { e.preventDefault(); rows.classList.add("drop"); } };
+  rows.ondragleave = (e) => { if (!rows.contains(e.relatedTarget)) rows.classList.remove("drop"); };
+  rows.ondrop = (e) => { rows.classList.remove("drop"); drop(e, sec, ""); };
   const q = S.q.trim().toLowerCase();
-  const list = S.list.filter((s) => !q || `${s.name} ${s.description} ${s.groupe || ""}`.toLowerCase().includes(q))
+  const list = all.filter((s) => !q || `${s.name} ${s.description} ${s.groupe || ""}`.toLowerCase().includes(q))
     .sort(S.sort === "date" ? (a, b) => (b.modified || 0) - (a.modified || 0) : (a, b) => a.name.localeCompare(b.name));
-  if (!list.length && (q || !S.groups.length) && !S.editing) {
-    S.rows.replaceChildren(h("div", { class: "empty-row" }, S.list.length ? "Aucune compétence ne correspond."
-      : `Aucune compétence ${targetName()}. « Nouvelle compétence » pour en écrire une avec Claude.`));
+  const groups = secGroups(sec);
+  const editing = S.editing?.sec === sec ? S.editing : null;
+  if (!list.length && (q || !groups.length) && !editing) {
+    rows.replaceChildren(h("div", { class: "empty-row" }, all.length ? "Aucune compétence ne correspond."
+      : lib ? "Glisse ici une compétence personnelle : elle ira dans les comptes de toute l'équipe."
+        : `Aucune compétence personnelle ${targetName()}. « Nouvelle compétence » pour en écrire une avec Claude.`));
     return;
   }
   // the tree: every group (the empty ones too, but not while filtering), its sub-groups, then its skills
   const node = (path) => ({ path, name: path.split("/").pop(), groups: new Map(), skills: [], count: 0 });
   const root = node("");
-  const at = (path) => path.split("/").reduce((n, part, i, all) => {
-    if (!n.groups.has(part)) n.groups.set(part, node(all.slice(0, i + 1).join("/")));
+  const at = (path) => path.split("/").reduce((n, part, i, parts) => {
+    if (!n.groups.has(part)) n.groups.set(part, node(parts.slice(0, i + 1).join("/")));
     return n.groups.get(part);
   }, root);
-  if (!q) S.groups.forEach(at);
+  if (!q) groups.forEach(at);
   for (const s of list) (s.groupe ? at(s.groupe) : root).skills.push(s);
   const count = (n) => (n.count = n.skills.length + [...n.groups.values()].reduce((a, c) => a + count(c), 0));
   count(root);
-  // dropped on the list itself (not on a group): out of any group
-  S.rows.ondragover = (e) => { if (dragged(e)) { e.preventDefault(); S.rows.classList.add("drop"); } };
-  S.rows.ondragleave = (e) => { if (!S.rows.contains(e.relatedTarget)) S.rows.classList.remove("drop"); };
-  S.rows.ondrop = (e) => { S.rows.classList.remove("drop"); drop(e, ""); };
-  S.rows.replaceChildren(...[
-    S.editing && !S.editing.path && !S.editing.parent ? groupInput("", "") : null,
-    ...branch(root, q),
+  rows.replaceChildren(...[
+    editing && !editing.path && !editing.parent ? groupInput(sec, "", "") : null,
+    ...branch(sec, root, q),
   ].filter(Boolean));
 }
 
+/** Above the shared part: no hub, the hub out of reach, what the last syncs did (a version kept aside…). */
+function libraryInfo() {
+  if (!S.lib.actif) return [h("p", { class: "sk-note" }, HUB_FIRST)];
+  const out = [];
+  const who = S.lib.comptes || [];
+  if (notHere()) out.push(h("p", { class: "sk-note warn" }, (who.length > 1 ? `Seuls les comptes ${who.join(", ")} reçoivent`
+    : `Seul le compte ${who[0] || "Travail"} reçoit`) + " les compétences partagées. Pour les avoir ici aussi, coche « Compétences "
+    + "partagées dans tous les comptes » dans Configuration › Équipe."));
+  if (!S.lib.synchro && !S.lib.erreur) out.push(h("p", { class: "sk-note" }, "Lecture des compétences de l'équipe sur le hub…"));
+  if (S.lib.erreur) out.push(h("p", { class: "sk-note err" }, `Hub hors d'atteinte : ${S.lib.erreur}. Les copies de chaque compte restent en place.`));
+  const recent = (S.lib.notes || []).filter((n) => Date.now() / 1000 - n.ts < 3 * 86400).slice(0, 2);
+  out.push(...recent.map((n) => h("p", { class: "sk-note warn", title: fmtDate(n.ts) }, n.texte)));
+  return out;
+}
+
 const closed = () => new Set(store.get(CLOSED_KEY, []) || []);
-function toggleGroup(path, open) {
-  const set = closed(), k = `${targetKey()}|${path}`;
+const folded = () => new Set(store.get(FOLDED_KEY, []) || []);
+function toggleGroup(sec, path, open) {
+  const set = closed(), k = closedKey(sec, path);
   if (open ?? set.has(k)) set.delete(k); else set.add(k);
   store.set(CLOSED_KEY, [...set]);
   fillRows();
 }
 
-function branch(n, q) {
+function branch(sec, n, q) {
   const shut = closed();
+  const editing = S.editing?.sec === sec ? S.editing : null;
   const out = [];
   for (const g of [...n.groups.values()].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" }))) {
-    const open = !!q || !shut.has(`${targetKey()}|${g.path}`);
-    out.push(S.editing?.path === g.path ? groupInput(n.path, g.path) : groupRow(g, open));
-    const inner = open ? branch(g, q) : [];
-    if (S.editing && !S.editing.path && S.editing.parent === g.path) inner.unshift(groupInput(g.path, ""));
+    const open = !!q || !shut.has(closedKey(sec, g.path));
+    out.push(editing?.path === g.path ? groupInput(sec, n.path, g.path) : groupRow(sec, g, open));
+    const inner = open ? branch(sec, g, q) : [];
+    if (editing && !editing.path && editing.parent === g.path) inner.unshift(groupInput(sec, g.path, ""));
     if (inner.length) out.push(h("div", { class: "sk-children", role: "group" }, ...inner));
   }
-  out.push(...n.skills.map(skillRow));
+  out.push(...n.skills.map((s) => skillRow(s, sec)));
   return out;
 }
 
-function groupRow(g, open) {
+function groupRow(sec, g, open) {
   const row = h("div", { class: `sk-group${open ? " open" : ""}`, tabindex: "0", role: "button", draggable: "true",
     "aria-expanded": String(open), title: g.path.split("/").join(" › "),
     on: {
-      click: () => toggleGroup(g.path),
+      click: () => toggleGroup(sec, g.path),
       keydown: (e) => {
         if (e.target !== row) return;
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroup(g.path); }
-        if (e.key === "F2") { e.preventDefault(); edit(g.path); }
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroup(sec, g.path); }
+        if (e.key === "F2") { e.preventDefault(); edit(sec, g.path); }
       },
-      dragstart: (e) => { e.dataTransfer.setData(DRAG, JSON.stringify({ group: g.path })); e.dataTransfer.effectAllowed = "move"; },
+      dragstart: (e) => { e.dataTransfer.setData(DRAG, JSON.stringify({ group: g.path, sec })); e.dataTransfer.effectAllowed = "move"; },
       dragover: (e) => { if (dragged(e)) { e.preventDefault(); e.stopPropagation(); row.classList.add("drop"); } },
       dragleave: () => row.classList.remove("drop"),
-      drop: (e) => { e.stopPropagation(); row.classList.remove("drop"); drop(e, g.path); },
+      drop: (e) => { e.stopPropagation(); row.classList.remove("drop"); drop(e, sec, g.path); },
     } },
   h("span", { class: "sk-chev", svg: "chev" }),
   h("span", { class: "i", svg: "folder" }),
@@ -255,106 +342,46 @@ function groupRow(g, open) {
   h("span", { class: "sk-gtools" },
     g.path.split("/").length < 4 ? iconBtn("folder", "Nouveau sous-groupe", (e) => {
       e.stopPropagation();
-      S.editing = { path: "", parent: g.path };
-      toggleGroup(g.path, true);
+      S.editing = { sec, path: "", parent: g.path };
+      toggleGroup(sec, g.path, true);
     }) : null,
-    iconBtn("send", "Partager ce groupe avec des collègues", (e) => {
+    sec === "perso" ? iconBtn("team", "Partager ce groupe avec l'équipe", (e) => {
       e.stopPropagation();
-      share(S.list.filter((s) => s.groupe === g.path || s.groupe?.startsWith(`${g.path}/`)).map((s) => s.name));
-    }),
-    iconBtn("edit", "Renommer (F2)", (e) => { e.stopPropagation(); edit(g.path); }),
-    iconBtn("x", "Défaire le groupe : son contenu remonte d'un niveau", (e) => { e.stopPropagation(); groupAction("dissoudre", g.path); })));
+      publish({ group: g.path, sec }, "");
+    }) : null,
+    iconBtn("edit", "Renommer (F2)", (e) => { e.stopPropagation(); edit(sec, g.path); }),
+    iconBtn("x", "Défaire le groupe : son contenu remonte d'un niveau", (e) => { e.stopPropagation(); groupAction(sec, "dissoudre", g.path); })));
   return row;
 }
 
-function skillRow(s) {
-  const n = hints(s).length;
-  return h("div", { class: `hrow file${s.name === S.selected ? " on" : ""}`, tabindex: "0", role: "button", draggable: "true",
-    "aria-current": s.name === S.selected ? "true" : null,
-    on: { click: () => select(s.name), keydown: (e) => { if (e.key === "Enter") select(s.name); },
-      dragstart: (e) => { e.dataTransfer.setData(DRAG, JSON.stringify({ skill: s.name })); e.dataTransfer.effectAllowed = "move"; } } },
-  h("span", { class: "i", svg: "sparkle" }),
+function skillRow(s, sec) {
+  const n = s.pending || s.elsewhere ? 0 : hints(s).length;
+  const on = s.name === S.selected && !s.elsewhere;
+  return h("div", { class: `hrow file${on ? " on" : ""}${s.pending ? " pending" : ""}`, tabindex: "0", role: "button", draggable: "true",
+    "aria-current": on ? "true" : null,
+    title: s.partagee && s.par ? `Dernière version : ${s.par}` : null,
+    on: { click: () => openSkill(s), keydown: (e) => { if (e.key === "Enter") openSkill(s); },
+      dragstart: (e) => { e.dataTransfer.setData(DRAG, JSON.stringify({ skill: s.name, sec })); e.dataTransfer.effectAllowed = "move"; } } },
+  h("span", { class: "i", svg: sec === "equipe" ? "team" : "sparkle" }),
   h("div", { class: "hm" }, h("div", { class: "ht" }, s.name),
     h("div", { class: "hs" }, slashDescription(s.name, s.description) || "Sans description")),
   h("span", { class: "sk-meta" }, n ? h("span", { class: "sk-dot", title: `${n} point${n > 1 ? "s" : ""} à revoir` }) : null,
-    s.modified ? fmtDate(s.modified) : ""));
+    s.absent ? "pas ici" : s.pending ? "à venir" : s.modified ? fmtDate(s.modified) : ""));
 }
 
-// ------------------------------------------------------------ sharing through the team's hub (console/skill_share.py)
-/** Partager: the skills ticked (one, several, whole groups) go to the colleagues ticked, each with its group; they
- * wait in their inbox, where they pick the account to install them in. `pre`: the skills ticked to begin with. */
-async function share(pre = []) {
-  if (!S.list.length) { toast(`Aucune compétence ${targetName()} à partager.`, "warn"); return; }
-  let people = [];
-  try {
-    const st = await api("/api/hub/status");
-    if (!st.enabled || !st.user) {
-      toast("Partager des compétences passe par le hub de l'équipe : inscris ce poste d'abord (Configuration › Équipe).", "warn");
-      return;
-    }
-    people = ((await api("/api/hub/users")).users || []).filter((u) => u.id !== st.user.id);
-  } catch (e) { toast(e.message, "err"); return; }
-  if (!people.length) { toast("Personne d'autre n'est inscrit sur le hub de l'équipe.", "warn"); return; }
-  const chosen = new Set(pre);
-  // the tree of the page, with every skill (whatever the filter); a group ticks or unticks all it holds
-  const node = (path) => ({ path, name: path.split("/").pop(), groups: new Map(), skills: [] });
-  const root = node("");
-  for (const sk of S.list) {
-    const n = (sk.groupe || "").split("/").filter(Boolean).reduce((m, part, i, all) => {
-      if (!m.groups.has(part)) m.groups.set(part, node(all.slice(0, i + 1).join("/")));
-      return m.groups.get(part);
-    }, root);
-    n.skills.push(sk.name);
-  }
-  const all = (n) => [...n.skills, ...[...n.groups.values()].flatMap(all)];
-  const tree = h("div", { class: "sk-share-tree" });
-  const count = h("p", { class: "muted" });
-  const draw = () => {
-    const level = (n) => [
-      ...[...n.groups.values()].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" })).map((g) => {
-        const inside = all(g), on = inside.filter((x) => chosen.has(x)).length;
-        const box = h("input", { type: "checkbox", checked: on === inside.length, on: { change: (e) => {
-          inside.forEach((x) => (e.target.checked ? chosen.add(x) : chosen.delete(x)));
-          draw();
-        } } });
-        box.indeterminate = on > 0 && on < inside.length;
-        return h("div", { class: "sk-share-group" },
-          h("label", { class: "check" }, box, " ", h("span", { class: "i", svg: "folder" }), ` ${g.name} `, h("small", {}, `(${inside.length})`)),
-          h("div", { class: "sk-share-children" }, ...level(g)));
-      }),
-      ...n.skills.sort().map((x) => h("label", { class: "check sk-share-item" },
-        h("input", { type: "checkbox", checked: chosen.has(x), on: { change: (e) => {
-          if (e.target.checked) chosen.add(x); else chosen.delete(x);
-          draw();
-        } } }), ` ${x}`)),
-    ];
-    tree.replaceChildren(...level(root));
-    count.textContent = chosen.size ? `${chosen.size} compétence${chosen.size > 1 ? "s" : ""} cochée${chosen.size > 1 ? "s" : ""}, chacune avec son groupe.`
-      : "Coche des compétences, ou un groupe pour tout ce qu'il contient.";
-  };
-  draw();
-  const boxes = people.map((u) => h("input", { type: "checkbox", value: u.id }));
-  const body = h("div", { class: "sk-share" },
-    h("p", {}, "Elles arriveront dans leur boîte de réception : ils choisissent le compte où les installer, dans les mêmes groupes. "
-      + "Leurs fichiers partent tels quels."),
-    tree, count,
-    h("b", {}, "Avec"),
-    h("div", { class: "ad-share-list" }, ...people.map((u, i) => h("label", { class: "check" }, boxes[i], ` ${u.name || u.id}`))));
-  const ok = await dialog({ title: `Partager des compétences ${targetName()}`, body,
-    buttons: [{ label: "Annuler", value: false }, { label: "Envoyer", value: true, cls: "primary" }] });
-  const to = boxes.filter((b) => b.checked).map((b) => b.value);
-  if (!ok) return;
-  if (!chosen.size) { toast("Aucune compétence cochée : rien n'est parti.", "warn"); return; }
-  if (!to.length) { toast("Aucun collègue coché : rien n'est parti.", "warn"); return; }
-  try {
-    const r = await api("/api/hub/skills/send", { method: "POST", body: { competences: [...chosen], to, ...targetBody() } });
-    const names = people.filter((u) => to.includes(u.id)).map((u) => u.name || u.id);
-    toast(`${r.count > 1 ? `${r.count} compétences envoyées` : `« ${[...chosen][0]} » envoyée`} à ${names.join(", ")}.`, "ok");
-  } catch (e) { toast(e.message, "err"); }
+/** A click on a row: in a project, a shared skill is the account's, the page goes there. */
+function openSkill(s) {
+  if (!s.elsewhere) { select(s.name); return; }
+  const pid = targetProfile();
+  if (!pid) return;
+  setTarget({ kind: "compte", id: pid });
+  S.selected = s.name;
+  render();
+  load();
 }
 
 /** The name of a new group (under `parent`) or of the group `path` renamed, typed in the list. */
-function groupInput(parent, path) {
+function groupInput(sec, parent, path) {
   const was = path ? path.split("/").pop() : "";
   const input = h("input", { type: "text", class: "sk-ginput", maxlength: "40", value: was, "aria-label": "Nom du groupe",
     placeholder: parent ? `Dans ${parent.split("/").join(" › ")}` : "Nom du groupe" });
@@ -366,7 +393,7 @@ function groupInput(parent, path) {
     S.editing = null;
     if (!save || !name || name === was) { fillRows(); return; }
     const to = [parent, name].filter(Boolean).join("/");
-    if (path) groupAction("renommer", path, to); else groupAction("creer", to);
+    if (path) groupAction(sec, "renommer", path, to); else groupAction(sec, "creer", to);
   };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); finish(true); }
@@ -377,42 +404,122 @@ function groupInput(parent, path) {
   return h("div", { class: "sk-group editing" }, h("span", { class: "i", svg: "folder" }), input);
 }
 
-function edit(path) { S.editing = { path }; fillRows(); }
+function edit(sec, path) { S.editing = { sec, path }; fillRows(); }
 
 const dragged = (e) => [...(e.dataTransfer?.types || [])].includes(DRAG);
-function drop(e, path) {
+/** Something dropped on `path` (a group, or "" for the part itself) of the part `sec`: within a part, it is put in
+ * that group; from the personal part to the shared one, it is shared; back, it is taken out of the library. */
+function drop(e, sec, path) {
   let data;
   try { data = JSON.parse(e.dataTransfer.getData(DRAG) || "{}"); } catch { return; }
   e.preventDefault();
+  const from = data.sec || "perso";
+  if (from !== sec) { (sec === "equipe" ? publish : unshare)(data, path); return; }
+  const list = sec === "equipe" ? shared() : personal();
   if (data.skill) {
-    if ((S.list.find((s) => s.name === data.skill)?.groupe || "") !== path) classify(data.skill, path);
+    if ((list.find((s) => s.name === data.skill)?.groupe || "") !== path) classify(sec, data.skill, path);
   } else if (data.group) {
     const to = [path, data.group.split("/").pop()].filter(Boolean).join("/");
-    if (to !== data.group && path !== data.group && !path.startsWith(`${data.group}/`)) groupAction("renommer", data.group, to);
+    if (to !== data.group && path !== data.group && !path.startsWith(`${data.group}/`)) groupAction(sec, "renommer", data.group, to);
   }
+}
+
+/** The skills of what was dragged (one skill, or a group with its sub-groups), each with the group it lands in:
+ * a group dropped on `path` keeps its name and its sub-groups under it. */
+function landing(data, list, path) {
+  if (data.skill) return list.some((s) => s.name === data.skill) ? { [data.skill]: path } : {};
+  const g = data.group, top = g.split("/").pop();
+  return Object.fromEntries(list.filter((s) => s.groupe === g || s.groupe?.startsWith(`${g}/`))
+    .map((s) => [s.name, [path, top + s.groupe.slice(g.length)].filter(Boolean).join("/")]));
+}
+
+const plural = (n, one, many) => (n > 1 ? many : one);
+
+/** Personal skills to the shared part: every account of the hub gets them, nobody to pick. */
+async function publish(data, path) {
+  if (!S.lib.actif) { toast(HUB_FIRST, "warn"); return; }
+  if (notHere()) { toast(NOT_HERE, "warn"); return; }
+  const groupes = landing(data, personal(), path), names = Object.keys(groupes);
+  if (!names.length) { toast("Ce groupe ne contient aucune compétence.", "warn"); return; }
+  if (S.target.kind === "projet") {
+    const ok = await dialog({ title: "Partager avec l'équipe",
+      body: h("p", {}, `${names.length > 1 ? `Ces ${names.length} compétences quittent` : `« ${names[0]} » quitte`} le projet `
+        + `et ${plural(names.length, "va", "vont")} dans les comptes de toute l'équipe, ce compte compris. La copie du projet est gardée `
+        + "de côté (.claude/skills-anciennes)."),
+      buttons: [{ label: "Annuler", value: false }, { label: "Partager", value: true, cls: "primary" }] });
+    if (!ok) return;
+  }
+  try {
+    const r = await api("/api/hub/library/publish", { method: "POST", body: { competences: names, groupes, ...targetBody() } });
+    S.lib = r.bibliotheque || S.lib;
+    const done = r.partagees || [];
+    toast(`${done.length > 1 ? `${done.length} compétences partagées` : `« ${done[0]} » partagée`} avec toute l'équipe.`
+      + (r.refusees?.length ? ` Pas ${plural(r.refusees.length, "celle-ci", "celles-ci")} : ${r.refusees.join(", ")} (déjà partagée ?).` : ""), "ok");
+  } catch (e) { toast(e.message, "err"); }
+  load();
+}
+
+/** Shared skills back to the personal part: they leave the library, for everyone. This account keeps them. */
+async function unshare(data, path) {
+  if (S.target.kind === "projet") {
+    toast("Une compétence partagée appartient au compte : ouvre ses compétences pour la reprendre.", "warn");
+    return;
+  }
+  if (notHere()) { toast(NOT_HERE, "warn"); return; }
+  const groupes = landing(data, shared().filter((s) => !s.pending), path), names = Object.keys(groupes);
+  if (!names.length) return;
+  const ok = await dialog({ title: "Ne plus partager",
+    body: h("p", {}, `${names.length > 1 ? `Ces ${names.length} compétences quittent` : `« ${names[0]} » quitte`} les compétences `
+      + `partagées : ${plural(names.length, "elle reste", "elles restent")} ici, en ${plural(names.length, "personnelle", "personnelles")}. `
+      + `Chez les collègues, ${plural(names.length, "elle est mise", "elles sont mises")} de côté (skills-anciennes).`),
+    buttons: [{ label: "Annuler", value: false }, { label: "Ne plus partager", value: true, cls: "primary" }] });
+  if (!ok) return;
+  for (const nom of names) {
+    try {
+      const r = await api("/api/hub/library/unshare", { method: "POST", body: { competence: nom, groupe: groupes[nom], profile: S.target.id } });
+      S.lib = r.bibliotheque || S.lib;
+    } catch (e) { toast(e.message, "err"); break; }
+  }
+  load();
+}
+
+async function syncLibrary() {
+  if (!S.lib.actif) { toast(HUB_FIRST, "warn"); return; }
+  try { S.lib = await api("/api/hub/library/sync", { method: "POST" }); } catch (e) { toast(e.message, "err"); }
+  load();
 }
 
 const targetBody = () => (S.target.kind === "projet" ? { folder: S.target.id } : { profile: S.target.id });
 
 function applyGroups(r) {
   S.groups = r.groupes || [];
-  for (const s of S.list) s.groupe = r.classement?.[s.name] || "";
+  for (const s of S.list) if (!s.partagee) s.groupe = r.classement?.[s.name] || "";
   fillRows();
   renderSheet();
 }
 
-async function classify(name, group) {
+function applyLibrary(r) {
+  S.lib = r;
+  fillRows();
+  renderSheet();
+}
+
+async function classify(sec, name, group) {
   try {
-    applyGroups(await api("/api/skills/classement", { method: "POST", body: { competence: name, groupe: group, ...targetBody() } }));
+    if (sec === "equipe") applyLibrary(await api("/api/hub/library/classement", { method: "POST", body: { competence: name, groupe: group } }));
+    else applyGroups(await api("/api/skills/classement", { method: "POST", body: { competence: name, groupe: group, ...targetBody() } }));
   } catch (e) { toast(e.message, "err"); }
 }
 
-async function groupAction(action, group, nouveau = "") {
+async function groupAction(sec, action, group, nouveau = "") {
   const key = targetKey(), shut = closed();
   try {
-    const r = await api("/api/skills/groupes", { method: "POST", body: { action, groupe: group, nouveau, ...targetBody() } });
-    if (action === "renommer" && shut.delete(`${key}|${group}`)) { shut.add(`${key}|${nouveau}`); store.set(CLOSED_KEY, [...shut]); }
-    if (key === targetKey()) applyGroups(r);
+    const r = sec === "equipe"
+      ? await api("/api/hub/library/groupes", { method: "POST", body: { action, groupe: group, nouveau } })
+      : await api("/api/skills/groupes", { method: "POST", body: { action, groupe: group, nouveau, ...targetBody() } });
+    if (action === "renommer" && shut.delete(closedKey(sec, group))) { shut.add(closedKey(sec, nouveau)); store.set(CLOSED_KEY, [...shut]); }
+    if (sec === "equipe") applyLibrary(r);
+    else if (key === targetKey()) applyGroups(r);
   } catch (e) { toast(e.message, "err"); fillRows(); }
 }
 
@@ -424,12 +531,12 @@ function select(name) {
   S.fileData = null;
   fillRows();
   renderSheet();
-  if (name) readFile();
+  if (name && !current()?.pending) readFile();
   renderTalk();
 }
 
 // ------------------------------------------------------------ the sheet
-const current = () => S.list.find((s) => s.name === S.selected);
+const current = () => (S.selected ? personal().find((s) => s.name === S.selected) || shared().find((s) => s.name === S.selected && !s.elsewhere) : null);
 
 /** What makes a skill load at the wrong time, or cost for nothing: from its SKILL.md. */
 function hints(s) {
@@ -460,14 +567,26 @@ function renderSheet() {
         "Décris à droite ce qu'elle doit savoir faire ; Claude pose ses questions puis propose les fichiers, que tu valides d'un clic.")));
     return;
   }
+  if (s.pending) {
+    col.replaceChildren(h("header", { class: "sk-head" }, h("h3", {}, s.name), h("span", { class: "muted" }, s.par ? `Partagée par ${s.par}` : "")),
+      h("p", { class: "sk-desc" }, slashDescription(s.name, s.description) || "Sans description."),
+      h("p", { class: "sk-note" }, s.absent
+        ? "Partagée par l'équipe, mais ce compte ne reçoit pas les compétences partagées. Pour l'avoir ici aussi, coche « Compétences partagées dans tous les comptes » dans Configuration › Équipe."
+        : "Partagée par l'équipe : elle arrive dans ce compte à la prochaine synchronisation (moins d'une minute)."));
+    return;
+  }
   const hs = hints(s);
   const tabs = ["SKILL.md", ...(s.files || [])];
   S.fileBox = h("div", { class: "sk-file" });
   col.replaceChildren(...[
     h("header", { class: "sk-head" },
       h("h3", {}, s.name),
-      h("span", { class: "muted" }, s.modified ? `Modifiée ${fmtDate(s.modified)}` : ""),
-      iconBtn("send", "Partager avec des collègues", () => share([s.name])),
+      h("span", { class: "muted" }, s.modified ? `Modifiée ${fmtDate(s.modified)}${s.partagee && s.par ? ` par ${s.par}` : ""}` : ""),
+      s.partagee ? h("span", { class: "sk-badge", title: "La même pour toute l'équipe : tes modifications partent vers les autres à la prochaine synchro" },
+        h("span", { class: "i", svg: "team" }), "Partagée") : null,
+      s.partagee
+        ? iconBtn("user", "Ne plus partager : elle redevient personnelle ici", () => unshare({ skill: s.name, sec: "equipe" }, ""))
+        : iconBtn("team", "Partager avec l'équipe", () => publish({ skill: s.name, sec: "perso" }, s.groupe || "")),
       iconBtn("copy", "Copier le chemin du dossier", () => navigator.clipboard?.writeText(s.path.replace(/[\\/]SKILL\.md$/i, ""))
         .then(() => toast("Chemin copié.", "ok")).catch(() => {}))),
     h("p", { class: "sk-desc" }, slashDescription(s.name, s.description) || "Sans description."),
@@ -482,11 +601,13 @@ function renderSheet() {
 }
 
 function groupSelect(s) {
-  const sel = h("select", { "aria-label": "Groupe", on: { change: (e) => classify(s.name, e.target.value) } },
+  const sec = s.partagee ? "equipe" : "perso";
+  const sel = h("select", { "aria-label": "Groupe", on: { change: (e) => classify(sec, s.name, e.target.value) } },
     h("option", { value: "" }, "Hors groupe"),
-    ...S.groups.map((g) => h("option", { value: g }, `${"\u00a0\u00a0\u00a0".repeat(g.split("/").length - 1)}${g.split("/").pop()}`)));
+    ...secGroups(sec).map((g) => h("option", { value: g }, `${"\u00a0\u00a0\u00a0".repeat(g.split("/").length - 1)}${g.split("/").pop()}`)));
   sel.value = s.groupe || "";
-  return h("label", { class: "sk-group-pick", title: "Seulement pour ranger la liste : Claude Code ne voit pas les groupes" },
+  return h("label", { class: "sk-group-pick", title: s.partagee ? "Groupe de l'équipe : le même pour tous ; Claude Code ne voit pas les groupes"
+    : "Seulement pour ranger la liste : Claude Code ne voit pas les groupes" },
     h("span", { class: "muted" }, "Groupe"), sel);
 }
 

@@ -381,6 +381,7 @@ class Engine:
             leftover.unlink(missing_ok=True)
         self.port = port
         self.bus = Bus()
+        self.skill_library = None   # the team's shared skills (console/skill_library.py), with a hub
         self._cli_override = cli_command
         self._lock = threading.RLock()
         self._warm_checked = 0.0
@@ -1813,7 +1814,19 @@ class Engine:
             for s in items:
                 s["groupe"] = g["classement"].get(s["name"], "")
             groups[scope] = g["groupes"]
-        return {"projet": here, "compte": there, "groupes": groups,
+        # the account's copies of the team's shared skills: in their group of the library, not in the personal ones
+        lib = self.skill_library
+        if lib and there:
+            held = lib.held(base)
+            shared = {c["nom"]: c for c in lib.view()["competences"]}
+            for s in there:
+                if s["name"] in held:
+                    s["partagee"], s["groupe"] = True, (shared.get(s["name"]) or {}).get("groupe", "")
+        view = {"actif": False}
+        if lib:    # does this account receive them, and which accounts do
+            view = {**lib.view(bool(self.cfg.hub.enabled)), "ici": bool(base and lib.covers(base)),
+                    "comptes": [p.name for p in self.cfg.profiles if lib.receives(p.id)]}
+        return {"projet": here, "compte": there, "groupes": groups, "bibliotheque": view,
                 "profile": prof.id if prof else "", "profile_name": prof.name if prof else ""}
 
     # The groups of the page Compétences: only how the list is shown. Kept by JARVIS (its store, per account or

@@ -106,6 +106,18 @@ CREATE TABLE IF NOT EXISTS skill_packs (
     outcome TEXT
 );
 CREATE INDEX IF NOT EXISTS skill_packs_recipient ON skill_packs(recipient_id, removed);
+CREATE TABLE IF NOT EXISTS library (
+    name TEXT PRIMARY KEY,
+    grp TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    rev INTEGER NOT NULL,
+    blob TEXT,
+    size INTEGER NOT NULL DEFAULT 0,
+    updated REAL NOT NULL,
+    updated_by TEXT,
+    removed REAL
+);
+CREATE TABLE IF NOT EXISTS library_groups (path TEXT PRIMARY KEY);
 """
 
 COLORS = ("#40dcff", "#7dffb3", "#ffb020", "#ff7ad9", "#c9a6ff", "#ff8f6b")
@@ -782,6 +794,136 @@ class HubDB:
                 if f.stem not in kept:
                     f.unlink(missing_ok=True)
 
+    # ---------------------------------------------------------------- compétences partagées : la bibliothèque de l'équipe
+    # Une seule copie de chaque compétence partagée, pour tous les comptes du hub, sans liste de membres : chaque
+    # JARVIS la recopie dans ses comptes et renvoie ses modifications (console/skill_library.py). « rev » monte à
+    # chaque version ; une compétence retirée garde sa ligne (removed) pour que les postes la retirent aussi.
+    def library(self) -> dict:
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM library ORDER BY name").fetchall()
+            empty = [r["path"] for r in self.db.execute("SELECT path FROM library_groups")]
+        paths = set(empty) | {r["grp"] for r in rows if r["removed"] is None and r["grp"]}
+        for p in list(paths):
+            parts = p.split("/")
+            paths.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        return {"competences": [_library_row(r) for r in rows], "groupes": sorted(paths, key=str.lower)}
+
+    def library_zip(self, name: str) -> Path | None:
+        with self._lock:
+            row = self.db.execute("SELECT blob FROM library WHERE name=? AND removed IS NULL", (name,)).fetchone()
+        path = self.files / "bibliotheque" / f"{row['blob']}.zip" if row and row["blob"] else None
+        return path if path and path.is_file() else None
+
+    def library_put(self, user_id: str, name: str, group: str, description: str, blob: bytes, base: int) -> dict:
+        """Une nouvelle version, partie de la version `base` (0 : une compétence qui entre dans la bibliothèque).
+        ValueError(rev actuelle) quand quelqu'un l'a changée entre-temps : le poste reprend la version du hub."""
+        digest = hashlib.sha256(blob).hexdigest()
+        folder = self.files / "bibliotheque"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{digest}.zip"
+
+        def go():
+            row = self.db.execute("SELECT * FROM library WHERE name=?", (name,)).fetchone()
+            live = row is not None and row["removed"] is None
+            if (row["rev"] if live else 0) != base:
+                raise ValueError(row["rev"] if live else 0)
+            if not path.is_file():
+                tmp = folder / f".{digest}.{secrets.token_hex(3)}.tmp"
+                tmp.write_bytes(blob)
+                tmp.replace(path)
+            rev = (row["rev"] if row else 0) + 1
+            self.db.execute(
+                "INSERT INTO library(name, grp, description, rev, blob, size, updated, updated_by, removed) "
+                "VALUES(?,?,?,?,?,?,?,?,NULL) ON CONFLICT(name) DO UPDATE SET grp=excluded.grp, "
+                "description=excluded.description, rev=excluded.rev, blob=excluded.blob, size=excluded.size, "
+                "updated=excluded.updated, updated_by=excluded.updated_by, removed=NULL",
+                (name, group, description, rev, digest, len(blob), time.time(), user_id))
+            self._audit(user_id, "library.put", {"skill": name, "rev": rev})
+            return _library_row(self.db.execute("SELECT * FROM library WHERE name=?", (name,)).fetchone())
+
+        try:
+            return self._write(go)
+        finally:
+            self._drop_unused_library()
+
+    def library_classify(self, user_id: str, name: str, group: str) -> dict:
+        """Le groupe d'une compétence partagée : le même pour tous, sans nouvelle version de ses fichiers."""
+        def go():
+            if self.db.execute("UPDATE library SET grp=? WHERE name=? AND removed IS NULL", (group, name)).rowcount == 0:
+                raise KeyError(name)
+            self._audit(user_id, "library.group", {"skill": name, "group": group})
+        self._write(go)
+        return self.library()
+
+    def library_remove(self, user_id: str, name: str) -> dict:
+        """Retirée de la bibliothèque : chaque poste la retire de ses comptes (gardée de côté, dans skills-anciennes)."""
+        def go():
+            row = self.db.execute("SELECT rev FROM library WHERE name=? AND removed IS NULL", (name,)).fetchone()
+            if row is None:
+                raise KeyError(name)
+            now = time.time()
+            self.db.execute("UPDATE library SET removed=?, rev=?, blob=NULL, size=0, updated=?, updated_by=? "
+                            "WHERE name=?", (now, row["rev"] + 1, now, user_id, name))
+            self._audit(user_id, "library.remove", {"skill": name})
+        try:
+            self._write(go)
+        finally:
+            self._drop_unused_library()
+        return self.library()
+
+    def library_groups(self, user_id: str, action: str, group: str, new: str = "") -> dict:
+        """creer un groupe, le renommer (ou le déplacer) avec ce qu'il contient, ou le dissoudre : son contenu remonte
+        d'un niveau. Comme les groupes des compétences personnelles (console/engine.py edit_skill_group)."""
+        current = self.library()["groupes"]
+        if action == "creer":
+            if not group:
+                raise ValueError("Donne un nom au groupe.")
+            self._write(lambda: self.db.execute("INSERT OR IGNORE INTO library_groups(path) VALUES(?)", (group,)))
+            return self.library()
+        if not group or group not in current:
+            raise KeyError(group)
+        if action == "renommer":
+            if not new:
+                raise ValueError("Donne un nom au groupe.")
+            if new == group or new.startswith(group + "/"):
+                raise ValueError("Un groupe ne peut pas aller dans lui-même.")
+            to = new
+        elif action == "dissoudre":
+            to = group.rsplit("/", 1)[0] if "/" in group else ""
+        else:
+            raise ValueError("Action inconnue.")
+
+        def move(p: str) -> str:
+            if p != group and not p.startswith(group + "/"):
+                return p
+            return "/".join(x for x in (to, p[len(group):].lstrip("/")) if x)
+
+        def go():
+            for r in self.db.execute("SELECT name, grp FROM library WHERE removed IS NULL").fetchall():
+                if move(r["grp"]) != r["grp"]:
+                    self.db.execute("UPDATE library SET grp=? WHERE name=?", (move(r["grp"]), r["name"]))
+            paths = {move(p) for p in current if not (action == "dissoudre" and p == group)} - {""}
+            self.db.execute("DELETE FROM library_groups")
+            self.db.executemany("INSERT INTO library_groups(path) VALUES(?)", [(p,) for p in sorted(paths)])
+            self._audit(user_id, "library.groups", {"action": action, "group": group, "new": to})
+        self._write(go)
+        return self.library()
+
+    def _drop_unused_library(self):
+        folder = self.files / "bibliotheque"
+        if not folder.is_dir():
+            return
+        with self._lock:
+            kept = {r["blob"] for r in self.db.execute("SELECT blob FROM library WHERE blob IS NOT NULL")}
+            for f in folder.glob("*.zip"):
+                if f.stem not in kept:
+                    f.unlink(missing_ok=True)
+
+
+def _library_row(row: sqlite3.Row) -> dict:
+    return {"nom": row["name"], "groupe": row["grp"], "description": row["description"], "rev": row["rev"],
+            "size": row["size"], "updated": row["updated"], "par": row["updated_by"] or "",
+            "retiree": row["removed"] is not None}
 
 def _pack_row(row: sqlite3.Row) -> dict:
     return {"id": row["id"], "from": row["sender_id"], "to": row["recipient_id"],

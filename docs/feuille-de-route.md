@@ -131,9 +131,10 @@ d'approbation dès que quelque chose est enregistré (rattacher, lier, synchroni
 - **Les compétences rangées et partagées.** *Fait.* Une page Compétences (menu JARVIS, Ctrl+K),
   séparée des actions : liste filtrable, fiche en lecture, discussion avec Claude qui écrit par une
   carte « retenir ». Les compétences se classent en groupes imbriqués (glisser-déposer, sans toucher
-  aux fichiers) ; Claude connaît les groupes et propose sur demande de ranger toute la liste. Une
-  compétence, plusieurs ou des groupes entiers se partagent par le hub ; à l'installation, l'ancienne
-  version est gardée dans `skills-anciennes`.
+  aux fichiers) ; Claude connaît les groupes et propose sur demande de ranger toute la liste. En
+  mode équipe, la liste a une partie personnelle et une partie partagée : une bibliothèque commune à
+  tous les comptes du hub, alimentée par glisser-déposer et synchronisée toutes les 30 s (celui qui
+  modifie envoie aux autres) dans le compte Travail, ou dans tous les comptes si on le coche ; ce qui serait écrasé est gardé dans `skills-anciennes`.
 
 ### 1. Donner plus de moyens à Claude dans la console
 

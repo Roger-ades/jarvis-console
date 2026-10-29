@@ -206,8 +206,14 @@ discussion avec Claude pour les créer et les améliorer : chaque écriture pass
 différences validée d'un clic. La liste se range en groupes imbriqués (glisser-déposer), gardés
 par JARVIS seulement : les skills restent à plat. Claude voit ces groupes (outil `retenir`) : il
 donne le groupe d'une compétence qu'il propose et, sur demande, propose de ranger toute la liste
-(action `classer`), validé d'un clic. En mode équipe, « Partager… » envoie une compétence, plusieurs
-ou des groupes entiers à des collègues du hub, qui les installent dans les mêmes groupes. Une action peut demander un skill dans son texte ; une action du
+(action `classer`), validé d'un clic. En mode équipe, la liste a deux parties : les compétences
+**personnelles** et les compétences **partagées avec l'équipe**, une base commune à tous les comptes
+du hub, sans membre à choisir. Sur un poste, seul le compte Travail les reçoit, sauf si
+« Compétences partagées dans tous les comptes » est coché (Configuration › Équipe). Glisser une compétence ou un groupe de la partie personnelle vers la
+partie partagée la partage ; la glisser en sens inverse la reprend (elle quitte la base, chacun en
+garde une copie dans `skills-anciennes/`). Celui qui modifie une compétence partagée l'envoie aux
+autres, que JARVIS met à jour toutes les 30 s environ ; si deux personnes la changent en même temps,
+la première envoyée gagne et l'autre version est gardée de côté. Une action peut demander un skill dans son texte ; une action du
 même nom qu'un skill est refusée.
 
 Détails : [docs/boite-de-reception.md](docs/boite-de-reception.md).

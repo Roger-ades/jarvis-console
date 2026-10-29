@@ -140,11 +140,22 @@ validation ; rien ne dépasse le preset de la discussion.
    et les groupes existants, `proposer` accepte un `groupe` (montré sur la carte, appliqué avec
    l'écriture), et `classer` propose un rangement de plusieurs compétences sur une carte
    « Rangement des compétences » (avant / après, nouveaux groupes), appliqué au clic.
-   « Partager… » (et l'icône d'envoi d'un groupe ou de la fiche) envoie une compétence, plusieurs ou des
-   groupes entiers à des collègues du hub ([console/skill_share.py](../console/skill_share.py)) :
-   arbre à cocher, chacune part avec son groupe. Le collègue les reçoit dans sa boîte de réception,
-   choisit le compte et les compétences ; elles s'installent dans les mêmes groupes, une compétence
-   du même nom déjà là étant gardée dans `skills-anciennes/`. Claude n'y prend aucune part.
+   En mode équipe, le panneau de gauche est coupé en deux : « Personnelles » et « Partagées avec
+   l'équipe » ([console/skill_library.py](../console/skill_library.py)). La partie partagée est la
+   bibliothèque du hub, commune à tous ses comptes et copiée dans le compte Travail de chaque JARVIS
+   (dans tous ses comptes si `hub.skills_all_accounts`, case « Compétences partagées dans tous les
+   comptes » de Configuration › Équipe ; décochée, les copies des autres comptes en sont retirées,
+   une copie modifiée gardée dans `skills-anciennes/`). Un compte qui ne les reçoit pas montre la
+   liste partagée marquée « pas ici » et refuse d'y glisser ou d'en reprendre. Ses groupes sont ceux
+   du hub, les mêmes pour tous. Glisser une compétence ou un groupe
+   d'une partie à l'autre la partage ou la reprend (avec confirmation) ; l'icône équipe d'un groupe
+   ou de la fiche fait de même, et la fiche porte le badge « Partagée » et le nom du dernier auteur.
+   `equipe.poll_feed` synchronise toutes les 30 s : une modification locale part au hub, une version
+   plus récente du hub s'installe. Ce qui serait écrasé (modification simultanée, compétence
+   personnelle du même nom, compétence reprise par son auteur) va dans `skills-anciennes/` et une note
+   le dit en tête de la partie partagée. Claude n'y prend aucune part. Les envois de l'ancienne
+   version (boîte de réception, [console/skill_share.py](../console/skill_share.py)) s'installent
+   toujours.
    Une action peut demander un skill dans son texte ; une action qui porte le nom d'un skill est
    refusée.
    - Elles apparaissent dans l'onglet « Actions » de la page projet et dans Ctrl+K.

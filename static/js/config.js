@@ -1066,6 +1066,7 @@ function tabEquipe() {
       text("Adresse", "hub.url", { placeholder: "https://10.20.10.249:8443", help: "HTTPS du hub, port 8443." }),
       check("Activer", "hub.enabled"),
       check("Signaler les fichiers que Claude modifie", "hub.share_files", { help: "Désactivé : les autres voient seulement que tu es dans le projet." }),
+      check("Compétences partagées dans tous les comptes", "hub.skills_all_accounts", { help: "Désactivé : seul le compte Travail les reçoit ; décoché ensuite, les copies des autres comptes en sont retirées." }),
       field("Synchro", h("button", { type: "button", class: "btn small", on: { click: async () => {
         try {
           const r = await api("/api/hub/syncthing", { method: "POST", body: {} });

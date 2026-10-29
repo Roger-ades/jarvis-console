@@ -100,13 +100,12 @@ def test_a_group_sent_from_the_page_lands_in_the_same_groups(team):
         skill(base, n, f"À propos de {n}")
     for n, g in GROUPS.items():
         engine.classify_skill(n, g, profile=prof.id)
-    # the group Métier, its sub-groups with it
+    # the group Métier, its sub-groups with it, sent by a JARVIS from before the shared library
     names = [n for n, g in GROUPS.items() if g.startswith("Métier")]
-    r = console.post("/api/hub/skills/send", json={"competences": names, "to": ["paul", "anne"], "profile": prof.id})
-    assert r.status_code == 200 and r.json() == {"ok": True, "sent": 2, "count": 2}
-    assert console.post("/api/hub/skills/send", json={"competences": ["absente"], "to": ["paul"], "profile": prof.id}).status_code == 422
-    assert console.post("/api/hub/skills/send", json={"competences": names, "to": [], "profile": prof.id}).status_code == 422
-    assert console.post("/api/hub/skills/send", json={"competences": names, "to": ["inconnu"], "profile": prof.id}).status_code == 404
+    path, _ = skill_share.export(base, names, GROUPS, base.parent / "out", "Roger Martin")
+    sent = bridge(None, None, "POST", "/api/v1/competences", content=path.read_bytes(),
+                  content_type="application/zip", query="to=paul,anne")
+    assert len(sent["packs"]) == 2
 
     # Paul's side (the same console here, another account): nothing classified yet, an old incendie already there
     other = engine.cfg.profiles[-1]

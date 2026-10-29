@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from fastapi import Body, FastAPI
 
-from . import addon_share, share, skill_share, syncbox
+from . import addon_share, share, skill_library, skill_share, syncbox
 from .config import ConfigStore, expand_path
 from .engine import TaskError
 from .equipe_boite import TeamFeed
@@ -64,6 +64,20 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
     engine.inbox_sources.append(feed)
     app.state.team_feed = feed
     feed_lock = threading.Lock()
+    # Les compétences partagées de l'équipe, recopiées dans le compte Travail, ou dans tous si la configuration le
+    # dit (console/skill_library.py).
+    def receives(pid):
+        c = cfg()
+        work = "work" if c.profile("work") else c.general.default_profile
+        return c.hub.skills_all_accounts or pid == work
+
+    library = skill_library.Library(
+        store, data_dir,
+        lambda: [(p.id, engine._account_dir(p), p.name) for p in cfg().profiles if engine._account_dir(p).is_dir()],
+        lambda: engine.bus.publish("skills", {"competence": "", "chemin": ""}),
+        receives)
+    engine.skill_library = library
+    library_lock = threading.Lock()
 
     def cfg():
         return cfg_store.config
@@ -80,6 +94,11 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
                 feed.poll(lambda method, path: client.call(hub.url, hub.fingerprint, method, path), me, linked)
                 _sync_phone(client, hub, engine)
             except Exception:  # noqa: BLE001 - hub hors d'atteinte : la boîte garde ce qu'elle avait
+                pass
+            try:
+                with library_lock:
+                    library.sync(lambda method, path, **kw: client.call(hub.url, hub.fingerprint, method, path, **kw))
+            except Exception:  # noqa: BLE001 - hub hors d'atteinte, ou plus ancien : les comptes gardent leurs copies
                 pass
 
     def refresh_feed():
@@ -263,38 +282,118 @@ def mount(app: FastAPI, data_dir: Path, cfg_store: ConfigStore, engine, store):
         feed.forget(mod_id)
         return {"ok": True}
 
-    # ------------------------------------------------------------ compétences partagées, avec leurs groupes (sans Claude)
-    @app.post("/api/hub/skills/send")
-    def send_skills(body: dict = Body(...)):
-        """Page Compétences : les compétences cochées (une, plusieurs, des groupes entiers) partent par le hub,
-        chacune avec son groupe."""
-        to = sorted({str(u).strip() for u in body.get("to") or [] if str(u).strip()})
-        if not to:
-            return fail(HubError("Choisis au moins un collègue.", 422))
-        try:
-            key, base = engine._skill_groups_key(str(body.get("folder") or ""), body.get("profile") or None)
-        except TaskError as exc:
-            return fail(HubError(str(exc), 404))
-        groups = engine._skill_groups(key)["classement"]
+    # ------------------------------------------------------------ compétences partagées : la bibliothèque de l'équipe
+    # Tous les comptes du hub, sans liste de membres (console/skill_library.py). Glisser une compétence personnelle
+    # dans la partie partagée la publie ; l'y reprendre la retire de la bibliothèque.
+    def hub_call(method, path, body=None, **kw):
         hub = cfg().hub
-        work = Path(tempfile.mkdtemp(prefix="competences-", dir=data_dir))
+        return client.call(hub.url, hub.fingerprint, method, path, body, **kw)
+
+    def library_ready():
+        hub = cfg().hub
+        if not (hub.enabled and hub.fingerprint and client.token()):
+            raise HubError("Les compétences partagées passent par le hub de l'équipe : inscris ce poste d'abord "
+                           "(Configuration › Équipe).", 409)
+
+    NOT_HERE = ("Ce compte ne reçoit pas les compétences partagées : fais-le depuis le compte Travail, ou coche "
+                "« Compétences partagées dans tous les comptes » (Configuration › Équipe).")
+
+    def library_here(folder, profile):
+        return engine.skills(folder=folder, profile=profile)["bibliotheque"].get("ici")
+
+    def library_sync():
+        library_ready()
+        with library_lock:
+            return library.sync(hub_call)
+
+    @app.post("/api/hub/library/sync")
+    def sync_library():
         try:
-            me = client.call(hub.url, hub.fingerprint, "GET", "/api/v1/me").get("user") or {}
-            path, skills = skill_share.export(base, list(body.get("competences") or []), groups, work,
-                                              me.get("name") or me.get("id") or "")
-            sent = client.call(hub.url, hub.fingerprint, "POST", "/api/v1/competences", content=path.read_bytes(),
-                               content_type="application/zip", query=urlencode({"to": ",".join(to)}))
+            return library_sync()
         except HubError as exc:
             return fail(exc)
-        except skill_share.ShareError as exc:
-            return fail(HubError(str(exc), 422))
-        except OSError as exc:
-            return fail(HubError(f"Export impossible : {exc}", 500))
-        finally:
-            shutil.rmtree(work, ignore_errors=True)
-        store.audit("compétences partagées", {"compétences": [s["nom"] for s in skills], "avec": to})
-        return {"ok": True, "sent": len(sent.get("packs") or []), "count": len(skills)}
 
+    @app.post("/api/hub/library/publish")
+    def publish_skills(body: dict = Body(...)):
+        """Des compétences personnelles glissées dans la partie partagée, chacune dans le groupe où elle tombe."""
+        try:
+            library_ready()
+            key, base = engine._skill_groups_key(str(body.get("folder") or ""), body.get("profile") or None)
+        except HubError as exc:
+            return fail(exc)
+        except TaskError as exc:
+            return fail(HubError(str(exc), 404))
+        names = sorted({str(n or "").strip().lower() for n in body.get("competences") or [] if str(n or "").strip()})
+        if not names:
+            return fail(HubError("Choisis au moins une compétence.", 422))
+        if not library_here(str(body.get("folder") or ""), body.get("profile") or None):
+            return fail(HubError(NOT_HERE, 409))
+        raw = body.get("groupes") if isinstance(body.get("groupes"), dict) else {}
+        try:
+            groups = {n: engine.group_path(raw.get(n, "")) for n in names}
+        except TaskError as exc:
+            return fail(HubError(str(exc), 422))
+        try:
+            with library_lock:
+                library.sync(hub_call)    # the latest list: a name already shared is refused before sending
+                done = library.publish(hub_call, base, names, groups, account=key.startswith("compte:"))
+                view = library.sync(hub_call)
+        except HubError as exc:
+            return fail(exc)
+        g = engine._skill_groups(key)    # no longer in the personal groups
+        engine._save_skill_groups(key, {k: v for k, v in g["classement"].items() if k not in done}, g["groupes"])
+        store.audit("compétences partagées avec l'équipe", {"compétences": done})
+        engine.bus.publish("skills", {"competence": "", "chemin": ""})
+        return {"ok": True, "partagees": done, "refusees": [n for n in names if n not in done], "bibliotheque": view}
+
+    @app.post("/api/hub/library/unshare")
+    def unshare_skill(body: dict = Body(...)):
+        """Une compétence partagée reprise dans la partie personnelle : elle quitte la bibliothèque de l'équipe ; ce
+        compte la garde, dans le groupe où elle tombe, les autres la mettent de côté (skills-anciennes)."""
+        nom = str(body.get("competence") or "").strip().lower()
+        try:
+            library_ready()
+            key, base = engine._skill_groups_key("", body.get("profile") or None)
+            group = engine.group_path(str(body.get("groupe") or ""))
+            if not library_here("", body.get("profile") or None):
+                raise HubError(NOT_HERE, 409)
+        except HubError as exc:
+            return fail(exc)
+        except TaskError as exc:
+            return fail(HubError(str(exc), 404 if "introuvable" in str(exc).lower() else 422))
+        try:
+            with library_lock:
+                library.unshare(hub_call, base, nom)
+                view = library.sync(hub_call)
+        except HubError as exc:
+            return fail(exc)
+        if group:
+            g = engine._skill_groups(key)
+            engine._save_skill_groups(key, {**g["classement"], nom: group}, [*g["groupes"], group])
+        store.audit("compétence retirée du partage", {"compétence": nom})
+        engine.bus.publish("skills", {"competence": "", "chemin": ""})
+        return {"ok": True, "bibliotheque": view}
+
+    @app.post("/api/hub/library/classement")
+    def classify_shared(body: dict = Body(...)):
+        try:
+            library_ready()
+            hub_call("POST", f"/api/v1/bibliotheque/{_q(str(body.get('competence') or ''))}/groupe",
+                     {"groupe": str(body.get("groupe") or "")})
+            return library_sync()
+        except HubError as exc:
+            return fail(exc)
+
+    @app.post("/api/hub/library/groupes")
+    def shared_groups(body: dict = Body(...)):
+        try:
+            library_ready()
+            hub_call("POST", "/api/v1/bibliotheque-groupes", {k: str(body.get(k) or "") for k in ("action", "groupe", "nouveau")})
+            return library_sync()
+        except HubError as exc:
+            return fail(exc)
+
+    # Compétences envoyées par un JARVIS d'avant la bibliothèque : elles attendent encore dans la boîte de réception.
     @app.post("/api/hub/skills/{pack_id}/install")
     def install_skills(pack_id: str, body: dict = Body(default={})):
         """Installer, dans la boîte de réception : dans le compte choisi, chacune dans son groupe ; une compétence

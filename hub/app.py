@@ -11,7 +11,7 @@ from typing import Literal
 
 import queue
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -468,6 +468,57 @@ def create_app(db: HubDB) -> FastAPI:
             raise HTTPException(404, {"error": "introuvable"}) from None
         return {"api": API, "ok": True}
 
+    # Les compétences partagées : une bibliothèque commune à tous les comptes du hub, que chaque JARVIS recopie dans
+    # ses comptes et met à jour (console/skill_library.py). Pas de liste de membres : tout compte inscrit y a accès.
+    @app.get("/api/v1/bibliotheque")
+    def library(user: dict = Depends(current_user)):
+        return {"api": API, **db.library()}
+
+    @app.get("/api/v1/bibliotheque/{name}/archive")
+    def library_archive(name: str, user: dict = Depends(current_user)):
+        path = db.library_zip(name)
+        if path is None:
+            raise HTTPException(404, {"error": "introuvable"})
+        return Response(path.read_bytes(), media_type="application/zip")
+
+    @app.put("/api/v1/bibliotheque/{name}")
+    async def library_put(name: str, request: Request, user: dict = Depends(current_user), base: int = 0):
+        blob = await request.body()
+        if len(blob) > MAX_MODULE:
+            raise HTTPException(413, {"error": "compétence trop lourde"})
+        skills = _skills_info(blob)
+        if len(skills) != 1 or skills[0]["nom"] != name:
+            raise HTTPException(422, {"error": "une seule compétence JARVIS, de ce nom, attendue"})
+        try:
+            row = db.library_put(user["id"], name, _group(skills[0]["groupe"]), skills[0]["description"], blob, base)
+        except ValueError as exc:
+            raise HTTPException(409, {"error": "modifiée entre-temps par un collègue", "rev": exc.args[0]}) from None
+        return {"api": API, "competence": row}
+
+    @app.post("/api/v1/bibliotheque/{name}/groupe")
+    def library_classify(name: str, body: dict = Body(...), user: dict = Depends(current_user)):
+        try:
+            return {"api": API, **db.library_classify(user["id"], name, _group(body.get("groupe")))}
+        except KeyError:
+            raise HTTPException(404, {"error": "introuvable"}) from None
+
+    @app.delete("/api/v1/bibliotheque/{name}")
+    def library_remove(name: str, user: dict = Depends(current_user)):
+        try:
+            return {"api": API, **db.library_remove(user["id"], name)}
+        except KeyError:
+            raise HTTPException(404, {"error": "introuvable"}) from None
+
+    @app.post("/api/v1/bibliotheque-groupes")
+    def library_groups(body: dict = Body(...), user: dict = Depends(current_user)):
+        try:
+            return {"api": API, **db.library_groups(user["id"], str(body.get("action") or ""), _group(body.get("groupe")),
+                                                    _group(body.get("nouveau")))}
+        except KeyError:
+            raise HTTPException(404, {"error": "groupe introuvable"}) from None
+        except ValueError as exc:
+            raise HTTPException(400, {"error": str(exc)}) from None
+
     return app
 
 
@@ -515,6 +566,14 @@ def _skills_info(blob: bytes) -> list[dict]:
         out.append({"nom": c["nom"], "groupe": " ".join(str(c.get("groupe") or "").split())[:200],
                     "description": " ".join(str(c.get("description") or "").split())[:300]})
     return out
+
+
+def _group(text) -> str:
+    """« Métier / Incendie » → "Métier/Incendie", comme console/knowledge.py group_path : 4 niveaux de 40 caractères."""
+    parts = [x for x in (re.sub(r"\s+", " ", p).strip() for p in re.split(r"[/›>\\]", str(text or ""))) if x]
+    if len(parts) > 4 or any(len(x) > 40 for x in parts):
+        raise HTTPException(400, {"error": "groupe : quatre niveaux de 40 caractères au plus"})
+    return "/".join(parts)
 
 
 def current_user(request: Request) -> dict:

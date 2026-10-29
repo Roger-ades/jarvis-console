@@ -588,6 +588,7 @@ class HubLink(BaseModel):
     url: str = ""
     fingerprint: str = ""
     share_files: bool = False
+    skills_all_accounts: bool = False   # the team's shared skills in every account, not only the work one
 
     @field_validator("url")
     @classmethod

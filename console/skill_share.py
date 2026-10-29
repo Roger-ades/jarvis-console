@@ -141,9 +141,10 @@ def inspect(path: Path) -> dict:
             "competences": [{**listed[n], "fichiers": counts[n]} for n in sorted(listed)], "taille": size}
 
 
-def install(path: Path, base: Path, only: list[str] | None = None) -> dict:
+def install(path: Path, base: Path, only: list[str] | None = None, keep: bool = True) -> dict:
     """Unzips the skills (all, or those of `only`) into base/skills; one already there of the same name goes to
-    base/skills-anciennes/<nom>-<date>. Returns the inspection, with "installees": [{"nom", "groupe", "ancien"}]."""
+    base/skills-anciennes/<nom>-<date>, or is dropped when not `keep` (a shared skill's previous version, already
+    on the hub). Returns the inspection, with "installees": [{"nom", "groupe", "ancien"}]."""
     info = inspect(path)
     chosen = [c for c in info["competences"] if only is None or c["nom"] in set(only)]
     if not chosen:
@@ -168,7 +169,10 @@ def install(path: Path, base: Path, only: list[str] | None = None) -> dict:
         for c in chosen:
             n, kept = c["nom"], None
             for old in dict.fromkeys(x for x in (present.get(n), n) if x):
-                if (root / old).exists():
+                if (root / old).exists() and not keep:
+                    gone = stage / f".ancienne-{old}"
+                    (root / old).rename(gone)
+                elif (root / old).exists():
                     to = base / OLD / f"{n}-{stamp}"
                     to = to if not to.exists() else to.with_name(f"{to.name}-{secrets.token_hex(2)}")
                     to.parent.mkdir(parents=True, exist_ok=True)
